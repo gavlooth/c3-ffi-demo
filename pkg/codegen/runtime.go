@@ -221,6 +221,11 @@ void flush_freelist(void) {
         FreeNode* n = FREE_HEAD;
         FREE_HEAD = n->next;
         if (n->obj->mark < 0) {
+            /* Decrement children before freeing (prevents memory leak) */
+            if (n->obj->is_pair) {
+                dec_ref(n->obj->a);
+                dec_ref(n->obj->b);
+            }
             invalidate_weak_refs_for(n->obj);
             free(n->obj);
         }

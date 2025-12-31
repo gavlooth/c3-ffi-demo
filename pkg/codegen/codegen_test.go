@@ -261,3 +261,24 @@ func TestGenerateProgramToString(t *testing.T) {
 		t.Error("missing freelist flush in main")
 	}
 }
+
+func TestFlushFreelistDecrementsChildren(t *testing.T) {
+	// This test verifies that flush_freelist properly decrements children
+	// before freeing pair objects, preventing memory leaks.
+	registry := NewTypeRegistry()
+	registry.InitDefaultTypes()
+
+	runtime := GenerateRuntime(registry)
+
+	// The flush_freelist function should decrement children before freeing
+	// This was a bug where pairs added via free_obj would leak their children
+	if !strings.Contains(runtime, "if (n->obj->is_pair)") {
+		t.Error("flush_freelist should check if object is a pair")
+	}
+	if !strings.Contains(runtime, "dec_ref(n->obj->a)") {
+		t.Error("flush_freelist should decrement first child of pair")
+	}
+	if !strings.Contains(runtime, "dec_ref(n->obj->b)") {
+		t.Error("flush_freelist should decrement second child of pair")
+	}
+}
