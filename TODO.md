@@ -151,16 +151,18 @@ Comparison between our Go implementation and the original Purple at `/home/heefo
 
 ---
 
-## I/O and FFI (❌ All Missing)
+## I/O and FFI
 
-| Feature | Description |
-|---------|-------------|
-| `ffi "puts"` | Write string to stdout |
-| `ffi "putchar"` | Write single character |
-| `ffi "getchar"` | Read single character |
-| `ffi "exit"` | Exit with code |
-| `ffi "newline"` | Write newline |
-| `trace` | Evaluate and trace value |
+| Feature | Status | Description |
+|---------|--------|-------------|
+| `(ffi "func" args)` | ✅ | Call external C function |
+| `(ffi-declare ...)` | ✅ | Declare external function |
+| `ffi "puts"` | ✅ | Write string to stdout |
+| `ffi "putchar"` | ✅ | Write single character |
+| `ffi "getchar"` | ✅ | Read single character |
+| `ffi "exit"` | ✅ | Exit with code |
+| `trace` | ✅ | Evaluate and trace value |
+| Tensor/libtorch | ❌ | See LIBTORCH_PLAN.md |
 
 ---
 
