@@ -18,6 +18,8 @@ const (
 	TMenv
 	TCode
 	TLambda
+	TRecLambda // Recursive lambda with self-reference
+	TError     // Error value
 )
 
 // PrimFn is a primitive function signature
@@ -52,10 +54,11 @@ type Value struct {
 	HLit    HandlerFn
 	HVar    HandlerFn
 
-	// TLambda
-	Params *Value
-	Body   *Value
-	LamEnv *Value
+	// TLambda, TRecLambda
+	Params   *Value
+	Body     *Value
+	LamEnv   *Value
+	SelfName *Value // For TRecLambda only
 }
 
 // Nil is the singleton nil value
@@ -94,6 +97,22 @@ func NewLambda(params, body, env *Value) *Value {
 		Body:   body,
 		LamEnv: env,
 	}
+}
+
+// NewRecLambda creates a recursive lambda with self-reference
+func NewRecLambda(selfName, params, body, env *Value) *Value {
+	return &Value{
+		Tag:      TRecLambda,
+		SelfName: selfName,
+		Params:   params,
+		Body:     body,
+		LamEnv:   env,
+	}
+}
+
+// NewError creates an error value
+func NewError(msg string) *Value {
+	return &Value{Tag: TError, Str: msg}
 }
 
 // NewMenv creates a meta-environment value
@@ -138,6 +157,16 @@ func IsCell(v *Value) bool {
 // IsLambda checks if a value is a lambda
 func IsLambda(v *Value) bool {
 	return v != nil && v.Tag == TLambda
+}
+
+// IsRecLambda checks if a value is a recursive lambda
+func IsRecLambda(v *Value) bool {
+	return v != nil && v.Tag == TRecLambda
+}
+
+// IsError checks if a value is an error
+func IsError(v *Value) bool {
+	return v != nil && v.Tag == TError
 }
 
 // IsPrim checks if a value is a primitive
@@ -231,6 +260,10 @@ func (v *Value) String() string {
 		return "#<prim>"
 	case TLambda:
 		return "#<lambda>"
+	case TRecLambda:
+		return "#<rec-lambda>"
+	case TError:
+		return fmt.Sprintf("#<error: %s>", v.Str)
 	case TMenv:
 		return "#<menv>"
 	default:
@@ -278,6 +311,10 @@ func TagName(t Tag) string {
 		return "CODE"
 	case TLambda:
 		return "LAMBDA"
+	case TRecLambda:
+		return "RECLAMBDA"
+	case TError:
+		return "ERROR"
 	default:
 		return fmt.Sprintf("UNKNOWN(%d)", t)
 	}

@@ -185,3 +185,150 @@ func TestQuote(t *testing.T) {
 		t.Errorf("quote = %q, want foo", result.Str)
 	}
 }
+
+func TestRecursiveLambda(t *testing.T) {
+	// Factorial using (lambda self (n) ...)
+	input := "(let ((fact (lambda self (n) (if (= n 0) 1 (* n (self (- n 1))))))) (fact 5))"
+	result := evalString(input)
+	if result == nil || !ast.IsInt(result) {
+		t.Errorf("recursive lambda factorial = %v, want int", result)
+		return
+	}
+	if result.Int != 120 {
+		t.Errorf("recursive lambda factorial(5) = %d, want 120", result.Int)
+	}
+}
+
+func TestMatch(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int64
+	}{
+		// Wildcard
+		{"(match 42 (_ 1))", 1},
+		// Variable
+		{"(match 42 (x x))", 42},
+		// Literal
+		{"(match 42 (42 100) (_ 0))", 100},
+		{"(match 43 (42 100) (_ 0))", 0},
+		// Cons pattern
+		{"(match (cons 1 2) ((cons a b) (+ a b)))", 3},
+		// Nested
+		{"(match (cons 1 (cons 2 3)) ((cons a (cons b c)) (+ a (+ b c))))", 6},
+	}
+
+	for _, tt := range tests {
+		result := evalString(tt.input)
+		if result == nil || !ast.IsInt(result) {
+			t.Errorf("evalString(%q) = %v, want int", tt.input, result)
+			continue
+		}
+		if result.Int != tt.expected {
+			t.Errorf("evalString(%q) = %d, want %d", tt.input, result.Int, tt.expected)
+		}
+	}
+}
+
+func TestDo(t *testing.T) {
+	// do should return the last expression
+	result := evalString("(do 1 2 3)")
+	if result == nil || !ast.IsInt(result) {
+		t.Errorf("do = %v, want int", result)
+		return
+	}
+	if result.Int != 3 {
+		t.Errorf("do = %d, want 3", result.Int)
+	}
+}
+
+func TestError(t *testing.T) {
+	result := evalString("(error 'test-error)")
+	if result == nil || !ast.IsError(result) {
+		t.Errorf("error = %v, want error", result)
+		return
+	}
+	if result.Str != "test-error" {
+		t.Errorf("error message = %q, want test-error", result.Str)
+	}
+}
+
+func TestTry(t *testing.T) {
+	// try catches error
+	result := evalString("(try (error 'oops) (lambda (e) 42))")
+	if result == nil || !ast.IsInt(result) {
+		t.Errorf("try = %v, want int", result)
+		return
+	}
+	if result.Int != 42 {
+		t.Errorf("try = %d, want 42", result.Int)
+	}
+
+	// try passes through non-error
+	result = evalString("(try 100 (lambda (e) 42))")
+	if result == nil || !ast.IsInt(result) {
+		t.Errorf("try = %v, want int", result)
+		return
+	}
+	if result.Int != 100 {
+		t.Errorf("try = %d, want 100", result.Int)
+	}
+}
+
+func TestListOperations(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int64
+	}{
+		{"(length '(1 2 3))", 3},
+		{"(length ())", 0},
+		{"(car (append '(1 2) '(3 4)))", 1},
+		{"(car (reverse '(1 2 3)))", 3},
+	}
+
+	for _, tt := range tests {
+		result := evalString(tt.input)
+		if result == nil || !ast.IsInt(result) {
+			t.Errorf("evalString(%q) = %v, want int", tt.input, result)
+			continue
+		}
+		if result.Int != tt.expected {
+			t.Errorf("evalString(%q) = %d, want %d", tt.input, result.Int, tt.expected)
+		}
+	}
+}
+
+func TestMap(t *testing.T) {
+	result := evalString("(map (lambda (x) (* x 2)) '(1 2 3))")
+	if result == nil || !ast.IsCell(result) {
+		t.Errorf("map = %v, want list", result)
+		return
+	}
+	// Should be (2 4 6)
+	if result.Car.Int != 2 {
+		t.Errorf("map first = %d, want 2", result.Car.Int)
+	}
+}
+
+func TestFilter(t *testing.T) {
+	result := evalString("(filter (lambda (x) (> x 2)) '(1 2 3 4 5))")
+	if result == nil || !ast.IsCell(result) {
+		t.Errorf("filter = %v, want list", result)
+		return
+	}
+	// Should be (3 4 5)
+	if result.Car.Int != 3 {
+		t.Errorf("filter first = %d, want 3", result.Car.Int)
+	}
+}
+
+func TestFold(t *testing.T) {
+	// Sum using fold
+	result := evalString("(fold + 0 '(1 2 3 4 5))")
+	if result == nil || !ast.IsInt(result) {
+		t.Errorf("fold = %v, want int", result)
+		return
+	}
+	if result.Int != 15 {
+		t.Errorf("fold sum = %d, want 15", result.Int)
+	}
+}

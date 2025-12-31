@@ -340,6 +340,232 @@ func PrimList(args, menv *ast.Value) *ast.Value {
 	return args
 }
 
+// PrimLength implements length primitive
+func PrimLength(args, menv *ast.Value) *ast.Value {
+	a := getOneArg(args)
+	if a == nil {
+		return ast.NewInt(0)
+	}
+	return ast.NewInt(int64(ast.ListLen(a)))
+}
+
+// PrimAppend implements append primitive
+func PrimAppend(args, menv *ast.Value) *ast.Value {
+	a, b, ok := getTwoArgs(args)
+	if !ok {
+		return ast.Nil
+	}
+	if ast.IsNil(a) {
+		return b
+	}
+	if !ast.IsCell(a) {
+		return b
+	}
+	// Build new list by prepending elements of a to b
+	items := ast.ListToSlice(a)
+	result := b
+	for i := len(items) - 1; i >= 0; i-- {
+		result = ast.NewCell(items[i], result)
+	}
+	return result
+}
+
+// PrimReverse implements reverse primitive
+func PrimReverse(args, menv *ast.Value) *ast.Value {
+	a := getOneArg(args)
+	if a == nil || ast.IsNil(a) {
+		return ast.Nil
+	}
+	result := ast.Nil
+	for !ast.IsNil(a) && ast.IsCell(a) {
+		result = ast.NewCell(a.Car, result)
+		a = a.Cdr
+	}
+	return result
+}
+
+// PrimMap implements map primitive (higher-order)
+// (map fn list) -> applies fn to each element
+func PrimMap(args, menv *ast.Value) *ast.Value {
+	fn := getOneArg(args)
+	list := getOneArg(args.Cdr)
+	if fn == nil || list == nil {
+		return ast.Nil
+	}
+
+	var results []*ast.Value
+	for !ast.IsNil(list) && ast.IsCell(list) {
+		elem := list.Car
+		// Apply fn to elem
+		result := applyPrimFn(fn, ast.List1(elem), menv)
+		results = append(results, result)
+		list = list.Cdr
+	}
+	return ast.SliceToList(results)
+}
+
+// PrimFilter implements filter primitive
+// (filter pred list) -> keeps elements where (pred elem) is true
+func PrimFilter(args, menv *ast.Value) *ast.Value {
+	pred := getOneArg(args)
+	list := getOneArg(args.Cdr)
+	if pred == nil || list == nil {
+		return ast.Nil
+	}
+
+	var results []*ast.Value
+	for !ast.IsNil(list) && ast.IsCell(list) {
+		elem := list.Car
+		// Apply pred to elem
+		result := applyPrimFn(pred, ast.List1(elem), menv)
+		if !ast.IsNil(result) && !(ast.IsInt(result) && result.Int == 0) {
+			results = append(results, elem)
+		}
+		list = list.Cdr
+	}
+	return ast.SliceToList(results)
+}
+
+// PrimFold implements fold (right) primitive
+// (fold fn init list) -> (fn e1 (fn e2 (fn e3 init)))
+func PrimFold(args, menv *ast.Value) *ast.Value {
+	fn := getOneArg(args)
+	init := getOneArg(args.Cdr)
+	list := getOneArg(args.Cdr.Cdr)
+	if fn == nil {
+		return ast.Nil
+	}
+
+	items := ast.ListToSlice(list)
+	result := init
+	for i := len(items) - 1; i >= 0; i-- {
+		result = applyPrimFn(fn, ast.List2(items[i], result), menv)
+	}
+	return result
+}
+
+// PrimFoldl implements foldl (left) primitive
+// (foldl fn init list) -> (fn (fn (fn init e1) e2) e3)
+func PrimFoldl(args, menv *ast.Value) *ast.Value {
+	fn := getOneArg(args)
+	init := getOneArg(args.Cdr)
+	list := getOneArg(args.Cdr.Cdr)
+	if fn == nil {
+		return ast.Nil
+	}
+
+	result := init
+	for !ast.IsNil(list) && ast.IsCell(list) {
+		result = applyPrimFn(fn, ast.List2(result, list.Car), menv)
+		list = list.Cdr
+	}
+	return result
+}
+
+// PrimApply implements apply primitive
+// (apply fn args-list) -> applies fn to the list of args
+func PrimApply(args, menv *ast.Value) *ast.Value {
+	fn := getOneArg(args)
+	argList := getOneArg(args.Cdr)
+	if fn == nil {
+		return ast.Nil
+	}
+	return applyPrimFn(fn, argList, menv)
+}
+
+// PrimCompose implements compose primitive
+// (compose f g) -> (lambda (x) (f (g x)))
+func PrimCompose(args, menv *ast.Value) *ast.Value {
+	f := getOneArg(args)
+	g := getOneArg(args.Cdr)
+	if f == nil || g == nil {
+		return ast.Nil
+	}
+	// Return a new primitive that composes f and g
+	return ast.NewPrim(func(innerArgs, innerMenv *ast.Value) *ast.Value {
+		x := getOneArg(innerArgs)
+		gResult := applyPrimFn(g, ast.List1(x), innerMenv)
+		return applyPrimFn(f, ast.List1(gResult), innerMenv)
+	})
+}
+
+// PrimFlip implements flip primitive
+// (flip f) -> (lambda (x y) (f y x))
+func PrimFlip(args, menv *ast.Value) *ast.Value {
+	f := getOneArg(args)
+	if f == nil {
+		return ast.Nil
+	}
+	return ast.NewPrim(func(innerArgs, innerMenv *ast.Value) *ast.Value {
+		x := getOneArg(innerArgs)
+		y := getOneArg(innerArgs.Cdr)
+		return applyPrimFn(f, ast.List2(y, x), innerMenv)
+	})
+}
+
+// applyPrimFn applies a function (lambda or primitive) to arguments
+func applyPrimFn(fn *ast.Value, args *ast.Value, menv *ast.Value) *ast.Value {
+	if fn == nil {
+		return ast.Nil
+	}
+
+	if ast.IsPrim(fn) {
+		return fn.Prim(args, menv)
+	}
+
+	if ast.IsLambda(fn) {
+		params := fn.Params
+		body := fn.Body
+		closureEnv := fn.LamEnv
+
+		newEnv := closureEnv
+		p := params
+		a := args
+		for !ast.IsNil(p) && !ast.IsNil(a) && ast.IsCell(p) && ast.IsCell(a) {
+			newEnv = EnvExtend(newEnv, p.Car, a.Car)
+			p = p.Cdr
+			a = a.Cdr
+		}
+
+		bodyMenv := NewMenv(menv.Parent, newEnv)
+		bodyMenv.HApp = menv.HApp
+		bodyMenv.HLet = menv.HLet
+		bodyMenv.HIf = menv.HIf
+		bodyMenv.HLit = menv.HLit
+		bodyMenv.HVar = menv.HVar
+
+		return Eval(body, bodyMenv)
+	}
+
+	if ast.IsRecLambda(fn) {
+		selfName := fn.SelfName
+		params := fn.Params
+		body := fn.Body
+		closureEnv := fn.LamEnv
+
+		newEnv := EnvExtend(closureEnv, selfName, fn)
+
+		p := params
+		a := args
+		for !ast.IsNil(p) && !ast.IsNil(a) && ast.IsCell(p) && ast.IsCell(a) {
+			newEnv = EnvExtend(newEnv, p.Car, a.Car)
+			p = p.Cdr
+			a = a.Cdr
+		}
+
+		bodyMenv := NewMenv(menv.Parent, newEnv)
+		bodyMenv.HApp = menv.HApp
+		bodyMenv.HLet = menv.HLet
+		bodyMenv.HIf = menv.HIf
+		bodyMenv.HLit = menv.HLit
+		bodyMenv.HVar = menv.HVar
+
+		return Eval(body, bodyMenv)
+	}
+
+	return ast.Nil
+}
+
 // PrimPrint implements print primitive
 func PrimPrint(args, menv *ast.Value) *ast.Value {
 	a := getOneArg(args)
@@ -374,6 +600,18 @@ func DefaultEnv() *ast.Value {
 	env = EnvExtend(env, ast.NewSym("snd"), ast.NewPrim(PrimSnd))
 	env = EnvExtend(env, ast.NewSym("null?"), ast.NewPrim(PrimNull))
 	env = EnvExtend(env, ast.NewSym("list"), ast.NewPrim(PrimList))
+	// Higher-order list operations
+	env = EnvExtend(env, ast.NewSym("length"), ast.NewPrim(PrimLength))
+	env = EnvExtend(env, ast.NewSym("append"), ast.NewPrim(PrimAppend))
+	env = EnvExtend(env, ast.NewSym("reverse"), ast.NewPrim(PrimReverse))
+	env = EnvExtend(env, ast.NewSym("map"), ast.NewPrim(PrimMap))
+	env = EnvExtend(env, ast.NewSym("filter"), ast.NewPrim(PrimFilter))
+	env = EnvExtend(env, ast.NewSym("fold"), ast.NewPrim(PrimFold))
+	env = EnvExtend(env, ast.NewSym("foldr"), ast.NewPrim(PrimFold))
+	env = EnvExtend(env, ast.NewSym("foldl"), ast.NewPrim(PrimFoldl))
+	env = EnvExtend(env, ast.NewSym("apply"), ast.NewPrim(PrimApply))
+	env = EnvExtend(env, ast.NewSym("compose"), ast.NewPrim(PrimCompose))
+	env = EnvExtend(env, ast.NewSym("flip"), ast.NewPrim(PrimFlip))
 	// Utility
 	env = EnvExtend(env, ast.NewSym("print"), ast.NewPrim(PrimPrint))
 	// Constants

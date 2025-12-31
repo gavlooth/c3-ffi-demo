@@ -125,6 +125,33 @@ func defaultHApp(exp, menv *ast.Value) *ast.Value {
 		return Eval(body, bodyMenv)
 	}
 
+	if ast.IsRecLambda(fn) {
+		selfName := fn.SelfName
+		params := fn.Params
+		body := fn.Body
+		closureEnv := fn.LamEnv
+
+		// Extend environment with self-reference
+		newEnv := EnvExtend(closureEnv, selfName, fn)
+
+		p := params
+		a := args
+		for !ast.IsNil(p) && !ast.IsNil(a) && ast.IsCell(p) && ast.IsCell(a) {
+			newEnv = EnvExtend(newEnv, p.Car, a.Car)
+			p = p.Cdr
+			a = a.Cdr
+		}
+
+		bodyMenv := NewMenv(menv.Parent, newEnv)
+		bodyMenv.HApp = menv.HApp
+		bodyMenv.HLet = menv.HLet
+		bodyMenv.HIf = menv.HIf
+		bodyMenv.HLit = menv.HLit
+		bodyMenv.HVar = menv.HVar
+
+		return Eval(body, bodyMenv)
+	}
+
 	fmt.Printf("Error: Not a function: %s\n", fn.String())
 	return ast.Nil
 }
@@ -328,7 +355,64 @@ func Eval(expr, menv *ast.Value) *ast.Value {
 		if ast.SymEqStr(op, "lambda") {
 			params := args.Car
 			body := args.Cdr.Car
+
+			// Check for recursive lambda: (lambda self (params) body)
+			// where self is a symbol and params is a list
+			if ast.IsSym(params) && !ast.IsNil(args.Cdr) && ast.IsCell(args.Cdr) {
+				selfName := params
+				actualParams := args.Cdr.Car
+				actualBody := args.Cdr.Cdr.Car
+				return ast.NewRecLambda(selfName, actualParams, actualBody, menv.Env)
+			}
+
 			return ast.NewLambda(params, body, menv.Env)
+		}
+
+		if ast.SymEqStr(op, "match") {
+			return EvalMatch(expr, menv)
+		}
+
+		if ast.SymEqStr(op, "do") {
+			return evalDo(args, menv)
+		}
+
+		if ast.SymEqStr(op, "error") {
+			msg := Eval(args.Car, menv)
+			msgStr := "error"
+			if ast.IsSym(msg) {
+				msgStr = msg.Str
+			} else if ast.IsInt(msg) {
+				msgStr = fmt.Sprintf("%d", msg.Int)
+			}
+			return ast.NewError(msgStr)
+		}
+
+		if ast.SymEqStr(op, "try") {
+			// (try expr handler) - handler is a lambda that takes error
+			tryExpr := args.Car
+			handler := Eval(args.Cdr.Car, menv)
+			result := Eval(tryExpr, menv)
+			if ast.IsError(result) {
+				// Apply handler to error message
+				errVal := ast.NewSym(result.Str)
+				return applyFn(handler, ast.List1(errVal), menv)
+			}
+			return result
+		}
+
+		if ast.SymEqStr(op, "assert") {
+			cond := Eval(args.Car, menv)
+			if ast.IsNil(cond) || (ast.IsInt(cond) && cond.Int == 0) {
+				msg := "assertion failed"
+				if !ast.IsNil(args.Cdr) {
+					msgVal := Eval(args.Cdr.Car, menv)
+					if ast.IsSym(msgVal) {
+						msg = msgVal.Str
+					}
+				}
+				return ast.NewError(msg)
+			}
+			return SymT
 		}
 
 		if ast.SymEqStr(op, "EM") {
@@ -468,6 +552,82 @@ func evalOr(args, menv *ast.Value) *ast.Value {
 		}
 		rest = rest.Cdr
 	}
+	return ast.Nil
+}
+
+// evalDo evaluates a sequence of expressions, returning the last
+func evalDo(args, menv *ast.Value) *ast.Value {
+	var result *ast.Value = ast.Nil
+	rest := args
+	for !ast.IsNil(rest) && ast.IsCell(rest) {
+		result = Eval(rest.Car, menv)
+		rest = rest.Cdr
+	}
+	return result
+}
+
+// applyFn applies a function to arguments
+func applyFn(fn *ast.Value, args *ast.Value, menv *ast.Value) *ast.Value {
+	if fn == nil {
+		return ast.Nil
+	}
+
+	if ast.IsPrim(fn) {
+		return fn.Prim(args, menv)
+	}
+
+	if ast.IsLambda(fn) {
+		params := fn.Params
+		body := fn.Body
+		closureEnv := fn.LamEnv
+
+		newEnv := closureEnv
+		p := params
+		a := args
+		for !ast.IsNil(p) && !ast.IsNil(a) && ast.IsCell(p) && ast.IsCell(a) {
+			newEnv = EnvExtend(newEnv, p.Car, a.Car)
+			p = p.Cdr
+			a = a.Cdr
+		}
+
+		bodyMenv := NewMenv(menv.Parent, newEnv)
+		bodyMenv.HApp = menv.HApp
+		bodyMenv.HLet = menv.HLet
+		bodyMenv.HIf = menv.HIf
+		bodyMenv.HLit = menv.HLit
+		bodyMenv.HVar = menv.HVar
+
+		return Eval(body, bodyMenv)
+	}
+
+	if ast.IsRecLambda(fn) {
+		selfName := fn.SelfName
+		params := fn.Params
+		body := fn.Body
+		closureEnv := fn.LamEnv
+
+		// Extend environment with self-reference
+		newEnv := EnvExtend(closureEnv, selfName, fn)
+
+		p := params
+		a := args
+		for !ast.IsNil(p) && !ast.IsNil(a) && ast.IsCell(p) && ast.IsCell(a) {
+			newEnv = EnvExtend(newEnv, p.Car, a.Car)
+			p = p.Cdr
+			a = a.Cdr
+		}
+
+		bodyMenv := NewMenv(menv.Parent, newEnv)
+		bodyMenv.HApp = menv.HApp
+		bodyMenv.HLet = menv.HLet
+		bodyMenv.HIf = menv.HIf
+		bodyMenv.HLit = menv.HLit
+		bodyMenv.HVar = menv.HVar
+
+		return Eval(body, bodyMenv)
+	}
+
+	fmt.Printf("Error: Not a function in applyFn: %s\n", fn.String())
 	return ast.Nil
 }
 
