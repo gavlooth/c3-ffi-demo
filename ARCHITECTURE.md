@@ -109,15 +109,101 @@ purple_go/
     └── demo.purple            # Example programs
 ```
 
+## Reference Counting Techniques
+
+### Standard Reference Counting
+Basic reference counting with `inc_ref`/`dec_ref`. Used for DAG-shaped data.
+- **Pros**: Immediate reclamation, no pauses, simple
+- **Cons**: Cannot handle cycles, overhead per pointer operation
+- **Reference**: Collins, G. E. "A method for overlapping and erasure of lists" (CACM 1960)
+
+### Deferred Reference Counting
+Delays decrements to batch them at safe points, reducing overhead.
+- Bounded O(k) work per safe point
+- Avoids immediate cascade of decrements
+- **Reference**: Deutsch & Bobrow, "An Efficient, Incremental, Automatic Garbage Collector" (CACM 1976)
+
+### Weighted Reference Counting
+Assigns weights to references; splitting a reference divides the weight.
+- Enables efficient copying without updating original
+- **Reference**: Watson & Watson, "An Efficient Garbage Collection Scheme for Parallel Computer Architectures" (1987)
+
+### Typed Reference Counting (Back-Edge Detection)
+Uses type information to identify which fields can form back-edges (cycles).
+- Compiler automatically makes back-edge fields weak
+- No programmer annotation needed
+- **Reference**: Bacon & Rajan, "Concurrent Cycle Collection in Reference Counted Systems" (ECOOP 2001)
+- **Reference**: Lins, "Cyclic Reference Counting by Typed Reference Fields" (Science of Computer Programming 2012)
+
+### Trial Deletion / Local Mark-Scan
+Performs local reachability analysis when dropping potential cycle members.
+- O(cycle_size) not O(heap_size)
+- Deterministic, happens at drop point
+- **Reference**: Christopher, "Reference count garbage collection" (Software Practice & Experience 1984)
+- **Reference**: Lins, "Cyclic Reference Counting with Lazy Mark-Scan" (Information Processing Letters 1992)
+
+### SCC-Based Reference Counting
+Groups strongly connected components into single reference count units.
+- Uses Tarjan's algorithm for SCC detection
+- Single RC for entire frozen cycle
+- **Reference**: Paz et al., "An Efficient On-the-Fly Cycle Collection" (TOPLAS 2007)
+
+### CactusRef-Style Cycle Collection
+Local cycle detection without global scanning.
+- Tracks internal vs external reference counts
+- Orphaned cycles detected and freed immediately
+- **Reference**: https://github.com/artichoke/cactusref
+
+### Perceus: Reuse Analysis
+Pairs deallocations with allocations for in-place reuse.
+- "Functional But In-Place" (FBIP) programming
+- Eliminates allocation when object is about to be freed
+- **Reference**: Reinking et al., "Perceus: Garbage Free Reference Counting with Reuse" (PLDI 2021)
+  - https://dl.acm.org/doi/10.1145/3453483.3454032
+
+### Lobster-Style Compile-Time RC
+Compile-time analysis determines where RC operations are needed.
+- Many RC operations eliminated statically
+- Similar to ASAP philosophy
+- **Reference**: https://aardappel.github.io/lobster/memory_management.html
+
 ## Key References
 
+### Memory Management (General)
 1. **ASAP**: Proust, "As Static As Possible memory management" (2017)
-2. **Shape Analysis**: Ghiya & Hendren, "Is it a tree, a DAG, or a cyclic graph?" (POPL 1996)
-3. **Perceus**: Reinking et al., "Garbage Free Reference Counting with Reuse" (PLDI 2021)
-4. **Region-Based Memory**: Tofte & Talpin, "Region-Based Memory Management" (1997)
-5. **Static Memory Management**: Aiken et al., "Better Static Memory Management" (PLDI 1995)
-6. **MemFix**: Lee et al., "Static Analysis-Based Repair of Memory Leaks" (ESEC/FSE 2018)
-7. **Collapsing Towers**: Amin & Rompf, "Collapsing Towers of Interpreters" (POPL 2018)
+   - https://www.cl.cam.ac.uk/techreports/UCAM-CL-TR-908.pdf
+2. **Practical Static Memory**: Corbyn, "Practical Static Memory Management" (2020)
+   - https://nathancorbyn.com/pdf/practical_static_memory_management.pdf
+
+### Shape and Escape Analysis
+3. **Shape Analysis**: Ghiya & Hendren, "Is it a tree, a DAG, or a cyclic graph?" (POPL 1996)
+   - https://dl.acm.org/doi/10.1145/237721.237724
+4. **Static Memory Management**: Aiken et al., "Better Static Memory Management" (PLDI 1995)
+   - https://theory.stanford.edu/~aiken/publications/papers/pldi95.pdf
+
+### Reference Counting
+5. **Perceus**: Reinking et al., "Garbage Free Reference Counting with Reuse" (PLDI 2021) - **Distinguished Paper**
+   - https://dl.acm.org/doi/10.1145/3453483.3454032
+6. **Concurrent Cycles**: Bacon & Rajan, "Concurrent Cycle Collection in Reference Counted Systems" (ECOOP 2001)
+   - https://dl.acm.org/doi/10.1007/3-540-45337-7_12
+7. **Typed Reference Counting**: Lins, "Cyclic Reference Counting by Typed Reference Fields" (2012)
+   - https://www.sciencedirect.com/science/article/abs/pii/S1477842411000285
+
+### Region-Based Memory
+8. **Region-Based Memory**: Tofte & Talpin, "Region-Based Memory Management" (Information & Computation 1997)
+   - https://dl.acm.org/doi/10.1006/inco.1997.2673
+9. **MLKit**: Elsman et al., "The MLKit Compiler"
+   - https://elsman.com/mlkit/
+
+### Optimization Techniques
+10. **Destination-Passing Style**: Shaikhha et al., "Destination-passing style for efficient memory management" (FHPC 2017)
+    - https://dl.acm.org/doi/10.1145/3122948.3122949
+11. **MemFix**: Lee et al., "MemFix: Static Analysis-Based Repair of Memory Leaks" (ESEC/FSE 2018)
+    - https://dl.acm.org/doi/10.1145/3236024.3236079
+
+### Stage-Polymorphism
+12. **Collapsing Towers**: Amin & Rompf, "Collapsing Towers of Interpreters" (POPL 2018)
+    - https://dl.acm.org/doi/10.1145/3158140
 
 ## Generated C99 Output
 
