@@ -174,9 +174,9 @@ Comparison between our Go implementation and the original Purple at `/home/heefo
 | Quasiquote `` ` `` | ✅ | Quote with evaluation |
 | Unquote `,` | ✅ | Evaluate in quasiquote |
 | Unquote-splicing `,@` | ✅ | Splice list |
-| `defmacro` | ❌ | Define macro |
-| `mcall` | ❌ | Call macro |
-| `macroexpand` | ❌ | Expand without eval |
+| `defmacro` | ✅ | Define macro with transformer |
+| `mcall` | ✅ | Call macro by name |
+| `macroexpand` | ✅ | Expand without eval |
 
 ---
 
@@ -212,12 +212,13 @@ Comparison between our Go implementation and the original Purple at `/home/heefo
 6. ✅ **Meta-level operations** - EM, shift, clambda, meta-level
 7. ✅ **Handler customization** - 9-handler table with get/set-meta!, with-handlers
 
-### Lower Priority (Convenience) - ✅ MOSTLY COMPLETE
+### Lower Priority (Convenience) - ✅ COMPLETE
 8. ✅ **Quasiquote** - template syntax
-9. ❌ **Macro system** - syntactic abstraction (defmacro, mcall, macroexpand)
+9. ✅ **Macro system** - syntactic abstraction (defmacro, mcall, macroexpand)
 10. ✅ **FFI/I/O** - practical programs
 11. ✅ **Characters/strings** - text handling
 12. ✅ **Introspection** - gensym, eval, sym-eq?, trace
+13. ✅ **JIT execution** - Runtime C code execution via GCC
 
 ---
 

@@ -750,3 +750,171 @@ func TestHandlerDelegation(t *testing.T) {
 		t.Errorf("handler delegation = %v, want 14", result)
 	}
 }
+
+// =============================================================================
+// Macro System Tests
+// =============================================================================
+
+func TestDefmacroSimple(t *testing.T) {
+	// Clear macros before test
+	ClearMacros()
+
+	// Define a simple macro that doubles its argument
+	result := evalString(`
+		(defmacro double (x)
+			(quasiquote (+ (unquote x) (unquote x)))
+			(mcall double 5))
+	`)
+	// (double 5) expands to (+ 5 5) = 10
+	if result == nil || !ast.IsInt(result) || result.Int != 10 {
+		t.Errorf("defmacro double = %v, want 10", result)
+	}
+}
+
+func TestDefmacroWithScope(t *testing.T) {
+	// Clear macros before test
+	ClearMacros()
+
+	// Define macro and use it in scope
+	result := evalString(`
+		(defmacro inc (x)
+			(quasiquote (+ 1 (unquote x)))
+			(+ (mcall inc 5) (mcall inc 10)))
+	`)
+	// (inc 5) = (+ 1 5) = 6, (inc 10) = (+ 1 10) = 11, total = 17
+	if result == nil || !ast.IsInt(result) || result.Int != 17 {
+		t.Errorf("defmacro with scope = %v, want 17", result)
+	}
+}
+
+func TestMcall(t *testing.T) {
+	// Clear macros before test
+	ClearMacros()
+
+	// Define a macro, then call it with mcall
+	result := evalString(`
+		(defmacro square (x)
+			(quasiquote (* (unquote x) (unquote x)))
+			(mcall square 4))
+	`)
+	// (square 4) expands to (* 4 4) = 16
+	if result == nil || !ast.IsInt(result) || result.Int != 16 {
+		t.Errorf("mcall square = %v, want 16", result)
+	}
+}
+
+func TestMcallUndefinedMacro(t *testing.T) {
+	// Clear macros before test
+	ClearMacros()
+
+	// Try to call undefined macro
+	result := evalString(`(mcall undefined-macro 1 2 3)`)
+	if result == nil || !ast.IsError(result) {
+		t.Errorf("mcall undefined = %v, want error", result)
+	}
+}
+
+func TestMacroexpand(t *testing.T) {
+	// Clear macros before test
+	ClearMacros()
+
+	// Define macro, then expand without evaluating
+	result := evalString(`
+		(defmacro negate (x)
+			(quasiquote (- 0 (unquote x)))
+			(macroexpand (mcall negate 42)))
+	`)
+	// Should expand to (- 0 42), not evaluate to -42
+	// The result should be a list: (- 0 42)
+	if result == nil || !ast.IsCell(result) {
+		t.Errorf("macroexpand = %v, want list", result)
+		return
+	}
+
+	// Check structure: (- 0 42)
+	op := result.Car
+	if !ast.IsSym(op) || op.Str != "-" {
+		t.Errorf("macroexpand op = %v, want -", op)
+	}
+}
+
+func TestMacroMultipleParams(t *testing.T) {
+	// Clear macros before test
+	ClearMacros()
+
+	// Macro with multiple parameters
+	result := evalString(`
+		(defmacro add3 (a b c)
+			(quasiquote (+ (unquote a) (+ (unquote b) (unquote c))))
+			(mcall add3 1 2 3))
+	`)
+	// (add3 1 2 3) = (+ 1 (+ 2 3)) = 6
+	if result == nil || !ast.IsInt(result) || result.Int != 6 {
+		t.Errorf("macro multi-params = %v, want 6", result)
+	}
+}
+
+func TestMacroWithQuote(t *testing.T) {
+	// Clear macros before test
+	ClearMacros()
+
+	// Macro that quotes its argument
+	result := evalString(`
+		(defmacro quote-it (x)
+			(quasiquote (quote (unquote x)))
+			(mcall quote-it hello))
+	`)
+	// Should return the symbol 'hello
+	if result == nil || !ast.IsSym(result) || result.Str != "hello" {
+		t.Errorf("quote-it = %v, want symbol hello", result)
+	}
+}
+
+func TestMacroNestedCalls(t *testing.T) {
+	// Clear macros before test
+	ClearMacros()
+
+	// Nested macro calls
+	result := evalString(`
+		(defmacro double (x)
+			(quasiquote (+ (unquote x) (unquote x)))
+			(mcall double (mcall double 3)))
+	`)
+	// inner: (double 3) = (+ 3 3) = 6
+	// outer: (double 6) = (+ 6 6) = 12
+	if result == nil || !ast.IsInt(result) || result.Int != 12 {
+		t.Errorf("nested macro calls = %v, want 12", result)
+	}
+}
+
+func TestMacroWithConditional(t *testing.T) {
+	// Clear macros before test
+	ClearMacros()
+
+	// Macro that generates conditional code
+	result := evalString(`
+		(defmacro when (cond body)
+			(quasiquote (if (unquote cond) (unquote body) nil))
+			(mcall when (> 5 3) 42))
+	`)
+	// (when (> 5 3) 42) expands to (if (> 5 3) 42 nil), which evaluates to 42
+	if result == nil || !ast.IsInt(result) || result.Int != 42 {
+		t.Errorf("macro when = %v, want 42", result)
+	}
+}
+
+func TestMacroWithLetBinding(t *testing.T) {
+	// Clear macros before test
+	ClearMacros()
+
+	// Macro that generates let binding
+	result := evalString(`
+		(defmacro with-x (val body)
+			(quasiquote (let ((x (unquote val))) (unquote body)))
+			(mcall with-x 10 (+ x 5)))
+	`)
+	// (with-x 10 (+ x 5)) = (let ((x 10)) (+ x 5)) = 15
+	if result == nil || !ast.IsInt(result) || result.Int != 15 {
+		t.Errorf("macro with-x = %v, want 15", result)
+	}
+}

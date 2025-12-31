@@ -2,9 +2,90 @@ package eval
 
 import (
 	"fmt"
+	"sync"
 
 	"purple_go/pkg/ast"
+	"purple_go/pkg/jit"
 )
+
+// Macro System
+// ============
+
+// Macro represents a defined macro (transformer function)
+type Macro struct {
+	Name        string     // Macro name
+	Params      []string   // Parameter names
+	Body        *ast.Value // Transformer body (AST)
+	Transformer *ast.Value // Compiled transformer (lambda)
+}
+
+// Global macro table
+var (
+	macroTable = make(map[string]*Macro)
+	macroMutex sync.RWMutex
+)
+
+// DefineMacro stores a macro definition
+func DefineMacro(name string, params []string, body *ast.Value, menv *ast.Value) *Macro {
+	macroMutex.Lock()
+	defer macroMutex.Unlock()
+
+	// Build transformer: nest lambdas for each parameter
+	// (defmacro name (a b) body) -> (lambda (a) (lambda (b) body))
+	transformer := body
+	for i := len(params) - 1; i >= 0; i-- {
+		paramList := ast.List1(ast.NewSym(params[i]))
+		transformer = ast.NewLambda(paramList, transformer, menv.Env)
+	}
+
+	macro := &Macro{
+		Name:        name,
+		Params:      params,
+		Body:        body,
+		Transformer: transformer,
+	}
+	macroTable[name] = macro
+	return macro
+}
+
+// GetMacro retrieves a macro by name
+func GetMacro(name string) *Macro {
+	macroMutex.RLock()
+	defer macroMutex.RUnlock()
+	return macroTable[name]
+}
+
+// ClearMacros clears all macros (for testing)
+func ClearMacros() {
+	macroMutex.Lock()
+	defer macroMutex.Unlock()
+	macroTable = make(map[string]*Macro)
+}
+
+// ExpandMacro expands a macro call without evaluating the result
+// Arguments are passed as unevaluated ASTs (not wrapped in quote)
+func ExpandMacro(macro *Macro, args []*ast.Value, menv *ast.Value) *ast.Value {
+	result := macro.Transformer
+
+	for _, arg := range args {
+		// Apply transformer to arg directly (not quoted)
+		// The arg is already the unevaluated AST
+		if ast.IsLambda(result) {
+			// Extend environment with the parameter bound to the arg AST
+			newEnv := EnvExtend(result.LamEnv, result.Params.Car, arg)
+			// Create new lambda with remaining body, or evaluate body if no more params
+			if ast.IsLambda(result.Body) {
+				result = ast.NewLambda(result.Body.Params, result.Body.Body, newEnv)
+			} else {
+				// Last parameter - evaluate body in extended env
+				bodyMenv := ast.NewMenv(newEnv, menv.Parent, menv.Level, menv.CopyHandlers())
+				result = Eval(result.Body, bodyMenv)
+			}
+		}
+	}
+
+	return result
+}
 
 // Evaluator is the stage-polymorphic evaluator
 type Evaluator struct {
@@ -199,13 +280,74 @@ func defaultHLft(exp, menv *ast.Value) *ast.Value {
 func defaultHRun(exp, menv *ast.Value) *ast.Value {
 	// exp is the code to run
 	if ast.IsCode(exp) {
-		// At base level, we can't execute C code directly
-		// In real implementation, this would compile and execute
+		// Try to execute C code via JIT if available
+		j := jit.Get()
+		if j.IsAvailable() {
+			return executeCodeWithJIT(exp.Str, j)
+		}
+		// JIT not available - return the code as-is
 		return exp
 	}
 	// If it's an AST, evaluate it at base level
 	baseMenv := NewMenvAtLevel(ast.Nil, menv.Env, 0)
 	return Eval(exp, baseMenv)
+}
+
+// executeCodeWithJIT compiles and runs C code expression using JIT
+func executeCodeWithJIT(codeExpr string, j *jit.JIT) *ast.Value {
+	// Generate a complete C program with the Purple runtime
+	runtime := generateMinimalRuntime()
+	fullCode := jit.WrapCode(codeExpr, runtime)
+
+	// Compile
+	compiled, err := j.Compile(fullCode)
+	if err != nil {
+		return ast.NewError(fmt.Sprintf("JIT compile error: %v", err))
+	}
+	defer compiled.Close()
+
+	// Run and get result
+	result := compiled.Run()
+	if !result.Success {
+		return ast.NewError(fmt.Sprintf("JIT run error: %s", result.Error))
+	}
+
+	return ast.NewInt(result.IntValue)
+}
+
+// generateMinimalRuntime generates a minimal C runtime for JIT execution
+func generateMinimalRuntime() string {
+	return `
+#include <stdlib.h>
+#include <string.h>
+
+typedef struct Obj {
+    int is_pair;
+    union {
+        long i;
+        struct { struct Obj* car; struct Obj* cdr; };
+    };
+} Obj;
+
+static Obj* mk_int(long n) {
+    Obj* o = (Obj*)malloc(sizeof(Obj));
+    o->is_pair = 0;
+    o->i = n;
+    return o;
+}
+
+static Obj* mk_pair(Obj* car, Obj* cdr) {
+    Obj* o = (Obj*)malloc(sizeof(Obj));
+    o->is_pair = 1;
+    o->car = car;
+    o->cdr = cdr;
+    return o;
+}
+
+static void free_obj(Obj* o) {
+    if (o) free(o);
+}
+`
 }
 
 func defaultHEM(exp, menv *ast.Value) *ast.Value {
@@ -712,6 +854,27 @@ func Eval(expr, menv *ast.Value) *ast.Value {
 		// Registers an external function declaration
 		if ast.SymEqStr(op, "ffi-declare") {
 			return evalFFIDeclare(args, menv)
+		}
+
+		// Macro System
+		// ============
+
+		// defmacro - Define a macro
+		// (defmacro name (params...) body scope)
+		if ast.SymEqStr(op, "defmacro") {
+			return evalDefmacro(args, menv)
+		}
+
+		// mcall - Call a macro
+		// (mcall macro-name arg1 arg2 ...)
+		if ast.SymEqStr(op, "mcall") {
+			return evalMcall(args, menv)
+		}
+
+		// macroexpand - Expand macro without evaluating
+		// (macroexpand (mcall macro-name arg1 arg2 ...))
+		if ast.SymEqStr(op, "macroexpand") {
+			return evalMacroexpand(args, menv)
 		}
 
 		// Regular application - use app handler
@@ -1321,4 +1484,193 @@ func GenerateFFIDeclarations() string {
 	}
 	sb += "\n"
 	return sb
+}
+
+// Macro System Implementation
+// ===========================
+
+// evalDefmacro handles (defmacro name (params...) body scope)
+// Defines a macro transformer and evaluates scope with the macro bound
+func evalDefmacro(args *ast.Value, menv *ast.Value) *ast.Value {
+	if ast.IsNil(args) || ast.IsNil(args.Cdr) || ast.IsNil(args.Cdr.Cdr) {
+		return ast.NewError("defmacro requires name, params, body, and scope")
+	}
+
+	// Get macro name
+	nameVal := args.Car
+	if !ast.IsSym(nameVal) {
+		return ast.NewError("defmacro: macro name must be a symbol")
+	}
+	name := nameVal.Str
+
+	// Get parameter list
+	paramsVal := args.Cdr.Car
+	var params []string
+	if ast.IsCell(paramsVal) {
+		p := paramsVal
+		for !ast.IsNil(p) && ast.IsCell(p) {
+			if ast.IsSym(p.Car) {
+				params = append(params, p.Car.Str)
+			}
+			p = p.Cdr
+		}
+	} else if ast.IsSym(paramsVal) {
+		// Single parameter as symbol
+		params = []string{paramsVal.Str}
+	}
+
+	// Get body
+	body := args.Cdr.Cdr.Car
+
+	// Get scope (if provided)
+	var scope *ast.Value
+	if !ast.IsNil(args.Cdr.Cdr.Cdr) && ast.IsCell(args.Cdr.Cdr.Cdr) {
+		scope = args.Cdr.Cdr.Cdr.Car
+	}
+
+	// Define the macro
+	macro := DefineMacro(name, params, body, menv)
+
+	// If no scope, return the macro transformer
+	if scope == nil || ast.IsNil(scope) {
+		return macro.Transformer
+	}
+
+	// Bind macro name to transformer in environment and evaluate scope
+	// Create a lambda that wraps the macro expansion
+	macroFn := ast.NewPrim(func(macroArgs *ast.Value, macroMenv *ast.Value) *ast.Value {
+		// Collect arguments
+		var argsList []*ast.Value
+		a := macroArgs
+		for !ast.IsNil(a) && ast.IsCell(a) {
+			argsList = append(argsList, a.Car)
+			a = a.Cdr
+		}
+
+		// Expand the macro
+		expanded := ExpandMacro(macro, argsList, macroMenv)
+
+		// Evaluate the expansion
+		return Eval(expanded, macroMenv)
+	})
+
+	// Extend environment with macro bound
+	newEnv := EnvExtend(menv.Env, nameVal, macroFn)
+	scopeMenv := ast.NewMenv(newEnv, menv.Parent, menv.Level, menv.CopyHandlers())
+
+	// Evaluate scope
+	return Eval(scope, scopeMenv)
+}
+
+// evalMcall handles (mcall macro-name arg1 arg2 ...)
+// Quotes each argument and applies the macro transformer, then evaluates result
+func evalMcall(args *ast.Value, menv *ast.Value) *ast.Value {
+	if ast.IsNil(args) {
+		return ast.NewError("mcall requires macro name")
+	}
+
+	// Get macro name
+	nameVal := args.Car
+	var name string
+	if ast.IsSym(nameVal) {
+		name = nameVal.Str
+	} else {
+		// Try evaluating to get macro name
+		evaledName := Eval(nameVal, menv)
+		if ast.IsSym(evaledName) {
+			name = evaledName.Str
+		} else {
+			return ast.NewError("mcall: first argument must be a macro name")
+		}
+	}
+
+	// Look up macro
+	macro := GetMacro(name)
+	if macro == nil {
+		return ast.NewError(fmt.Sprintf("mcall: undefined macro: %s", name))
+	}
+
+	// Collect unevaluated arguments (they will be quoted by ExpandMacro)
+	var argsList []*ast.Value
+	rest := args.Cdr
+	for !ast.IsNil(rest) && ast.IsCell(rest) {
+		argsList = append(argsList, rest.Car)
+		rest = rest.Cdr
+	}
+
+	// Expand the macro
+	expanded := ExpandMacro(macro, argsList, menv)
+
+	// Evaluate the expanded form
+	return Eval(expanded, menv)
+}
+
+// evalMacroexpand handles (macroexpand expr)
+// Expands macro calls in expr without evaluating the result
+func evalMacroexpand(args *ast.Value, menv *ast.Value) *ast.Value {
+	if ast.IsNil(args) {
+		return ast.NewError("macroexpand requires an expression")
+	}
+
+	expr := args.Car
+
+	// If it's not a list, return as-is
+	if !ast.IsCell(expr) {
+		return expr
+	}
+
+	// Check if it's an mcall form
+	op := expr.Car
+	if ast.SymEqStr(op, "mcall") {
+		mcallArgs := expr.Cdr
+		if ast.IsNil(mcallArgs) {
+			return expr
+		}
+
+		// Get macro name
+		nameVal := mcallArgs.Car
+		var name string
+		if ast.IsSym(nameVal) {
+			name = nameVal.Str
+		} else {
+			return expr // Can't expand if name isn't a symbol
+		}
+
+		// Look up macro
+		macro := GetMacro(name)
+		if macro == nil {
+			return expr // Unknown macro, return as-is
+		}
+
+		// Collect arguments
+		var argsList []*ast.Value
+		rest := mcallArgs.Cdr
+		for !ast.IsNil(rest) && ast.IsCell(rest) {
+			argsList = append(argsList, rest.Car)
+			rest = rest.Cdr
+		}
+
+		// Expand without evaluating
+		return ExpandMacro(macro, argsList, menv)
+	}
+
+	// Check if the head is a macro name directly (alternative syntax)
+	if ast.IsSym(op) {
+		macro := GetMacro(op.Str)
+		if macro != nil {
+			// Collect arguments
+			var argsList []*ast.Value
+			rest := expr.Cdr
+			for !ast.IsNil(rest) && ast.IsCell(rest) {
+				argsList = append(argsList, rest.Car)
+				rest = rest.Cdr
+			}
+
+			// Expand without evaluating
+			return ExpandMacro(macro, argsList, menv)
+		}
+	}
+
+	// Not a macro call, return as-is
+	return expr
 }
