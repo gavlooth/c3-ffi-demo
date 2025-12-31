@@ -1,5 +1,7 @@
 package codegen
 
+import "sync"
+
 // FieldStrength represents the strength of a reference field
 type FieldStrength int
 
@@ -36,6 +38,30 @@ type OwnershipEdge struct {
 type TypeRegistry struct {
 	Types          map[string]*TypeDef
 	OwnershipGraph []*OwnershipEdge
+}
+
+// Global type registry for cross-package access
+var (
+	globalRegistry     *TypeRegistry
+	globalRegistryOnce sync.Once
+	globalRegistryMu   sync.RWMutex
+)
+
+// GlobalRegistry returns the singleton global type registry
+func GlobalRegistry() *TypeRegistry {
+	globalRegistryOnce.Do(func() {
+		globalRegistry = NewTypeRegistry()
+		globalRegistry.InitDefaultTypes()
+	})
+	return globalRegistry
+}
+
+// ResetGlobalRegistry resets the global registry (for testing)
+func ResetGlobalRegistry() {
+	globalRegistryMu.Lock()
+	defer globalRegistryMu.Unlock()
+	globalRegistry = NewTypeRegistry()
+	globalRegistry.InitDefaultTypes()
 }
 
 // NewTypeRegistry creates a new type registry

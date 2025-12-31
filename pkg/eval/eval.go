@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"purple_go/pkg/ast"
+	"purple_go/pkg/codegen"
 	"purple_go/pkg/jit"
 )
 
@@ -877,6 +878,12 @@ func Eval(expr, menv *ast.Value) *ast.Value {
 			return evalMacroexpand(args, menv)
 		}
 
+		// deftype - Define a type for back-edge analysis
+		// (deftype TypeName (field1 Type1) (field2 Type2) ...)
+		if ast.SymEqStr(op, "deftype") {
+			return evalDeftype(args, menv)
+		}
+
 		// Regular application - use app handler
 		return CallHandler(menv, ast.HIdxApp, expr)
 	}
@@ -1673,4 +1680,84 @@ func evalMacroexpand(args *ast.Value, menv *ast.Value) *ast.Value {
 
 	// Not a macro call, return as-is
 	return expr
+}
+
+// Type System for Back-Edge Analysis
+// ===================================
+
+// evalDeftype handles (deftype TypeName (field1 Type1) (field2 Type2) ...)
+// Registers the type with the global registry for back-edge analysis
+func evalDeftype(args *ast.Value, menv *ast.Value) *ast.Value {
+	if ast.IsNil(args) {
+		return ast.NewError("deftype requires type name")
+	}
+
+	// Get type name
+	typeNameVal := args.Car
+	if !ast.IsSym(typeNameVal) {
+		return ast.NewError("deftype: type name must be a symbol")
+	}
+	typeName := typeNameVal.Str
+
+	// Parse fields: (field1 Type1) (field2 Type2) ...
+	var fields []codegen.TypeField
+	rest := args.Cdr
+	for !ast.IsNil(rest) && ast.IsCell(rest) {
+		fieldDef := rest.Car
+		if !ast.IsCell(fieldDef) {
+			return ast.NewError("deftype: field definition must be a list (name type)")
+		}
+
+		fieldNameVal := fieldDef.Car
+		if !ast.IsSym(fieldNameVal) {
+			return ast.NewError("deftype: field name must be a symbol")
+		}
+		fieldName := fieldNameVal.Str
+
+		fieldTypeVal := fieldDef.Cdr.Car
+		if !ast.IsSym(fieldTypeVal) {
+			return ast.NewError("deftype: field type must be a symbol")
+		}
+		fieldType := fieldTypeVal.Str
+
+		// Determine if field is scannable (pointer type)
+		// Primitive types like int, float, bool are not scannable
+		isScannable := !isPrimitiveType(fieldType)
+
+		fields = append(fields, codegen.TypeField{
+			Name:        fieldName,
+			Type:        fieldType,
+			IsScannable: isScannable,
+			Strength:    codegen.FieldStrong, // Default to strong, back-edge analysis will update
+		})
+
+		rest = rest.Cdr
+	}
+
+	// Register type with global registry
+	registry := codegen.GlobalRegistry()
+	registry.RegisterType(typeName, fields)
+
+	// Rebuild ownership graph and analyze back-edges
+	registry.BuildOwnershipGraph()
+	registry.AnalyzeBackEdges()
+
+	// Return the type name as a symbol
+	return typeNameVal
+}
+
+// isPrimitiveType returns true if the type is a primitive (non-pointer) type
+func isPrimitiveType(typeName string) bool {
+	switch typeName {
+	case "int", "long", "short", "char", "byte",
+		"float", "double",
+		"bool", "boolean",
+		"void",
+		"i8", "i16", "i32", "i64",
+		"u8", "u16", "u32", "u64",
+		"f32", "f64":
+		return true
+	default:
+		return false
+	}
 }
