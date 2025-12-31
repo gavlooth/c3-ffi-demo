@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"purple_go/pkg/analysis"
 	"purple_go/pkg/ast"
 	"purple_go/pkg/codegen"
 	"purple_go/pkg/eval"
@@ -403,6 +404,107 @@ func TestShapeAwareRoutingUnbrokenCycles(t *testing.T) {
 	// The DFS should have marked 'link' as a back-edge since it's a self-loop
 	// This means the cycle is broken
 	t.Logf("Has cycle broken: %v", registry.HasCycleBrokenByWeakEdges("Circular"))
+}
+
+func TestOwnershipTracking(t *testing.T) {
+	// Reset global registry before test
+	codegen.ResetGlobalRegistry()
+
+	// Define a type with weak field
+	input := `(deftype Link
+		(value int)
+		(next Link)
+		(prev Link))`
+
+	p := parser.New(input)
+	expr, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	env := eval.DefaultEnv()
+	menv := eval.NewMenv(ast.Nil, env)
+	eval.Eval(expr, menv)
+
+	registry := codegen.GlobalRegistry()
+
+	// Create ownership context with field lookup
+	ownerCtx := analysis.NewOwnershipContext(registry)
+
+	// Test field strength lookup
+	if !registry.IsFieldWeak("Link", "prev") {
+		t.Error("prev field should be weak")
+	}
+	if registry.IsFieldWeak("Link", "next") {
+		t.Error("next field should not be weak")
+	}
+
+	// Test ownership definitions
+	ownerCtx.DefineOwned("x")
+	info := ownerCtx.GetOwnership("x")
+	if info == nil {
+		t.Fatal("ownership info should exist for x")
+	}
+	if info.Class != analysis.OwnerLocal {
+		t.Errorf("expected OwnerLocal, got %v", info.Class)
+	}
+
+	// Test should free
+	if !ownerCtx.ShouldFree("x") {
+		t.Error("locally owned variable should be freed")
+	}
+
+	// Test ownership transfer
+	ownerCtx.DefineOwned("y")
+	ownerCtx.TransferOwnership("x", "y")
+	if ownerCtx.ShouldFree("x") {
+		t.Error("transferred variable should not be freed")
+	}
+
+	// Test borrowed
+	ownerCtx.DefineBorrowed("z")
+	if ownerCtx.ShouldFree("z") {
+		t.Error("borrowed variable should not be freed")
+	}
+}
+
+func TestOwnershipFromWeakField(t *testing.T) {
+	// Reset global registry before test
+	codegen.ResetGlobalRegistry()
+
+	// Define a type with weak field
+	input := `(deftype Node
+		(value int)
+		(next Node)
+		(prev Node))`
+
+	p := parser.New(input)
+	expr, _ := p.Parse()
+
+	env := eval.DefaultEnv()
+	menv := eval.NewMenv(ast.Nil, env)
+	eval.Eval(expr, menv)
+
+	registry := codegen.GlobalRegistry()
+	ownerCtx := analysis.NewOwnershipContext(registry)
+
+	// Simulate getting a value from a weak field
+	ownerCtx.DefineFromFieldAccess("prevNode", "Node", "prev")
+
+	info := ownerCtx.GetOwnership("prevNode")
+	if info == nil {
+		t.Fatal("ownership info should exist")
+	}
+
+	// Values from weak fields should be marked as weak
+	if info.Class != analysis.OwnerWeak {
+		t.Errorf("expected OwnerWeak for value from weak field, got %v", info.Class)
+	}
+
+	// Should not free weak references
+	if ownerCtx.ShouldFree("prevNode") {
+		t.Error("weak reference should not be freed")
+	}
 }
 
 func TestDeftypeMultipleTypes(t *testing.T) {

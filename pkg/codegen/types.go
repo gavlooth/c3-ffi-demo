@@ -393,6 +393,35 @@ func (r *TypeRegistry) GetCycleStatus(typeName string) CycleStatus {
 	return CycleStatusUnbroken
 }
 
+// IsFieldWeak returns true if the specified field is weak
+// Implements analysis.FieldStrengthLookup interface
+func (r *TypeRegistry) IsFieldWeak(typeName, fieldName string) bool {
+	t := r.Types[typeName]
+	if t == nil {
+		return false
+	}
+	for _, f := range t.Fields {
+		if f.Name == fieldName {
+			return f.Strength == FieldWeak
+		}
+	}
+	return false
+}
+
+// IsFieldStrong returns true if the specified field is strong
+func (r *TypeRegistry) IsFieldStrong(typeName, fieldName string) bool {
+	t := r.Types[typeName]
+	if t == nil {
+		return false
+	}
+	for _, f := range t.Fields {
+		if f.Name == fieldName {
+			return f.Strength == FieldStrong
+		}
+	}
+	return false
+}
+
 // InitDefaultTypes initializes the default type registry with common types
 func (r *TypeRegistry) InitDefaultTypes() {
 	// Pair type
