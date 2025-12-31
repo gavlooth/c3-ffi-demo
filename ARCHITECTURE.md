@@ -35,6 +35,40 @@ Purple Go is a **stage-polymorphic evaluator**: the same evaluator interprets co
 - All other engines are optional accelerators or correctness patches for specific shapes.
 - If an optimization fails or is disabled, the code should still be memory-safe under ASAP.
 
+## Revision: Relaxed ASAP with Arenas + Weak Edges
+
+Relax the "ASAP First" rule slightly while keeping the **no stop-the-world** guarantee:
+
+### Key Changes
+1. **Embrace bulk deallocation via arenas**
+   - Arenas allow cyclic structures without per-object tracking
+   - O(1) deallocation of entire arena at scope exit
+   - No lifetime inference needed for arena-allocated objects
+
+2. **Allow cycles without lifetime inference**
+   - Weak edges break ownership cycles at compile time
+   - Back-edge detection via type analysis (no programmer annotation)
+   - Arena scopes handle complex cyclic graphs
+
+3. **Preserve static determinism**
+   - All deallocation points are still known at compile time
+   - No runtime cycle detection or tracing
+   - Bounded, predictable memory behavior
+
+### Why This Works
+- **Arenas + weak edges** provide a practical escape hatch for cycles
+- **Static analysis** still drives most decisions (shape, escape, liveness)
+- **No global pauses**: arena free is O(1), weak invalidation is O(weak_refs)
+- **Graceful degradation**: falls back to arena if shape analysis is uncertain
+
+### Trade-offs
+| Pure ASAP | Relaxed ASAP |
+|-----------|--------------|
+| Per-object free injection | Arena bulk free for cycles |
+| Requires acyclic or inferred lifetimes | Allows arbitrary cycles in arenas |
+| Zero runtime overhead | Small arena bookkeeping |
+| May reject valid programs | Accepts more programs |
+
 ## Implemented Algorithms
 
 ### Escape Analysis
