@@ -122,6 +122,20 @@ func (c *Compiler) inArenaScope() bool {
 	return len(c.arenaScopes) > 0 && c.arenaScopes[len(c.arenaScopes)-1]
 }
 
+// shouldUseArena returns true if cyclic data should use arena (non-escaping).
+func (c *Compiler) shouldUseArena(shape analysis.Shape, escape analysis.EscapeClass) bool {
+	return shape == analysis.ShapeCyclic && escape == analysis.EscapeNone
+}
+
+// arenaCounter tracks arena names
+var arenaCounter int
+
+// newArenaName generates a unique arena name
+func (c *Compiler) newArenaName() string {
+	arenaCounter++
+	return fmt.Sprintf("_arena%d", arenaCounter)
+}
+
 // mergeShapes returns the conservative combination of two shapes.
 // Tree + Tree = Tree, DAG + DAG = DAG, anything cyclic = Cyclic, otherwise Unknown.
 func mergeShapes(a, b analysis.Shape) analysis.Shape {
@@ -561,8 +575,17 @@ func (c *Compiler) compileLet(expr *ast.Value) (CValue, error) {
 		bindings = bindings.Cdr
 	}
 
+	// Escape analysis BEFORE shape analysis to determine strategy
+	escapeCtx := analysis.NewAnalysisContext()
+	for _, name := range bindNames {
+		escapeCtx.AddVar(name)
+	}
+	escapeCtx.AnalyzeExpr(body)
+	escapeCtx.AnalyzeEscape(body, analysis.EscapeGlobal)
+
 	// Shape analysis for each binding
 	hasCyclic := false
+	hasEscapingCyclic := false
 	for i, val := range bindVals {
 		c.shapeCtx.AnalyzeShapes(val)
 		shape := c.shapeCtx.ResultShape
@@ -574,11 +597,26 @@ func (c *Compiler) compileLet(expr *ast.Value) (CValue, error) {
 		local[bindNames[i]] = info
 		if shape == analysis.ShapeCyclic {
 			hasCyclic = true
+			// Check if this cyclic binding escapes
+			usage := escapeCtx.FindVar(bindNames[i])
+			if usage != nil && (usage.CapturedByLambda || usage.Escape == analysis.EscapeGlobal) {
+				hasEscapingCyclic = true
+			}
 		}
 	}
 
-	// Push symmetric scope if we have cyclic data
-	if hasCyclic {
+	// Decide memory strategy:
+	// - Non-escaping cyclic → Arena (bulk dealloc, O(1))
+	// - Escaping cyclic → Symmetric RC
+	useArena := hasCyclic && !hasEscapingCyclic
+	useSymRC := hasCyclic && hasEscapingCyclic
+	arenaName := ""
+
+	if useArena {
+		arenaName = c.newArenaName()
+		c.arenaScopes = append(c.arenaScopes, true)
+	}
+	if useSymRC {
 		c.symScopes = append(c.symScopes, true)
 	}
 
@@ -586,7 +624,10 @@ func (c *Compiler) compileLet(expr *ast.Value) (CValue, error) {
 	bodyVal, err := c.compileExpr(body)
 	c.popScope()
 
-	if hasCyclic {
+	if useArena {
+		c.arenaScopes = c.arenaScopes[:len(c.arenaScopes)-1]
+	}
+	if useSymRC {
 		c.symScopes = c.symScopes[:len(c.symScopes)-1]
 	}
 
@@ -594,26 +635,27 @@ func (c *Compiler) compileLet(expr *ast.Value) (CValue, error) {
 		return CValue{}, err
 	}
 
-	// Escape analysis for bindings
-	escapeCtx := analysis.NewAnalysisContext()
-	for name := range local {
-		escapeCtx.AddVar(name)
-	}
-	escapeCtx.AnalyzeExpr(body)
-	escapeCtx.AnalyzeEscape(body, analysis.EscapeGlobal)
-
 	var sb strings.Builder
 	sb.WriteString("({\n")
 
-	// Enter symmetric scope if we have cyclic data
-	if hasCyclic {
-		sb.WriteString("    sym_enter_scope(); /* cyclic data detected */\n")
+	// Enter arena or symmetric scope
+	if useArena {
+		sb.WriteString(fmt.Sprintf("    Arena* %s = arena_create(); /* non-escaping cyclic */\n", arenaName))
+	} else if useSymRC {
+		sb.WriteString("    sym_enter_scope(); /* escaping cyclic data */\n")
 	}
 
 	for i, cName := range bindOrder {
-		sb.WriteString(fmt.Sprintf("    Obj* %s = %s;\n", cName, bindExprs[i].Expr))
+		if useArena && bindExprs[i].Shape == analysis.ShapeCyclic {
+			// Replace allocations with arena versions
+			expr := strings.ReplaceAll(bindExprs[i].Expr, "mk_int(", fmt.Sprintf("arena_mk_int(%s, ", arenaName))
+			expr = strings.ReplaceAll(expr, "mk_pair(", fmt.Sprintf("arena_mk_pair(%s, ", arenaName))
+			sb.WriteString(fmt.Sprintf("    Obj* %s = %s;\n", cName, expr))
+		} else {
+			sb.WriteString(fmt.Sprintf("    Obj* %s = %s;\n", cName, bindExprs[i].Expr))
+		}
 		// Own cyclic objects in symmetric scope
-		if bindExprs[i].Shape == analysis.ShapeCyclic {
+		if useSymRC && bindExprs[i].Shape == analysis.ShapeCyclic {
 			sb.WriteString(fmt.Sprintf("    sym_alloc(%s); /* own cyclic */\n", cName))
 		}
 	}
@@ -632,9 +674,14 @@ func (c *Compiler) compileLet(expr *ast.Value) (CValue, error) {
 		}
 		if bindExprs[i].Owned {
 			shape := bindExprs[i].Shape
-			// Cyclic data in symmetric scope is freed by sym_scope_exit
-			if shape == analysis.ShapeCyclic && hasCyclic {
-				sb.WriteString(fmt.Sprintf("    /* %s freed by sym_scope_exit */\n", bindOrder[i]))
+			// Arena-managed data freed by arena_destroy
+			if useArena && shape == analysis.ShapeCyclic {
+				sb.WriteString(fmt.Sprintf("    /* %s freed by arena_destroy */\n", bindOrder[i]))
+				continue
+			}
+			// SymRC-managed data freed by sym_exit_scope
+			if useSymRC && shape == analysis.ShapeCyclic {
+				sb.WriteString(fmt.Sprintf("    /* %s freed by sym_exit_scope */\n", bindOrder[i]))
 				continue
 			}
 			freeFn, _ := c.selectFreeStrategy(shape, escapeClass)
@@ -643,8 +690,11 @@ func (c *Compiler) compileLet(expr *ast.Value) (CValue, error) {
 		}
 	}
 
-	// Exit symmetric scope if we entered one
-	if hasCyclic {
+	// Exit arena or symmetric scope
+	if useArena {
+		// Copy result out of arena if it came from arena allocations
+		sb.WriteString(fmt.Sprintf("    arena_destroy(%s); /* bulk free O(1) */\n", arenaName))
+	} else if useSymRC {
 		sb.WriteString("    sym_exit_scope(); /* release cyclic data */\n")
 	}
 
@@ -1138,6 +1188,9 @@ func (c *Compiler) genLambdaFunc(fnName string, params, captures []string, body 
 	sb.WriteString(fmt.Sprintf("static Obj* %s(Obj** _captures, Obj** _args, int _n) {\n", fnName))
 	sb.WriteString("    (void)_n;\n")
 
+	// Save stack pointer for reclaiming stack-allocated temps
+	sb.WriteString("    int _saved_stack_ptr = STACK_PTR;\n")
+
 	// Bind captures
 	for i, cap := range captures {
 		cName := c.cIdent(cap)
@@ -1166,8 +1219,11 @@ func (c *Compiler) genLambdaFunc(fnName string, params, captures []string, body 
 
 	if err != nil {
 		sb.WriteString(fmt.Sprintf("    /* compile error: %v */\n", err))
+		sb.WriteString("    STACK_PTR = _saved_stack_ptr; /* restore stack */\n")
 		sb.WriteString("    return NULL;\n")
 	} else {
+		// Restore stack pointer before returning (reclaim stack temps)
+		sb.WriteString("    STACK_PTR = _saved_stack_ptr; /* restore stack */\n")
 		// If the return value is borrowed, increment ref so caller receives owned value
 		if !cv.Owned {
 			sb.WriteString(fmt.Sprintf("    Obj* _ret = %s;\n", cv.Expr))
