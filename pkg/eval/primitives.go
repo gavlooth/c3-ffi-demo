@@ -1146,15 +1146,15 @@ func PrimCtrArg(args, menv *ast.Value) *ast.Value {
 		}
 		return ast.NewError("ctr-arg: box only has index 0")
 	case ast.TUserType:
-		// Return field by index (based on definition order)
-		i := 0
-		for fieldName := range a.UserTypeFields {
-			if i == idx {
-				return a.UserTypeFields[fieldName]
-			}
-			i++
+		// Return field by index using the stored field order
+		if a.UserTypeFieldOrder == nil || idx >= len(a.UserTypeFieldOrder) {
+			return ast.NewError(fmt.Sprintf("ctr-arg: %s has no field at index %d", a.UserTypeName, idx))
 		}
-		return ast.NewError(fmt.Sprintf("ctr-arg: %s has no field at index %d", a.UserTypeName, idx))
+		fieldName := a.UserTypeFieldOrder[idx]
+		if val, ok := a.UserTypeFields[fieldName]; ok {
+			return val
+		}
+		return ast.NewError(fmt.Sprintf("ctr-arg: %s field %s not found", a.UserTypeName, fieldName))
 	default:
 		return ast.NewError(fmt.Sprintf("ctr-arg: cannot get argument from %s", ast.TagName(a.Tag)))
 	}

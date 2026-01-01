@@ -2256,7 +2256,7 @@ func createTypeConstructor(typeName string, fieldNames []string) *ast.Value {
 			fields[fn] = argList.Car
 			argList = argList.Cdr
 		}
-		return ast.NewUserType(tn, fields)
+		return ast.NewUserType(tn, fields, fns)
 	})
 }
 

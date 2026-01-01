@@ -1124,6 +1124,33 @@ func TestDeftype(t *testing.T) {
 	}
 }
 
+func TestCtrArgUserType(t *testing.T) {
+	// Define a type with multiple fields
+	evalString("(deftype Point (x int) (y int) (z int))")
+
+	// Create a Point instance and test ctr-arg returns fields in definition order
+	result := evalString("(ctr-arg (mk-Point 10 20 30) 0)")
+	if result == nil || !ast.IsInt(result) || result.Int != 10 {
+		t.Errorf("(ctr-arg point 0) = %v, want 10", result)
+	}
+
+	result = evalString("(ctr-arg (mk-Point 10 20 30) 1)")
+	if result == nil || !ast.IsInt(result) || result.Int != 20 {
+		t.Errorf("(ctr-arg point 1) = %v, want 20", result)
+	}
+
+	result = evalString("(ctr-arg (mk-Point 10 20 30) 2)")
+	if result == nil || !ast.IsInt(result) || result.Int != 30 {
+		t.Errorf("(ctr-arg point 2) = %v, want 30", result)
+	}
+
+	// Test out of bounds index
+	result = evalString("(ctr-arg (mk-Point 10 20 30) 3)")
+	if result == nil || !ast.IsError(result) {
+		t.Errorf("(ctr-arg point 3) = %v, want error", result)
+	}
+}
+
 // =============================================================================
 // Continuation Tests (Phase 4)
 // =============================================================================

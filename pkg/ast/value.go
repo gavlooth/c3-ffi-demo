@@ -117,8 +117,9 @@ type Value struct {
 	ProcResult *Value // Result when done
 
 	// TUserType - user-defined type instance
-	UserTypeName   string            // Type name (e.g., "Node")
-	UserTypeFields map[string]*Value // Field name -> value
+	UserTypeName       string            // Type name (e.g., "Node")
+	UserTypeFields     map[string]*Value // Field name -> value
+	UserTypeFieldOrder []string          // Field names in definition order
 }
 
 // Nil is the singleton nil value
@@ -216,11 +217,13 @@ func NewProcess(cont *Value) *Value {
 }
 
 // NewUserType creates a user-defined type instance
-func NewUserType(typeName string, fields map[string]*Value) *Value {
+// fieldOrder specifies the order of fields for index-based access
+func NewUserType(typeName string, fields map[string]*Value, fieldOrder []string) *Value {
 	return &Value{
-		Tag:            TUserType,
-		UserTypeName:   typeName,
-		UserTypeFields: fields,
+		Tag:                TUserType,
+		UserTypeName:       typeName,
+		UserTypeFields:     fields,
+		UserTypeFieldOrder: fieldOrder,
 	}
 }
 
