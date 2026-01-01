@@ -1490,6 +1490,11 @@ func evalDefine(args, menv *ast.Value) *ast.Value {
 		// Create a lambda
 		lam := ast.NewLambda(params, body, menv.Env)
 		GlobalDefine(name, lam)
+
+		// Generate summary for interprocedural analysis
+		if cg := codegen.GlobalCodeGenerator(); cg != nil {
+			cg.AnalyzeFunction(name.Str, params, body)
+		}
 		return name
 	}
 

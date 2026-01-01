@@ -307,6 +307,48 @@ func (g *CodeGenerator) EmitCCall(fn string, a, b *ast.Value) *ast.Value {
 	return ast.NewCode(fmt.Sprintf("%s(%s, %s)", fn, aStr, bStr))
 }
 
+// GenerateCall generates a function call with ownership-aware RC.
+func (g *CodeGenerator) GenerateCall(fn string, args []*ast.Value) string {
+	var sb strings.Builder
+
+	var summary *analysis.FunctionSummary
+	if g.summaryCtx != nil && g.summaryCtx.Registry != nil {
+		summary = g.summaryCtx.Registry.Lookup(fn)
+	}
+
+	argExprs := make([]string, len(args))
+	for i, arg := range args {
+		argExprs[i] = g.ValueToCExpr(arg)
+	}
+
+	for i, arg := range args {
+		if !ast.IsSym(arg) {
+			continue
+		}
+		varName := arg.Str
+
+		ownership := analysis.OwnerBorrowed
+		if summary != nil && i < len(summary.Params) {
+			ownership = summary.Params[i].Ownership
+		}
+
+		switch ownership {
+		case analysis.OwnerConsumed:
+			if g.concurrencyCtx != nil {
+				g.concurrencyCtx.Ctx.MarkTransferred(varName)
+			}
+			sb.WriteString(fmt.Sprintf("/* %s consumed by %s */\n", varName, fn))
+		case analysis.OwnerBorrowed:
+			if g.rcOptCtx != nil && !g.rcOptCtx.IsUnique(varName) {
+				sb.WriteString(fmt.Sprintf("inc_ref(%s);\n", varName))
+			}
+		}
+	}
+
+	sb.WriteString(fmt.Sprintf("%s(%s)", fn, strings.Join(argExprs, ", ")))
+	return sb.String()
+}
+
 // GenerateLet generates code for a let expression with ASAP memory management
 func (g *CodeGenerator) GenerateLet(bindings []struct {
 	sym *ast.Value

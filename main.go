@@ -124,6 +124,10 @@ func compileToC(exprs []*ast.Value) {
 	env := eval.DefaultEnv()
 	menv := eval.NewMenv(ast.Nil, env)
 
+	// Prepare code generator early so function summaries can be recorded.
+	gen := codegen.NewCodeGenerator(output)
+	codegen.SetGlobalCodeGenerator(gen)
+
 	var codeExprs []*ast.Value
 	for _, expr := range exprs {
 		result := eval.Eval(expr, menv)
@@ -133,7 +137,6 @@ func compileToC(exprs []*ast.Value) {
 	}
 
 	// Generate complete C program
-	gen := codegen.NewCodeGenerator(output)
 	gen.GenerateProgram(codeExprs)
 
 	if *outputFile != "" && *verbose {
