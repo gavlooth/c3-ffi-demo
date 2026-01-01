@@ -15,7 +15,10 @@ type CodeGenerator struct {
 	registry         *TypeRegistry
 	escapeCtx        *analysis.AnalysisContext
 	shapeCtx         *analysis.ShapeContext
-	rcOptCtx         *analysis.RCOptContext // RC optimization context
+	rcOptCtx         *analysis.RCOptContext       // RC optimization context
+	summaryCtx       *analysis.SummaryAnalyzer    // Interprocedural analysis
+	concurrencyCtx   *analysis.ConcurrencyAnalyzer // Concurrency ownership
+	reuseCtx         *analysis.ReuseAnalyzer      // Perceus reuse analysis
 	arenaGen         *ArenaCodeGenerator
 	tempCounter      int
 	indentLevel      int
@@ -33,6 +36,9 @@ func NewCodeGenerator(w io.Writer) *CodeGenerator {
 		escapeCtx:        analysis.NewAnalysisContext(),
 		shapeCtx:         analysis.NewShapeContext(),
 		rcOptCtx:         analysis.NewRCOptContext(),
+		summaryCtx:       analysis.NewSummaryAnalyzer(),
+		concurrencyCtx:   analysis.NewConcurrencyAnalyzer(),
+		reuseCtx:         analysis.NewReuseAnalyzer(),
 		arenaGen:         NewArenaCodeGenerator(),
 		useArenaFallback: true, // Enable arena fallback for CYCLIC/UNKNOWN shapes
 		enableRCOpt:      true, // Enable Lobster-style RC optimization
@@ -48,6 +54,9 @@ func NewCodeGeneratorWithGlobalRegistry(w io.Writer) *CodeGenerator {
 		escapeCtx:        analysis.NewAnalysisContext(),
 		shapeCtx:         analysis.NewShapeContext(),
 		rcOptCtx:         analysis.NewRCOptContext(),
+		summaryCtx:       analysis.NewSummaryAnalyzer(),
+		concurrencyCtx:   analysis.NewConcurrencyAnalyzer(),
+		reuseCtx:         analysis.NewReuseAnalyzer(),
 		arenaGen:         NewArenaCodeGenerator(),
 		useArenaFallback: true,
 		enableRCOpt:      true,
@@ -78,6 +87,112 @@ func (g *CodeGenerator) SetRCOptimization(enabled bool) {
 // SetArenaFallback enables or disables arena fallback for cyclic shapes
 func (g *CodeGenerator) SetArenaFallback(enabled bool) {
 	g.useArenaFallback = enabled
+}
+
+// AnalyzeFunction registers a function's summary for interprocedural analysis
+func (g *CodeGenerator) AnalyzeFunction(name string, params *ast.Value, body *ast.Value) *analysis.FunctionSummary {
+	if g.summaryCtx == nil {
+		return nil
+	}
+	return g.summaryCtx.AnalyzeFunction(name, params, body)
+}
+
+// GetParamOwnership returns the ownership class for a function parameter at a call site
+func (g *CodeGenerator) GetParamOwnership(funcName string, paramIdx int) analysis.OwnershipClass {
+	if g.summaryCtx == nil || g.summaryCtx.Registry == nil {
+		return analysis.OwnerBorrowed
+	}
+	return g.summaryCtx.Registry.GetParamOwnership(funcName, paramIdx)
+}
+
+// GetReturnOwnership returns the ownership class for a function's return value
+func (g *CodeGenerator) GetReturnOwnership(funcName string) analysis.OwnershipClass {
+	if g.summaryCtx == nil || g.summaryCtx.Registry == nil {
+		return analysis.OwnerFresh
+	}
+	return g.summaryCtx.Registry.GetReturnOwnership(funcName)
+}
+
+// AnalyzeConcurrency performs concurrency analysis on an expression
+func (g *CodeGenerator) AnalyzeConcurrency(expr *ast.Value) {
+	if g.concurrencyCtx != nil {
+		g.concurrencyCtx.Analyze(expr)
+	}
+}
+
+// NeedsAtomicRC returns true if a variable needs atomic reference counting
+func (g *CodeGenerator) NeedsAtomicRC(varName string) bool {
+	if g.concurrencyCtx == nil {
+		return false
+	}
+	return g.concurrencyCtx.Ctx.NeedsAtomicRC(varName)
+}
+
+// IsTransferred returns true if a variable's ownership has been transferred (e.g., via chan-send!)
+func (g *CodeGenerator) IsTransferred(varName string) bool {
+	if g.concurrencyCtx == nil {
+		return false
+	}
+	return g.concurrencyCtx.Ctx.GetLocality(varName) == analysis.LocalityTransferred
+}
+
+// AnalyzeReuse performs reuse analysis on an expression
+func (g *CodeGenerator) AnalyzeReuse(expr *ast.Value) {
+	if g.reuseCtx != nil {
+		g.reuseCtx.Analyze(expr)
+	}
+}
+
+// TryReuse attempts to find a reuse candidate for an allocation
+func (g *CodeGenerator) TryReuse(allocVar, allocType string, line int) *analysis.ReuseCandidate {
+	if g.reuseCtx == nil {
+		return nil
+	}
+	return g.reuseCtx.Ctx.TryReuse(allocVar, allocType, line)
+}
+
+// GetReuseFor returns the variable that can be reused for an allocation, if any
+func (g *CodeGenerator) GetReuseFor(allocVar string) (string, bool) {
+	if g.reuseCtx == nil {
+		return "", false
+	}
+	return g.reuseCtx.Ctx.GetReuse(allocVar)
+}
+
+// AddPendingFree marks a variable as pending for free (available for reuse)
+func (g *CodeGenerator) AddPendingFree(name, typeName string) {
+	if g.reuseCtx != nil {
+		g.reuseCtx.Ctx.AddPendingFree(name, typeName)
+	}
+}
+
+// GenerateRCOperation generates the appropriate reference count operation
+// Uses atomic operations for shared variables, regular operations otherwise
+func (g *CodeGenerator) GenerateRCOperation(varName string, op string) string {
+	if g.NeedsAtomicRC(varName) {
+		switch op {
+		case "inc":
+			return fmt.Sprintf("atomic_inc_ref(%s)", varName)
+		case "dec":
+			return fmt.Sprintf("atomic_dec_ref(%s)", varName)
+		}
+	}
+	switch op {
+	case "inc":
+		return fmt.Sprintf("inc_ref(%s)", varName)
+	case "dec":
+		return fmt.Sprintf("dec_ref(%s)", varName)
+	}
+	return ""
+}
+
+// GenerateAllocation generates an allocation, potentially reusing freed memory
+func (g *CodeGenerator) GenerateAllocation(varName, allocType string, allocExpr string) string {
+	if freeVar, ok := g.GetReuseFor(varName); ok {
+		// Reuse available
+		return fmt.Sprintf("reuse_as_%s(%s, %s)", allocType, freeVar, allocExpr)
+	}
+	return allocExpr
 }
 
 func (g *CodeGenerator) emit(format string, args ...interface{}) {
@@ -295,6 +410,11 @@ func GenerateProgramToString(exprs []*ast.Value) string {
 	gen := NewCodeGenerator(&sb)
 	gen.GenerateProgram(exprs)
 	return sb.String()
+}
+
+// GenerateProgram is a convenience wrapper for a single expression.
+func GenerateProgram(expr *ast.Value) string {
+	return GenerateProgramToString([]*ast.Value{expr})
 }
 
 // FreePoint represents a point where a variable should be freed

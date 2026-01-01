@@ -12,6 +12,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"purple_go/pkg/ast"
+	"purple_go/pkg/codegen"
 )
 
 // JIT represents a Just-In-Time compiler
@@ -77,7 +80,7 @@ func (j *JIT) Compile(code string) (*CompiledCode, error) {
 	}
 
 	// Compile with gcc - create executable that prints result
-	cmd := exec.Command("gcc", "-O2", "-o", exePath, srcPath)
+	cmd := exec.Command("gcc", "-std=c99", "-pthread", "-O2", "-o", exePath, srcPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("GCC compilation failed: %v\n%s", err, output)
@@ -124,6 +127,60 @@ func (j *JIT) Cleanup() {
 	if j.tempDir != "" {
 		os.RemoveAll(j.tempDir)
 	}
+}
+
+// CompileAndRun compiles a Purple value (or code) and executes it via JIT.
+// For non-code values, this emits a constant program that returns the value.
+func CompileAndRun(value *ast.Value) (*ast.Value, error) {
+	j := Get()
+	if !j.IsAvailable() {
+		return nil, fmt.Errorf("JIT not available (gcc not found)")
+	}
+
+	var program string
+	if ast.IsCode(value) {
+		program = codegen.GenerateProgramToString([]*ast.Value{value})
+	} else {
+		// Generate a constant program for the evaluated value.
+		program = codegen.GenerateProgramToString([]*ast.Value{value})
+	}
+
+	compiled, err := j.Compile(program)
+	if err != nil {
+		return nil, err
+	}
+	defer compiled.Close()
+
+	// Run and parse output for codegen-style output.
+	out, err := runProgram(compiled.exePath)
+	if err != nil {
+		return nil, err
+	}
+	if val, ok := parseIntFromOutput(out); ok {
+		return ast.NewInt(val), nil
+	}
+
+	// No integer output; return nil to indicate non-int result.
+	return ast.Nil, nil
+}
+
+func runProgram(path string) ([]byte, error) {
+	cmd := exec.Command(path)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func parseIntFromOutput(out []byte) (int64, bool) {
+	fields := strings.Fields(string(out))
+	for i := len(fields) - 1; i >= 0; i-- {
+		if v, err := strconv.ParseInt(fields[i], 10, 64); err == nil {
+			return v, true
+		}
+	}
+	return 0, false
 }
 
 // WrapCode wraps Purple-generated code in a compilable C program

@@ -352,6 +352,11 @@ func isDigit(ch byte) bool {
 	return ch >= '0' && ch <= '9'
 }
 
+// Parse is a convenience wrapper for ParseString.
+func Parse(input string) (*ast.Value, error) {
+	return ParseString(input)
+}
+
 // ParseString is a convenience function to parse a string
 func ParseString(input string) (*ast.Value, error) {
 	p := New(input)
