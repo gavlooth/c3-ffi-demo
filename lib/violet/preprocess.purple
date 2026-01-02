@@ -1,0 +1,687 @@
+;;; Violet Preprocessor - Transforms Violet syntax to Purple
+;;;
+;;; This implements the "collapsing" from Violet to Purple.
+;;; All Violet constructs are transformed to Purple primitives.
+
+;;; ============================================================
+;;; Utility Functions
+;;; ============================================================
+
+(define (atom? x)
+  (not (pair? x)))
+
+(define (pair? x)
+  (if (null? x) nil (not (atom? x))))
+
+(define (symbol? x)
+  (if (atom? x)
+      (if (null? x) nil
+          (if (number? x) nil t))
+      nil))
+
+(define (list? x)
+  (if (null? x) t (pair? x)))
+
+(define (length lst)
+  (if (null? lst) 0 (+ 1 (length (cdr lst)))))
+
+(define (nth n lst)
+  (if (= n 0) (car lst) (nth (- n 1) (cdr lst))))
+
+(define (take-until pred lst)
+  (if (null? lst) nil
+      (if (pred (car lst)) nil
+          (cons (car lst) (take-until pred (cdr lst))))))
+
+(define (drop-until pred lst)
+  (if (null? lst) nil
+      (if (pred (car lst)) lst
+          (drop-until pred (cdr lst)))))
+
+(define (contains? x lst)
+  (if (null? lst) nil
+      (if (eq? x (car lst)) t
+          (contains? x (cdr lst)))))
+
+(define (map-tree f tree)
+  "Apply f to every node in tree (post-order)"
+  (if (atom? tree)
+      (f tree)
+      (f (map (lambda (x) (map-tree f x)) tree))))
+
+;;; ============================================================
+;;; Variadic Function Detection and Transformation
+;;; ============================================================
+
+(define (has-rest-param? params)
+  "Check if param list contains & rest pattern"
+  (if (null? params) nil
+      (if (eq? (car params) '&) t
+          (has-rest-param? (cdr params)))))
+
+(define (split-at-ampersand params)
+  "Split params at & into (regular-params . rest-param)"
+  (let ((regular (take-until (lambda (x) (eq? x '&)) params))
+        (after-amp (drop-until (lambda (x) (eq? x '&)) params)))
+    (if (null? after-amp)
+        (cons regular nil)
+        (cons regular (car (cdr after-amp))))))  ; rest param name
+
+(define (transform-variadic-defn name params body)
+  "Transform (defn name [a b & rest] body) to Purple"
+  (let ((split (split-at-ampersand params)))
+    (let ((regular-params (car split))
+          (rest-param (cdr split)))
+      (if (null? rest-param)
+          ;; No variadic - simple case
+          (list 'define (cons name regular-params) body)
+          ;; Variadic - rest-param becomes a regular param that receives a list
+          (list 'define (cons name (append regular-params (list rest-param))) body)))))
+
+;;; ============================================================
+;;; Destructuring Transformation
+;;; ============================================================
+
+(define (destructure-binding pattern value body)
+  "Transform destructuring pattern into nested lets"
+  (if (symbol? pattern)
+      ;; Simple binding
+      (list 'let (list (list pattern value)) body)
+      ;; Compound pattern - vector or map destructuring
+      (if (pair? pattern)
+          (destructure-sequential pattern value body)
+          body)))
+
+(define (destructure-sequential pattern value body)
+  "Destructure sequential pattern [a b c] or (a b c)"
+  (let ((temp (gensym "seq")))
+    (list 'let (list (list temp value))
+          (destructure-sequential-inner pattern temp 0 body))))
+
+(define (destructure-sequential-inner pattern seq-sym idx body)
+  "Generate nested nth calls for sequential destructuring"
+  (if (null? pattern)
+      body
+      (let ((p (car pattern))
+            (rest (cdr pattern)))
+        (if (eq? p '&)
+            ;; Rest pattern
+            (let ((rest-sym (car rest)))
+              (list 'let (list (list rest-sym (list 'drop idx seq-sym)))
+                    body))
+            ;; Regular element
+            (list 'let (list (list p (list 'nth idx seq-sym)))
+                  (destructure-sequential-inner rest seq-sym (+ idx 1) body))))))
+
+;;; ============================================================
+;;; Core Form Transformations
+;;; ============================================================
+
+(define (transform-defn form)
+  "Transform (defn name [params] body...) to (define (name params) body)"
+  (let ((name (nth 1 form))
+        (params (nth 2 form))
+        (body (if (> (length form) 4)
+                  (cons 'do (cdr (cdr (cdr form))))  ; multiple body forms
+                  (nth 3 form))))                     ; single body form
+    (if (has-rest-param? params)
+        (transform-variadic-defn name params body)
+        (list 'define (cons name params) body))))
+
+(define (transform-fn form)
+  "Transform (fn [params] body) to (lambda params body)"
+  (let ((params (nth 1 form))
+        (body (if (> (length form) 3)
+                  (cons 'do (cdr (cdr form)))
+                  (nth 2 form))))
+    (if (has-rest-param? params)
+        (let ((split (split-at-ampersand params)))
+          (list 'lambda (append (car split) (list (cdr split))) body))
+        (list 'lambda params body))))
+
+(define (transform-let form)
+  "Transform (let [bindings] body) with destructuring support"
+  (let ((bindings (nth 1 form))
+        (body (if (> (length form) 3)
+                  (cons 'do (cdr (cdr form)))
+                  (nth 2 form))))
+    (transform-let-bindings bindings body)))
+
+(define (transform-let-bindings bindings body)
+  "Transform vector bindings to nested let forms"
+  (if (null? bindings)
+      body
+      (let ((pattern (car bindings))
+            (value (car (cdr bindings)))
+            (rest (cdr (cdr bindings))))
+        (destructure-binding pattern value
+                            (transform-let-bindings rest body)))))
+
+(define (transform-if-let form)
+  "Transform (if-let [x expr] then else) to (let [x expr] (if x then else))"
+  (let ((bindings (nth 1 form))
+        (then-form (nth 2 form))
+        (else-form (if (> (length form) 3) (nth 3 form) nil)))
+    (let ((sym (car bindings))
+          (expr (car (cdr bindings))))
+      (list 'let (list (list sym expr))
+            (list 'if sym then-form else-form)))))
+
+(define (transform-when-let form)
+  "Transform (when-let [x expr] body...) to (let [x expr] (when x body...))"
+  (let ((bindings (nth 1 form))
+        (body (cdr (cdr form))))
+    (let ((sym (car bindings))
+          (expr (car (cdr bindings))))
+      (list 'let (list (list sym expr))
+            (cons 'when (cons sym body))))))
+
+(define (transform-when form)
+  "Transform (when test body...) to (if test (do body...) nil)"
+  (let ((test (nth 1 form))
+        (body (cdr (cdr form))))
+    (list 'if test (cons 'do body) nil)))
+
+(define (transform-when-not form)
+  "Transform (when-not test body...) to (if test nil (do body...))"
+  (let ((test (nth 1 form))
+        (body (cdr (cdr form))))
+    (list 'if test nil (cons 'do body))))
+
+(define (transform-cond form)
+  "Transform (cond c1 e1 c2 e2 ...) to nested ifs"
+  (transform-cond-clauses (cdr form)))
+
+(define (transform-cond-clauses clauses)
+  (if (null? clauses)
+      nil
+      (let ((condition (car clauses))
+            (expr (car (cdr clauses)))
+            (rest (cdr (cdr clauses))))
+        (if (eq? condition ':else)
+            expr
+            (list 'if condition expr (transform-cond-clauses rest))))))
+
+(define (transform-thread-first form)
+  "Transform (-> x (f a) (g b)) to (g (f x a) b)"
+  (let ((x (nth 1 form))
+        (forms (cdr (cdr form))))
+    (fold (lambda (acc f)
+            (if (pair? f)
+                (cons (car f) (cons acc (cdr f)))
+                (list f acc)))
+          x forms)))
+
+(define (transform-thread-last form)
+  "Transform (->> x (f a) (g b)) to (g b (f a x))"
+  (let ((x (nth 1 form))
+        (forms (cdr (cdr form))))
+    (fold (lambda (acc f)
+            (if (pair? f)
+                (append f (list acc))
+                (list f acc)))
+          x forms)))
+
+(define (transform-doto form)
+  "Transform (doto x (f a) (g b)) to (let [v x] (f v a) (g v b) v)"
+  (let ((x (nth 1 form))
+        (forms (cdr (cdr form)))
+        (v (gensym "doto")))
+    (list 'let (list (list v x))
+          (cons 'do
+                (append (map (lambda (f)
+                              (if (pair? f)
+                                  (cons (car f) (cons v (cdr f)))
+                                  (list f v)))
+                            forms)
+                       (list v))))))
+
+(define (transform-as-> form)
+  "Transform (as-> x name (f name) (g name)) with explicit naming"
+  (let ((x (nth 1 form))
+        (name (nth 2 form))
+        (forms (cdr (cdr (cdr form)))))
+    (fold (lambda (acc f)
+            (list 'let (list (list name acc)) f))
+          x forms)))
+
+;;; ============================================================
+;;; Additional Control Flow Transforms
+;;; ============================================================
+
+(define (transform-def form)
+  "Transform (def name value) to (define name value)"
+  (let ((name (nth 1 form))
+        (value (if (> (length form) 2) (nth 2 form) nil)))
+    (list 'define name value)))
+
+(define (transform-if-not form)
+  "Transform (if-not test then else) to (if test else then)"
+  (let ((test (nth 1 form))
+        (then-form (nth 2 form))
+        (else-form (if (> (length form) 3) (nth 3 form) nil)))
+    (list 'if test else-form then-form)))
+
+(define (transform-if-some form)
+  "Transform (if-some [x expr] then else)"
+  (let ((bindings (nth 1 form))
+        (then-form (nth 2 form))
+        (else-form (if (> (length form) 3) (nth 3 form) nil)))
+    (let ((sym (car bindings))
+          (expr (car (cdr bindings))))
+      (list 'let (list (list sym expr))
+            (list 'if (list 'some? sym) then-form else-form)))))
+
+(define (transform-when-some form)
+  "Transform (when-some [x expr] body...)"
+  (let ((bindings (nth 1 form))
+        (body (cdr (cdr form))))
+    (let ((sym (car bindings))
+          (expr (car (cdr bindings))))
+      (list 'let (list (list sym expr))
+            (cons 'when (cons (list 'some? sym) body))))))
+
+(define (transform-condp form)
+  "Transform (condp pred expr c1 e1 c2 e2 ...) to nested ifs"
+  (let ((pred (nth 1 form))
+        (expr (nth 2 form))
+        (clauses (cdr (cdr (cdr form)))))
+    (transform-condp-clauses pred expr clauses)))
+
+(define (transform-condp-clauses pred expr clauses)
+  (if (null? clauses)
+      nil
+      (if (null? (cdr clauses))
+          ;; Default clause
+          (car clauses)
+          (let ((test-val (car clauses))
+                (result (car (cdr clauses)))
+                (rest (cdr (cdr clauses))))
+            (list 'if (list pred test-val expr)
+                  result
+                  (transform-condp-clauses pred expr rest))))))
+
+(define (transform-case form)
+  "Transform (case expr c1 e1 c2 e2 ... default) to cond"
+  (let ((expr (nth 1 form))
+        (clauses (cdr (cdr form))))
+    (let ((temp (gensym "case")))
+      (list 'let (list (list temp expr))
+            (transform-case-clauses temp clauses)))))
+
+(define (transform-case-clauses temp clauses)
+  (if (null? clauses)
+      nil
+      (if (null? (cdr clauses))
+          ;; Default clause
+          (car clauses)
+          (let ((test-val (car clauses))
+                (result (car (cdr clauses)))
+                (rest (cdr (cdr clauses))))
+            (list 'if (list '= temp test-val)
+                  result
+                  (transform-case-clauses temp rest))))))
+
+;;; ============================================================
+;;; Nil-safe Threading
+;;; ============================================================
+
+(define (transform-some-> form)
+  "Transform (some-> x (f a) (g b)) - nil-safe thread-first"
+  (let ((x (nth 1 form))
+        (forms (cdr (cdr form))))
+    (if (null? forms)
+        x
+        (let ((temp (gensym "some")))
+          (list 'let (list (list temp x))
+                (list 'if (list 'nil? temp)
+                      nil
+                      (transform-some-> (cons 'some->
+                                              (cons (transform-thread-step temp (car forms) 'first)
+                                                    (cdr forms))))))))))
+
+(define (transform-some->> form)
+  "Transform (some->> x (f a) (g b)) - nil-safe thread-last"
+  (let ((x (nth 1 form))
+        (forms (cdr (cdr form))))
+    (if (null? forms)
+        x
+        (let ((temp (gensym "some")))
+          (list 'let (list (list temp x))
+                (list 'if (list 'nil? temp)
+                      nil
+                      (transform-some->> (cons 'some->>
+                                               (cons (transform-thread-step temp (car forms) 'last)
+                                                     (cdr forms))))))))))
+
+(define (transform-thread-step val form position)
+  "Insert val into form at position (first or last)"
+  (if (pair? form)
+      (if (eq? position 'first)
+          (cons (car form) (cons val (cdr form)))
+          (append form (list val)))
+      (list form val)))
+
+;;; ============================================================
+;;; Conditional Threading
+;;; ============================================================
+
+(define (transform-cond-> form)
+  "Transform (cond-> x c1 (f a) c2 (g b))"
+  (let ((x (nth 1 form))
+        (clauses (cdr (cdr form))))
+    (transform-cond->-clauses x clauses 'first)))
+
+(define (transform-cond->> form)
+  "Transform (cond->> x c1 (f a) c2 (g b))"
+  (let ((x (nth 1 form))
+        (clauses (cdr (cdr form))))
+    (transform-cond->-clauses x clauses 'last)))
+
+(define (transform-cond->-clauses x clauses position)
+  (if (null? clauses)
+      x
+      (let ((condition (car clauses))
+            (form (car (cdr clauses)))
+            (rest (cdr (cdr clauses)))
+            (temp (gensym "cond")))
+        (list 'let (list (list temp x))
+              (list 'if condition
+                    (transform-cond->-clauses (transform-thread-step temp form position) rest position)
+                    (transform-cond->-clauses temp rest position))))))
+
+;;; ============================================================
+;;; Loop/Recur Transform
+;;; ============================================================
+
+(define (transform-loop form)
+  "Transform (loop [x init y init2] body) to recursive lambda"
+  (let ((bindings (nth 1 form))
+        (body (nth 2 form)))
+    (let ((vars (take-every-other bindings 0))
+          (inits (take-every-other bindings 1)))
+      ;; Create (lambda self (vars) body-with-recur-replaced)
+      (let ((self (gensym "loop")))
+        (cons (list 'lambda self vars (replace-recur-with self body))
+              inits)))))
+
+(define (take-every-other lst start)
+  "Take elements at positions start, start+2, start+4, ..."
+  (if (null? lst)
+      nil
+      (if (= start 0)
+          (cons (car lst) (take-every-other (cdr lst) 1))
+          (take-every-other (cdr lst) 0))))
+
+(define (replace-recur-with self-name expr)
+  "Replace (recur ...) with (self-name ...)"
+  (if (atom? expr)
+      expr
+      (if (eq? (car expr) 'recur)
+          (cons self-name (map (lambda (e) (replace-recur-with self-name e)) (cdr expr)))
+          (map (lambda (e) (replace-recur-with self-name e)) expr))))
+
+;;; ============================================================
+;;; Comprehensions
+;;; ============================================================
+
+(define (transform-for form)
+  "Transform (for [x xs :when pred] body) to mapcat/filter"
+  (let ((bindings (nth 1 form))
+        (body (nth 2 form)))
+    (transform-for-bindings bindings body)))
+
+(define (transform-for-bindings bindings body)
+  (if (null? bindings)
+      (list 'list body)
+      (let ((first-bind (car bindings)))
+        (cond
+          ((eq? first-bind ':when)
+           (list 'if (car (cdr bindings))
+                 (transform-for-bindings (cdr (cdr bindings)) body)
+                 nil))
+          ((eq? first-bind ':let)
+           (list 'let (car (cdr bindings))
+                 (transform-for-bindings (cdr (cdr bindings)) body)))
+          ((eq? first-bind ':while)
+           (list 'take-while (list 'lambda '(_) (car (cdr bindings)))
+                 (transform-for-bindings (cdr (cdr bindings)) body)))
+          (t
+           (let ((var first-bind)
+                 (coll (car (cdr bindings))))
+             (list 'mapcat
+                   (list 'lambda (list var)
+                         (transform-for-bindings (cdr (cdr bindings)) body))
+                   coll)))))))
+
+(define (transform-doseq form)
+  "Transform (doseq [x xs] body) to run!"
+  (let ((bindings (nth 1 form))
+        (body (cons 'do (cdr (cdr form)))))
+    (transform-doseq-bindings bindings body)))
+
+(define (transform-doseq-bindings bindings body)
+  (if (null? bindings)
+      body
+      (let ((first-bind (car bindings)))
+        (cond
+          ((eq? first-bind ':when)
+           (list 'when (car (cdr bindings))
+                 (transform-doseq-bindings (cdr (cdr bindings)) body)))
+          ((eq? first-bind ':let)
+           (list 'let (car (cdr bindings))
+                 (transform-doseq-bindings (cdr (cdr bindings)) body)))
+          (t
+           (let ((var first-bind)
+                 (coll (car (cdr bindings))))
+             (list 'run!
+                   (list 'lambda (list var)
+                         (transform-doseq-bindings (cdr (cdr bindings)) body))
+                   coll)))))))
+
+(define (transform-dotimes form)
+  "Transform (dotimes [i n] body) to run! with range"
+  (let ((binding (nth 1 form))
+        (body (cons 'do (cdr (cdr form)))))
+    (let ((var (car binding))
+          (n (car (cdr binding))))
+      (list 'run!
+            (list 'lambda (list var) body)
+            (list 'range n)))))
+
+;;; ============================================================
+;;; Multimethod Transforms
+;;; ============================================================
+
+(define (transform-defmulti form)
+  "Transform (defmulti name dispatch-fn) to make-multimethod call"
+  (let ((name (nth 1 form))
+        (dispatch-fn (nth 2 form)))
+    (list 'define name (list 'make-multimethod dispatch-fn))))
+
+(define (transform-defmethod form)
+  "Transform (defmethod name dispatch-val [params] body)"
+  (let ((name (nth 1 form))
+        (dispatch-val (nth 2 form))
+        (params (nth 3 form))
+        (body (if (> (length form) 5)
+                  (cons 'do (cdr (cdr (cdr (cdr form)))))
+                  (nth 4 form))))
+    (list name ':add-method dispatch-val
+          (list 'lambda params body))))
+
+;;; ============================================================
+;;; Protocol Transforms
+;;; ============================================================
+
+(define (transform-defprotocol form)
+  "Transform (defprotocol Name (fn1 [args]) (fn2 [args]))"
+  (let ((name (nth 1 form))
+        (fn-specs (cdr (cdr form))))
+    ;; Generate protocol and dispatching functions
+    (let ((proto-def (list 'define name
+                           (list 'make-protocol (list 'quote name)
+                                 (list 'quote (map extract-fn-spec fn-specs)))))
+          (fn-defs (map (lambda (spec)
+                          (let ((fn-name (car spec)))
+                            (list 'define fn-name
+                                  (list 'make-protocol-fn name (list 'quote fn-name)))))
+                        fn-specs)))
+      (cons 'do (cons proto-def fn-defs)))))
+
+(define (extract-fn-spec spec)
+  "Extract (name arity) from (name [params] docstring?)"
+  (let ((name (car spec))
+        (params (car (cdr spec))))
+    (list name (length params))))
+
+(define (transform-extend-type form)
+  "Transform (extend-type Type Proto (fn1 [args] body) ...)"
+  (let ((type-name (nth 1 form))
+        (rest (cdr (cdr form))))
+    (transform-extend-type-body type-name rest)))
+
+(define (transform-extend-type-body type-name forms)
+  "Process protocol implementations for a type"
+  (if (null? forms)
+      nil
+      (let ((proto-name (car forms))
+            (methods (take-until symbol? (cdr forms)))
+            (rest (drop-until symbol? (cdr forms))))
+        (let ((extend-call
+               (list 'extend-protocol! proto-name
+                     (list 'quote (symbol->keyword type-name))
+                     (list 'list
+                           (map (lambda (m)
+                                  (let ((fn-name (car m))
+                                        (params (car (cdr m)))
+                                        (body (car (cdr (cdr m)))))
+                                    (list 'cons (list 'quote fn-name)
+                                          (list 'lambda params body))))
+                                methods)))))
+          (if (null? rest)
+              extend-call
+              (list 'do extend-call
+                    (transform-extend-type-body type-name rest)))))))
+
+(define (symbol->keyword sym)
+  "Convert symbol to keyword (prefix with :)"
+  ;; This would need string operations
+  ;; For now, return as-is
+  sym)
+
+(define (transform-extend-protocol form)
+  "Transform (extend-protocol Proto Type1 (fn [args] body) Type2 ...)"
+  (let ((proto-name (nth 1 form))
+        (rest (cdr (cdr form))))
+    (transform-extend-protocol-body proto-name rest)))
+
+(define (transform-extend-protocol-body proto-name forms)
+  "Process type implementations for a protocol"
+  (if (null? forms)
+      nil
+      (let ((type-name (car forms))
+            (methods (take-until symbol? (cdr forms)))
+            (rest (drop-until symbol? (cdr forms))))
+        (let ((extend-call
+               (list 'extend-protocol! proto-name
+                     (list 'quote (symbol->keyword type-name))
+                     (cons 'list
+                           (map (lambda (m)
+                                  (let ((fn-name (car m))
+                                        (params (car (cdr m)))
+                                        (body (car (cdr (cdr m)))))
+                                    (list 'cons (list 'quote fn-name)
+                                          (list 'lambda params body))))
+                                methods)))))
+          (if (null? rest)
+              extend-call
+              (list 'do extend-call
+                    (transform-extend-protocol-body proto-name rest)))))))
+
+;;; ============================================================
+;;; Declare Transform
+;;; ============================================================
+
+(define (transform-declare form)
+  "Transform (declare a b c) to multiple defines"
+  (let ((names (cdr form)))
+    (cons 'do (map (lambda (n) (list 'define n nil)) names))))
+
+;;; ============================================================
+;;; Main Preprocessing Function
+;;; ============================================================
+
+(define (preprocess form)
+  "Main entry point - transform a Violet form to Purple"
+  (if (atom? form)
+      form
+      (let ((op (car form)))
+        (cond
+          ;; Definition forms
+          ((eq? op 'defn) (preprocess (transform-defn form)))
+          ((eq? op 'defn-) (preprocess (transform-defn form)))  ; Same as defn
+          ((eq? op 'fn) (preprocess (transform-fn form)))
+          ((eq? op 'def) (preprocess (transform-def form)))
+
+          ;; Let variants
+          ((eq? op 'let) (preprocess (transform-let form)))
+          ((eq? op 'if-let) (preprocess (transform-if-let form)))
+          ((eq? op 'when-let) (preprocess (transform-when-let form)))
+          ((eq? op 'if-some) (preprocess (transform-if-some form)))
+          ((eq? op 'when-some) (preprocess (transform-when-some form)))
+
+          ;; Control flow
+          ((eq? op 'when) (preprocess (transform-when form)))
+          ((eq? op 'when-not) (preprocess (transform-when-not form)))
+          ((eq? op 'if-not) (preprocess (transform-if-not form)))
+          ((eq? op 'cond) (preprocess (transform-cond form)))
+          ((eq? op 'condp) (preprocess (transform-condp form)))
+          ((eq? op 'case) (preprocess (transform-case form)))
+
+          ;; Threading
+          ((eq? op '->) (preprocess (transform-thread-first form)))
+          ((eq? op '->>) (preprocess (transform-thread-last form)))
+          ((eq? op 'doto) (preprocess (transform-doto form)))
+          ((eq? op 'as->) (preprocess (transform-as-> form)))
+          ((eq? op 'some->) (preprocess (transform-some-> form)))
+          ((eq? op 'some->>) (preprocess (transform-some->> form)))
+          ((eq? op 'cond->) (preprocess (transform-cond-> form)))
+          ((eq? op 'cond->>) (preprocess (transform-cond->> form)))
+
+          ;; Loop/recur
+          ((eq? op 'loop) (preprocess (transform-loop form)))
+
+          ;; Comprehensions
+          ((eq? op 'for) (preprocess (transform-for form)))
+          ((eq? op 'doseq) (preprocess (transform-doseq form)))
+          ((eq? op 'dotimes) (preprocess (transform-dotimes form)))
+
+          ;; Multimethods
+          ((eq? op 'defmulti) (preprocess (transform-defmulti form)))
+          ((eq? op 'defmethod) (preprocess (transform-defmethod form)))
+
+          ;; Protocols
+          ((eq? op 'defprotocol) (preprocess (transform-defprotocol form)))
+          ((eq? op 'extend-type) (preprocess (transform-extend-type form)))
+          ((eq? op 'extend-protocol) (preprocess (transform-extend-protocol form)))
+
+          ;; Other
+          ((eq? op 'comment) nil)  ; Ignore comments
+          ((eq? op 'declare) (preprocess (transform-declare form)))
+
+          (:else (map preprocess form))))))
+
+(define (preprocess-all forms)
+  "Preprocess a list of top-level forms"
+  (map preprocess forms))
+
+;;; ============================================================
+;;; Gensym for unique symbols
+;;; ============================================================
+
+(define *gensym-counter* 0)
+
+(define (gensym prefix)
+  (set! *gensym-counter* (+ *gensym-counter* 1))
+  (string->symbol (string-append prefix (number->string *gensym-counter*))))

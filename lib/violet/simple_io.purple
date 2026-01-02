@@ -1,0 +1,25 @@
+;;; Simple I/O test for native compilation
+(display "Hello from native Purple!")
+(newline)
+
+(display "Testing numbers: ")
+(display 42)
+(newline)
+
+(display "Testing list: ")
+(print (quote (1 2 3 4 5)))
+
+(display "Testing ctr-tag on number: ")
+(print (ctr-tag 42))
+
+(display "Testing ctr-tag on list: ")
+(print (ctr-tag (quote (1 2))))
+
+(display "Factorial 10: ")
+(define (factorial n)
+  (if (<= n 1) 1 (* n (factorial (- n 1)))))
+(display (factorial 10))
+(newline)
+
+(display "Done!")
+(newline)

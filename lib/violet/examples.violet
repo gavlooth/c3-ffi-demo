@@ -1,0 +1,279 @@
+;;; Violet Examples - Demonstrating Clojure-like features on Purple
+;;;
+;;; These examples show Violet's preprocessor transformations in action.
+
+;;; ============================================================
+;;; Function Definitions (defn)
+;;; ============================================================
+
+;; Simple function
+(defn square [x]
+  (* x x))
+
+;; Multiple arity would need explicit handling
+(defn greet [name]
+  (str "Hello, " name "!"))
+
+;; With docstring (docstring is ignored but allowed)
+(defn factorial [n]
+  "Calculate factorial of n"
+  (if (<= n 1)
+      1
+      (* n (factorial (- n 1)))))
+
+;;; ============================================================
+;;; Threading Macros
+;;; ============================================================
+
+;; Thread-first: value flows as first argument
+;; (-> 5 (+ 3) (* 2)) => (* (+ 5 3) 2) => 16
+(define thread-first-example
+  (-> 5
+      (+ 3)
+      (* 2)))
+
+;; Thread-last: value flows as last argument
+;; (->> (range 10) (filter even?) (map square))
+(define thread-last-example
+  (->> (range 10)
+       (filter even?)
+       (map square)))
+
+;;; ============================================================
+;;; Control Flow
+;;; ============================================================
+
+;; when - only executes if condition is true
+(defn check-positive [n]
+  (when (pos? n)
+    (display "positive!")
+    n))
+
+;; when-let - bind and check in one
+(defn first-even [coll]
+  (when-let [x (some even? coll)]
+    x))
+
+;; cond - multiple conditions
+(defn describe-number [n]
+  (cond
+    (neg? n) "negative"
+    (zero? n) "zero"
+    (even? n) "positive even"
+    :else "positive odd"))
+
+;;; ============================================================
+;;; Loop/Recur
+;;; ============================================================
+
+;; Tail-recursive sum using loop/recur
+(defn sum-to [n]
+  (loop [i n acc 0]
+    (if (<= i 0)
+        acc
+        (recur (dec i) (+ acc i)))))
+
+;; Fibonacci using loop/recur
+(defn fib [n]
+  (loop [a 0 b 1 i n]
+    (if (<= i 0)
+        a
+        (recur b (+ a b) (dec i)))))
+
+;;; ============================================================
+;;; Comprehensions
+;;; ============================================================
+
+;; for - list comprehension
+;; (for [x (range 5) y (range 5) :when (< x y)] [x y])
+(define pairs-example
+  (for [x (range 5)
+        y (range 5)
+        :when (< x y)]
+    (list x y)))
+
+;; with :let
+(define with-let-example
+  (for [x (range 10)
+        :let [y (* x x)]
+        :when (even? y)]
+    y))
+
+;;; ============================================================
+;;; Multimethods
+;;; ============================================================
+
+;; Define dispatch function
+(defn shape-type [shape]
+  (get shape :type))
+
+;; Define multimethod
+(defmulti area shape-type)
+
+;; Implement for :circle
+(defmethod area :circle [shape]
+  (let [r (get shape :radius)]
+    (* 3.14159 r r)))
+
+;; Implement for :rectangle
+(defmethod area :rectangle [shape]
+  (* (get shape :width) (get shape :height)))
+
+;; Implement for :triangle
+(defmethod area :triangle [shape]
+  (/ (* (get shape :base) (get shape :height)) 2))
+
+;; Default
+(defmethod area :default [shape]
+  (error "Unknown shape type"))
+
+;;; ============================================================
+;;; Protocols
+;;; ============================================================
+
+;; Define a protocol for stringifiable things
+(defprotocol IStringable
+  (to-str [x]))
+
+;; Extend to numbers (if we had type dispatch)
+;; In practice, this would be done at load time
+;; (extend-type Number
+;;   IStringable
+;;   (to-str [x] (number->string x)))
+
+;;; ============================================================
+;;; Lazy Sequences
+;;; ============================================================
+
+;; Infinite sequence of natural numbers (lazy)
+(define naturals
+  (lazy-iterate inc 0))
+
+;; Take first 10
+(define first-10-naturals
+  (take 10 (doall naturals)))
+
+;; Infinite Fibonacci sequence
+(defn lazy-fibs []
+  (lazy-seq (lambda ()
+    (cons 0 (cons 1
+      (lazy-map (lambda (pair) (+ (first pair) (second pair)))
+                (lazy-map list
+                         (lazy-fibs)
+                         (rest (lazy-fibs)))))))))
+
+;;; ============================================================
+;;; Higher-Order Functions
+;;; ============================================================
+
+;; Composition
+(define inc-then-square
+  (comp square inc))
+
+;; Partial application
+(define add-10
+  (partial + 10))
+
+;; Juxt - apply multiple functions
+(define stats
+  (juxt min max sum count))
+
+;;; ============================================================
+;;; Data Transformation Pipeline
+;;; ============================================================
+
+(defn process-data [data]
+  (->> data
+       (filter some?)           ; Remove nils
+       (map inc)                ; Increment each
+       (filter even?)           ; Keep evens
+       (take 10)                ; Limit to 10
+       (reduce + 0)))           ; Sum them
+
+;;; ============================================================
+;;; Association List (Map) Operations
+;;; ============================================================
+
+(define person
+  (list (cons :name "Alice")
+        (cons :age 30)
+        (cons :city "NYC")))
+
+;; Get value
+(define name-val (get person :name))
+
+;; Update value
+(define older-person
+  (update person :age inc))
+
+;; Add new key
+(define person-with-job
+  (assoc person :job "Engineer"))
+
+;; Select keys
+(define name-and-age
+  (select-keys person (list :name :age)))
+
+;;; ============================================================
+;;; Transducers (simplified)
+;;; ============================================================
+
+;; Compose transducers
+(define xform
+  (comp (filtering even?)
+        (mapping square)
+        (taking 5)))
+
+;; Apply transducer
+(define transduced
+  (transduce xform conj nil (range 20)))
+
+;;; ============================================================
+;;; Set Operations
+;;; ============================================================
+
+(define set-a (set (list 1 2 3 4 5)))
+(define set-b (set (list 4 5 6 7 8)))
+
+(define union-ab (union set-a set-b))
+(define intersection-ab (intersection set-a set-b))
+(define difference-ab (difference set-a set-b))
+
+;;; ============================================================
+;;; Tree Walking
+;;; ============================================================
+
+(define sample-tree
+  (list 1 (list 2 3) (list 4 (list 5 6))))
+
+;; Flatten tree
+(define flat-tree
+  (flatten sample-tree))
+
+;; Walk and transform
+(define doubled-tree
+  (postwalk (lambda (x) (if (number? x) (* x 2) x))
+            sample-tree))
+
+;;; ============================================================
+;;; Running the Examples
+;;; ============================================================
+
+(display "Violet Examples Loaded")
+(newline)
+
+;; Show some results
+(display "square(5) = ")
+(print (square 5))
+
+(display "factorial(10) = ")
+(print (factorial 10))
+
+(display "sum-to(100) = ")
+(print (sum-to 100))
+
+(display "fib(10) = ")
+(print (fib 10))
+
+(display "Thread-first example: ")
+(print thread-first-example)

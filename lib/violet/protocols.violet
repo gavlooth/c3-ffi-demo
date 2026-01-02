@@ -1,0 +1,351 @@
+;;; Violet Protocols - Type-based polymorphism
+;;;
+;;; Protocols define a set of functions that can be implemented for different types.
+;;; Implemented entirely in Purple - no core language modifications.
+
+;;; ============================================================
+;;; Type System
+;;; ============================================================
+
+;;; Violet's type system for protocol dispatch.
+;;; Types are identified by keywords.
+
+(define (type-of x)
+  "Return the type keyword of x"
+  (cond
+    ((null? x) ':nil)
+    ((and (pair? x) (eq? (car x) ':type-tag))
+     ;; Tagged type: (:type-tag :MyType data)
+     (car (cdr x)))
+    ((number? x)
+     (if (integer? x) ':integer ':float))
+    ((symbol? x) ':symbol)
+    ((string? x) ':string)
+    ((pair? x) ':list)
+    ((vector? x) ':vector)
+    ((map? x) ':map)
+    ((lambda? x) ':function)
+    ((atom? x) ':atom)
+    (t ':object)))
+
+(define (integer? x)
+  "Check if x is an integer"
+  (and (number? x) (= x (floor x))))
+
+(define (lambda? x)
+  "Check if x is a function"
+  ;; In Purple, lambdas are opaque - we check by trying to call type-of
+  nil)  ; Conservative - can't easily detect in pure Purple
+
+(define (atom? x)
+  "Check if x is an atom (not pair)"
+  (not (pair? x)))
+
+;;; ============================================================
+;;; Tagged Types (User-Defined Types)
+;;; ============================================================
+
+(define (make-tagged type-key data)
+  "Create a tagged value with a specific type"
+  (list ':type-tag type-key data))
+
+(define (tagged? x)
+  "Check if x is a tagged type"
+  (and (pair? x) (eq? (car x) ':type-tag)))
+
+(define (tagged-type x)
+  "Get the type key of a tagged value"
+  (if (tagged? x)
+      (car (cdr x))
+      nil))
+
+(define (tagged-data x)
+  "Get the data of a tagged value"
+  (if (tagged? x)
+      (car (cdr (cdr x)))
+      x))
+
+;;; ============================================================
+;;; Protocol Infrastructure
+;;; ============================================================
+
+;;; A protocol is represented as:
+;;; { :name         <symbol>
+;;;   :functions    <list of function specs>
+;;;   :impls        <atom of alist ((type . impl-map) ...)> }
+
+(define *protocols* (atom nil))  ; Registry of all protocols
+
+(define (make-protocol name fn-specs)
+  "Create a new protocol"
+  (let ((proto (list ':protocol name fn-specs (atom nil))))
+    (swap! *protocols* (lambda (ps) (cons (cons name proto) ps)))
+    proto))
+
+(define (protocol-name proto)
+  (car (cdr proto)))
+
+(define (protocol-fn-specs proto)
+  (car (cdr (cdr proto))))
+
+(define (protocol-impls proto)
+  (car (cdr (cdr (cdr proto)))))
+
+(define (get-protocol name)
+  "Look up a protocol by name"
+  (let ((entry (assoc-get name (deref *protocols*))))
+    (if entry (cdr entry) nil)))
+
+;;; ============================================================
+;;; Extending Protocols to Types
+;;; ============================================================
+
+(define (extend-protocol! proto type-key impl-map)
+  "Add implementation of protocol for a type"
+  (let ((impls (protocol-impls proto)))
+    (swap! impls (lambda (i)
+                   (cons (cons type-key impl-map)
+                         (remove-type type-key i))))))
+
+(define (remove-type type-key impls)
+  "Remove existing implementation for type"
+  (filter (lambda (pair) (not (eq? type-key (car pair)))) impls))
+
+(define (get-impl proto type-key)
+  "Get implementation map for a type"
+  (assoc-get type-key (deref (protocol-impls proto))))
+
+;;; ============================================================
+;;; Protocol Function Dispatch
+;;; ============================================================
+
+(define (make-protocol-fn proto fn-name)
+  "Create a dispatching function for a protocol method"
+  (lambda args
+    (if (null? args)
+        (error (string-append "Protocol function " (symbol->string fn-name)
+                             " requires at least one argument"))
+        (let ((first-arg (car args)))
+          (let ((type-key (type-of first-arg)))
+            (let ((impl-map (get-impl proto type-key)))
+              (if impl-map
+                  (let ((fn (assoc-get fn-name impl-map)))
+                    (if fn
+                        (apply fn args)
+                        (error (string-append "No implementation of "
+                                             (symbol->string fn-name)
+                                             " for type "
+                                             (symbol->string type-key)))))
+                  ;; Try :default implementation
+                  (let ((default-impl (get-impl proto ':default)))
+                    (if default-impl
+                        (let ((fn (assoc-get fn-name default-impl)))
+                          (if fn
+                              (apply fn args)
+                              (error (string-append "No implementation of "
+                                                   (symbol->string fn-name)))))
+                        (error (string-append "No implementation of protocol "
+                                             (symbol->string (protocol-name proto))
+                                             " for type "
+                                             (symbol->string type-key))))))))))))
+
+;;; ============================================================
+;;; Protocol Definition Macro Support
+;;; ============================================================
+
+;;; (defprotocol ISeq
+;;;   (first [coll])
+;;;   (rest [coll])
+;;;   (cons [coll x]))
+;;;
+;;; Expands to:
+;;; (define ISeq (make-protocol 'ISeq '((first 1) (rest 1) (cons 2))))
+;;; (define first (make-protocol-fn ISeq 'first))
+;;; (define rest (make-protocol-fn ISeq 'rest))
+;;; (define -cons (make-protocol-fn ISeq 'cons))  ; prefixed to avoid conflict
+
+;;; ============================================================
+;;; Extend-Type Macro Support
+;;; ============================================================
+
+;;; (extend-type List
+;;;   ISeq
+;;;   (first [coll] (car coll))
+;;;   (rest [coll] (cdr coll))
+;;;   (cons [coll x] (cons x coll)))
+;;;
+;;; Expands to:
+;;; (extend-protocol! ISeq ':list
+;;;   (list (cons 'first (lambda (coll) (car coll)))
+;;;         (cons 'rest (lambda (coll) (cdr coll)))
+;;;         (cons 'cons (lambda (coll x) (cons x coll)))))
+
+;;; ============================================================
+;;; Satisfies? Predicate
+;;; ============================================================
+
+(define (satisfies? proto x)
+  "Check if x's type implements protocol"
+  (let ((type-key (type-of x)))
+    (not (null? (get-impl proto type-key)))))
+
+;;; ============================================================
+;;; Built-in Protocol: ISeq (Sequence abstraction)
+;;; ============================================================
+
+(define ISeq (make-protocol 'ISeq '((seq-first 1) (seq-rest 1) (seq-cons 2))))
+
+(define seq-first (make-protocol-fn ISeq 'seq-first))
+(define seq-rest (make-protocol-fn ISeq 'seq-rest))
+(define seq-cons (make-protocol-fn ISeq 'seq-cons))
+
+;; Extend to list
+(extend-protocol! ISeq ':list
+  (list (cons 'seq-first (lambda (coll) (car coll)))
+        (cons 'seq-rest (lambda (coll) (cdr coll)))
+        (cons 'seq-cons (lambda (coll x) (cons x coll)))))
+
+;; Extend to nil (empty seq)
+(extend-protocol! ISeq ':nil
+  (list (cons 'seq-first (lambda (coll) nil))
+        (cons 'seq-rest (lambda (coll) nil))
+        (cons 'seq-cons (lambda (coll x) (list x)))))
+
+;;; ============================================================
+;;; Built-in Protocol: ICounted
+;;; ============================================================
+
+(define ICounted (make-protocol 'ICounted '((counted-count 1))))
+
+(define counted-count (make-protocol-fn ICounted 'counted-count))
+
+(extend-protocol! ICounted ':list
+  (list (cons 'counted-count (lambda (coll) (length coll)))))
+
+(extend-protocol! ICounted ':nil
+  (list (cons 'counted-count (lambda (coll) 0))))
+
+(extend-protocol! ICounted ':string
+  (list (cons 'counted-count (lambda (s) (string-length s)))))
+
+;;; ============================================================
+;;; Built-in Protocol: IIndexed
+;;; ============================================================
+
+(define IIndexed (make-protocol 'IIndexed '((indexed-nth 2) (indexed-nth-or 3))))
+
+(define indexed-nth (make-protocol-fn IIndexed 'indexed-nth))
+(define indexed-nth-or (make-protocol-fn IIndexed 'indexed-nth-or))
+
+(extend-protocol! IIndexed ':list
+  (list (cons 'indexed-nth
+              (lambda (coll n)
+                (if (< n 0)
+                    (error "Index out of bounds")
+                    (if (null? coll)
+                        (error "Index out of bounds")
+                        (if (= n 0)
+                            (car coll)
+                            (indexed-nth (cdr coll) (- n 1)))))))
+        (cons 'indexed-nth-or
+              (lambda (coll n default)
+                (if (< n 0)
+                    default
+                    (if (null? coll)
+                        default
+                        (if (= n 0)
+                            (car coll)
+                            (indexed-nth-or (cdr coll) (- n 1) default))))))))
+
+;;; ============================================================
+;;; Built-in Protocol: ILookup
+;;; ============================================================
+
+(define ILookup (make-protocol 'ILookup '((lookup-get 2) (lookup-get-or 3))))
+
+(define lookup-get (make-protocol-fn ILookup 'lookup-get))
+(define lookup-get-or (make-protocol-fn ILookup 'lookup-get-or))
+
+;; For association lists
+(extend-protocol! ILookup ':list
+  (list (cons 'lookup-get
+              (lambda (coll key)
+                (assoc-get key coll)))
+        (cons 'lookup-get-or
+              (lambda (coll key default)
+                (let ((v (assoc-get key coll)))
+                  (if (null? v) default v))))))
+
+;;; ============================================================
+;;; Built-in Protocol: IAssociative
+;;; ============================================================
+
+(define IAssociative (make-protocol 'IAssociative '((assoc-put 3) (dissoc-key 2))))
+
+(define assoc-put (make-protocol-fn IAssociative 'assoc-put))
+(define dissoc-key (make-protocol-fn IAssociative 'dissoc-key))
+
+;; For association lists
+(extend-protocol! IAssociative ':list
+  (list (cons 'assoc-put
+              (lambda (coll key val)
+                (cons (cons key val) (filter (lambda (p) (not (equal? key (car p)))) coll))))
+        (cons 'dissoc-key
+              (lambda (coll key)
+                (filter (lambda (p) (not (equal? key (car p)))) coll)))))
+
+;;; ============================================================
+;;; Built-in Protocol: IFn (callable things)
+;;; ============================================================
+
+(define IFn (make-protocol 'IFn '((invoke 2))))  ; invoke takes fn and args list
+
+(define invoke (make-protocol-fn IFn 'invoke))
+
+;; Keywords can act as functions (lookup in maps)
+;; In Clojure: (:key map) => (get map :key)
+;; This would require preprocessing to transform (:key map) to (invoke :key (list map))
+
+;;; ============================================================
+;;; Built-in Protocol: IReduce
+;;; ============================================================
+
+(define IReduce (make-protocol 'IReduce '((coll-reduce 3))))
+
+(define coll-reduce (make-protocol-fn IReduce 'coll-reduce))
+
+(extend-protocol! IReduce ':list
+  (list (cons 'coll-reduce
+              (lambda (coll f init)
+                (if (null? coll)
+                    init
+                    (coll-reduce (cdr coll) f (f init (car coll))))))))
+
+(extend-protocol! IReduce ':nil
+  (list (cons 'coll-reduce
+              (lambda (coll f init) init))))
+
+;;; ============================================================
+;;; Helper: assoc-get (used throughout)
+;;; ============================================================
+
+(define (assoc-get key alist)
+  "Get value associated with key in alist, or nil"
+  (if (null? alist)
+      nil
+      (if (equal? key (car (car alist)))
+          (cdr (car alist))
+          (assoc-get key (cdr alist)))))
+
+;;; ============================================================
+;;; Extend-Protocol (convenience for extending to multiple types)
+;;; ============================================================
+
+;;; (extend-protocol ISeq
+;;;   List
+;;;   (first [c] ...)
+;;;   Vector
+;;;   (first [c] ...))
+;;;
+;;; This extends a single protocol to multiple types at once.
+;;; The preprocessor transforms this into multiple extend-protocol! calls.

@@ -1,0 +1,191 @@
+;;; Violet Demo - Functional Programming on Purple
+;;; Shows Clojure-like idioms without modifying Purple core
+
+;;; ============================================================
+;;; Core Definitions
+;;; ============================================================
+
+(define first car)
+(define rest cdr)
+(define (pair? x) (= (ctr-tag x) (quote cell)))
+(define (nil? x) (null? x))
+(define (inc n) (+ n 1))
+(define (dec n) (- n 1))
+(define (even? n) (= (% n 2) 0))
+(define (odd? n) (= (% n 2) 1))
+(define (pos? n) (> n 0))
+(define (neg? n) (< n 0))
+(define (square x) (* x x))
+
+;;; ============================================================
+;;; Sequence Functions
+;;; ============================================================
+
+(define (take n coll)
+  (if (or (<= n 0) (null? coll))
+      nil
+      (cons (first coll) (take (- n 1) (rest coll)))))
+
+(define (drop n coll)
+  (if (or (<= n 0) (null? coll))
+      coll
+      (drop (- n 1) (rest coll))))
+
+(define (range-step start end step)
+  (if (if (pos? step) (>= start end) (<= start end))
+      nil
+      (cons start (range-step (+ start step) end step))))
+
+(define (range-1 n) (range-step 0 n 1))
+(define (range-2 start end) (range-step start end 1))
+
+(define (sum xs) (fold + 0 xs))
+(define (product xs) (fold * 1 xs))
+
+(define (repeat n x)
+  (if (<= n 0) nil (cons x (repeat (- n 1) x))))
+
+(define (iterate n f x)
+  (if (<= n 0) nil (cons x (iterate (- n 1) f (f x)))))
+
+(define (zip-with f xs ys)
+  (if (or (null? xs) (null? ys))
+      nil
+      (cons (f (first xs) (first ys))
+            (zip-with f (rest xs) (rest ys)))))
+
+(define (flatten coll)
+  (if (null? coll)
+      nil
+      (if (pair? (first coll))
+          (append (flatten (first coll)) (flatten (rest coll)))
+          (cons (first coll) (flatten (rest coll))))))
+
+;;; ============================================================
+;;; Demo Program
+;;; ============================================================
+
+(display "=== Violet Demo ===")
+(newline)
+(newline)
+
+;;; Basic sequences
+(display "-- Ranges and Sequences --")
+(newline)
+
+(display "range 1-10: ")
+(print (range-2 1 11))
+
+(display "first 5 squares: ")
+(print (map square (range-2 1 6)))
+
+(display "sum 1-100: ")
+(display (sum (range-2 1 101)))
+(newline)
+
+(display "factorial 10: ")
+(display (product (range-2 1 11)))
+(newline)
+
+;;; Higher-order functions
+(newline)
+(display "-- Higher-Order Functions --")
+(newline)
+
+(display "filter even from 1-20: ")
+(print (filter even? (range-2 1 21)))
+
+(display "filter odd from 1-20: ")
+(print (filter odd? (range-2 1 21)))
+
+(display "take 5 from evens: ")
+(print (take 5 (filter even? (range-2 1 100))))
+
+;;; Composition
+(newline)
+(display "-- Function Composition --")
+(newline)
+
+(define double (lambda (x) (* x 2)))
+(define add1 (lambda (x) (+ x 1)))
+
+(display "double-then-add1 on (1 2 3): ")
+(print (map (compose add1 double) (quote (1 2 3))))
+
+(display "add1-then-double on (1 2 3): ")
+(print (map (compose double add1) (quote (1 2 3))))
+
+;;; Iterate - generate sequences
+(newline)
+(display "-- Iterate (lazy-style generation) --")
+(newline)
+
+(display "powers of 2 (first 10): ")
+(print (iterate 10 double 1))
+
+(display "fibonacci-like (first 10): ")
+(define (fib-step pair)
+  (cons (+ (car pair) (cdr pair)) (car pair)))
+(print (map car (iterate 10 fib-step (cons 1 1))))
+
+;;; Nested structures
+(newline)
+(display "-- Nested Structures --")
+(newline)
+
+(define nested (quote ((1 2 3) (4 5) ((6 7) 8 9))))
+(display "nested list: ")
+(print nested)
+
+(display "flattened: ")
+(print (flatten nested))
+
+;;; Zip and combine
+(newline)
+(display "-- Combining Sequences --")
+(newline)
+
+(define xs (quote (1 2 3 4 5)))
+(define ys (quote (10 20 30 40 50)))
+
+(display "xs: ")
+(print xs)
+(display "ys: ")
+(print ys)
+
+(display "zip-with + : ")
+(print (zip-with + xs ys))
+
+(display "zip-with * : ")
+(print (zip-with * xs ys))
+
+;;; Fold examples
+(newline)
+(display "-- Fold/Reduce Examples --")
+(newline)
+
+(display "max of (3 1 4 1 5 9 2 6): ")
+(define nums (quote (3 1 4 1 5 9 2 6)))
+(define (my-max a b) (if (> a b) a b))
+(display (fold my-max 0 nums))
+(newline)
+
+(display "min of same list: ")
+(define (my-min a b) (if (< a b) a b))
+(display (fold my-min 999 nums))
+(newline)
+
+;;; Pipeline-style computation
+(newline)
+(display "-- Pipeline: squares of even numbers 1-20 --")
+(newline)
+(display "Result: ")
+(print (map square (filter even? (range-2 1 21))))
+
+(display "Sum of above: ")
+(display (sum (map square (filter even? (range-2 1 21)))))
+(newline)
+
+(newline)
+(display "=== Demo Complete ===")
+(newline)

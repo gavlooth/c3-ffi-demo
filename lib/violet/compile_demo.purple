@@ -1,0 +1,58 @@
+;;; Violet Compilation Demo - compiles to native C code
+;;; No I/O operations - just pure computation
+
+;;; Factorial
+(define (factorial n)
+  (if (<= n 1)
+      1
+      (* n (factorial (- n 1)))))
+
+;;; Fibonacci
+(define (fib n)
+  (if (<= n 1)
+      n
+      (+ (fib (- n 1)) (fib (- n 2)))))
+
+;;; List operations using recursion
+(define (my-length xs)
+  (if (null? xs)
+      0
+      (+ 1 (my-length (cdr xs)))))
+
+(define (my-sum xs)
+  (if (null? xs)
+      0
+      (+ (car xs) (my-sum (cdr xs)))))
+
+(define (my-map f xs)
+  (if (null? xs)
+      nil
+      (cons (f (car xs)) (my-map f (cdr xs)))))
+
+(define (my-filter pred xs)
+  (if (null? xs)
+      nil
+      (if (pred (car xs))
+          (cons (car xs) (my-filter pred (cdr xs)))
+          (my-filter pred (cdr xs)))))
+
+;;; Build a range
+(define (range-helper start end acc)
+  (if (>= start end)
+      acc
+      (range-helper start (- end 1) (cons (- end 1) acc))))
+
+(define (my-range n) (range-helper 0 n nil))
+
+;;; Helper functions
+(define (square x) (* x x))
+(define (even? n) (= (% n 2) 0))
+
+;;; Compose computation results into a list
+;;; This demonstrates: recursion, HOFs, list manipulation
+(cons (factorial 10)           ; 3628800
+  (cons (fib 20)               ; 6765
+    (cons (my-sum (my-range 100))  ; 4950
+      (cons (my-length (my-filter even? (my-range 50)))  ; 25
+        (cons (my-sum (my-map square (my-range 10)))     ; 285
+          nil)))))

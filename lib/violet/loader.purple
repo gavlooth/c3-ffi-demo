@@ -1,0 +1,96 @@
+;;; Violet Loader - Load and preprocess Violet files
+;;;
+;;; This is the entry point for running Violet programs.
+;;; It loads the preprocessor, core libraries, and then
+;;; preprocesses and evaluates Violet code.
+
+;;; ============================================================
+;;; Bootstrap - Load Required Libraries
+;;; ============================================================
+
+;; Load preprocessor (contains transformation functions)
+(load "lib/violet/preprocess.purple")
+
+;; Load runtime support libraries
+(load "lib/violet/multimethods.violet")
+(load "lib/violet/protocols.violet")
+(load "lib/violet/core.violet")
+(load "lib/violet/macros.violet")
+
+;;; ============================================================
+;;; File Loading
+;;; ============================================================
+
+(define (load-violet filename)
+  "Load and preprocess a Violet file"
+  (let ((source (read-file filename)))
+    (let ((forms (parse-all source)))
+      (let ((preprocessed (preprocess-all forms)))
+        (eval-all preprocessed)))))
+
+(define (read-file filename)
+  "Read entire file as string"
+  ;; This would use Purple's file I/O primitives
+  ;; For now, assume it exists
+  (error "read-file not implemented - use load directly"))
+
+(define (parse-all source)
+  "Parse source string into list of forms"
+  ;; This would use Purple's parser
+  (error "parse-all not implemented"))
+
+(define (eval-all forms)
+  "Evaluate a list of forms"
+  (if (null? forms)
+      nil
+      (do
+        (eval (car forms))
+        (eval-all (cdr forms)))))
+
+;;; ============================================================
+;;; REPL Support
+;;; ============================================================
+
+(define (violet-eval form)
+  "Preprocess and evaluate a single Violet form"
+  (eval (preprocess form)))
+
+(define (violet-repl)
+  "Start a Violet REPL"
+  (display "Violet REPL - Clojure-like language on Purple")
+  (newline)
+  (display "Type (exit) to quit")
+  (newline)
+  (repl-loop))
+
+(define (repl-loop)
+  (display "violet> ")
+  (let ((input (read)))
+    (if (eq? input 'exit)
+        (display "Goodbye!")
+        (do
+          (let ((result (violet-eval input)))
+            (display "=> ")
+            (print result))
+          (repl-loop)))))
+
+;;; ============================================================
+;;; Convenience Functions
+;;; ============================================================
+
+(define (violet-load-all)
+  "Load all Violet libraries"
+  (display "Loading Violet libraries...")
+  (newline)
+  t)
+
+(define (violet-version)
+  "Return Violet version string"
+  "Violet 0.1.0 - Clojure-like language on Purple")
+
+;;; ============================================================
+;;; Initialization
+;;; ============================================================
+
+(display (violet-version))
+(newline)

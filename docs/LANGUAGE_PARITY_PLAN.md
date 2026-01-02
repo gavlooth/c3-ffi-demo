@@ -1,8 +1,11 @@
-# C Runtime Feature Parity Plan
+# Language Feature Parity Plan
 
 ## Goal
-Make the native compiler (pkg/compiler) + C runtime (runtime/src/runtime.c)
-feature-complete compared to the Go interpreter (pkg/eval).
+Make the native compiler (pkg/compiler) support all **language constructs**
+that the Go interpreter (pkg/eval) supports.
+
+**Note**: This is LANGUAGE parity (compiler features), not RUNTIME parity.
+The C runtime (runtime/src/runtime.c) already has all necessary primitives.
 
 This aligns with the architectural principle:
 > "Go is compiler-only - Go must NEVER be in runtime/interpretation hot paths."

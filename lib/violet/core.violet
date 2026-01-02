@@ -1,0 +1,923 @@
+;;; Violet Core - Adapted from clojure.core.clj
+;;; https://github.com/clojure/clojure/blob/master/src/clj/clojure/core.clj
+;;;
+;;; Violet is a Clojure-like language running on Purple.
+;;; This file adapts clojure.core functions to Purple's primitives.
+;;;
+;;; Purple provides: cons, car, cdr, null?, list, +, -, *, /, %, =, <, >, <=, >=,
+;;;                  not, map, filter, fold, foldl, length, append, reverse, apply
+;;;
+;;; Booleans: t = true, nil = false
+
+;;; ========== Aliases (Purple -> Clojure naming) ==========
+
+(define first car)
+(define rest cdr)
+(define empty? null?)
+(define reduce fold)
+(define count length)
+
+;;; ========== Basic Sequence Functions ==========
+;;; Adapted from clojure/core.clj lines 49-89
+
+(define (seq coll)
+  ;; Returns a seq on the collection. If empty, returns nil.
+  (if (null? coll) nil coll))
+
+(define (next coll)
+  ;; Returns a seq of items after the first. Returns nil if empty.
+  (let ((r (rest coll)))
+    (if (null? r) nil r)))
+
+(define (second coll)
+  ;; Same as (first (next x))
+  (first (next coll)))
+
+(define (ffirst coll)
+  ;; Same as (first (first x))
+  (first (first coll)))
+
+(define (nfirst coll)
+  ;; Same as (next (first x))
+  (next (first coll)))
+
+(define (fnext coll)
+  ;; Same as (first (next x))
+  (first (next coll)))
+
+(define (nnext coll)
+  ;; Same as (next (next x))
+  (next (next coll)))
+
+(define (last coll)
+  ;; Returns the last item in coll
+  (if (next coll)
+      (last (next coll))
+      (first coll)))
+
+(define (butlast coll)
+  ;; Returns all but the last item in coll
+  (define (loop ret s)
+    (if (next s)
+        (loop (cons (first s) ret) (next s))
+        (reverse ret)))
+  (if (next coll)
+      (loop nil coll)
+      nil))
+
+;;; ========== Predicates ==========
+;;; Adapted from clojure/core.clj lines 503-550
+
+(define (nil? x) (null? x))
+(define (some? x) (not (nil? x)))
+(define (true? x) (= x t))
+(define (false? x) (nil? x))
+
+(define (zero? n) (= n 0))
+(define (pos? n) (> n 0))
+(define (neg? n) (< n 0))
+
+(define (even? n) (= (% n 2) 0))
+(define (odd? n) (not (even? n)))
+
+;;; ========== Collection predicates ==========
+
+(define (coll? x)
+  ;; Returns true if x is a collection (list)
+  (or (null? x) (not (null? (seq x)))))
+
+(define (sequential? x)
+  ;; Returns true if x is sequential (list)
+  (coll? x))
+
+;;; ========== Higher-order functions ==========
+;;; Adapted from clojure/core.clj
+
+;; identity - returns its argument
+(define (identity x) x)
+
+;; constantly - returns a function that always returns x
+(define (constantly x)
+  (lambda args x))
+
+;; comp - function composition
+(define (comp f g)
+  (lambda (x) (f (g x))))
+
+;; complement - returns a function that is the boolean complement of f
+(define (complement f)
+  (lambda args
+    (not (apply f args))))
+
+;; partial - takes a function and fewer args, returns fn that takes rest
+(define (partial f . bound-args)
+  (lambda args
+    (apply f (append bound-args args))))
+
+;;; ========== Sequence operations ==========
+;;; Adapted from clojure/core.clj lines 2600-2900
+
+;; take - Returns a sequence of first n items
+;; (defn take [n coll]
+;;   (lazy-seq (when (pos? n) (when-let [s (seq coll)]
+;;     (cons (first s) (take (dec n) (rest s)))))))
+(define (take n coll)
+  (if (or (<= n 0) (nil? (seq coll)))
+      nil
+      (cons (first coll) (take (- n 1) (rest coll)))))
+
+;; drop - Returns all but first n items
+;; (defn drop [n coll]
+;;   (let [step (fn [n coll] (let [s (seq coll)]
+;;     (if (and (pos? n) s) (recur (dec n) (rest s)) s)))]
+;;     (lazy-seq (step n coll))))
+(define (drop n coll)
+  (if (or (<= n 0) (nil? (seq coll)))
+      (seq coll)
+      (drop (- n 1) (rest coll))))
+
+;; take-while - Returns items while pred is true
+;; (defn take-while [pred coll]
+;;   (lazy-seq (when-let [s (seq coll)]
+;;     (when (pred (first s))
+;;       (cons (first s) (take-while pred (rest s)))))))
+(define (take-while pred coll)
+  (if (nil? (seq coll))
+      nil
+      (if (pred (first coll))
+          (cons (first coll) (take-while pred (rest coll)))
+          nil)))
+
+;; drop-while - Drops items while pred is true
+;; (defn drop-while [pred coll]
+;;   (let [step (fn [pred coll]
+;;     (let [s (seq coll)]
+;;       (if (and s (pred (first s))) (recur pred (rest s)) s)))]
+;;     (lazy-seq (step pred coll))))
+(define (drop-while pred coll)
+  (if (nil? (seq coll))
+      nil
+      (if (pred (first coll))
+          (drop-while pred (rest coll))
+          (seq coll))))
+
+;; split-at - Returns [(take n coll) (drop n coll)]
+(define (split-at n coll)
+  (list (take n coll) (drop n coll)))
+
+;; split-with - Returns [(take-while pred coll) (drop-while pred coll)]
+(define (split-with pred coll)
+  (list (take-while pred coll) (drop-while pred coll)))
+
+;; take-last - Returns seq of last n items
+(define (take-last n coll)
+  (drop (- (count coll) n) coll))
+
+;; drop-last - Returns all but last n items
+(define (drop-last n coll)
+  (take (- (count coll) n) coll))
+
+;;; ========== concat, mapcat ==========
+;;; Adapted from clojure/core.clj lines 690-720
+
+;; concat - Returns concatenation of seqs
+;; (defn concat [x y] (lazy-seq (let [s (seq x)]
+;;   (if s (cons (first s) (concat (rest s) y)) y))))
+(define (concat . colls)
+  (if (null? colls)
+      nil
+      (if (null? (cdr colls))
+          (seq (car colls))
+          (let ((x (car colls))
+                (y (apply concat (cdr colls))))
+            (if (nil? (seq x))
+                y
+                (cons (first x) (apply concat (cons (rest x) (cdr colls)))))))))
+
+;; mapcat - (concat (map f colls))
+;; (defn mapcat [f & colls] (apply concat (apply map f colls)))
+(define (mapcat f coll)
+  (apply concat (map f coll)))
+
+;;; ========== interleave, interpose ==========
+;;; Adapted from clojure/core.clj lines 4200-4250
+
+;; interleave - Returns interleaving of seqs
+;; (defn interleave [c1 c2] (lazy-seq
+;;   (let [s1 (seq c1) s2 (seq c2)]
+;;     (when (and s1 s2)
+;;       (cons (first s1) (cons (first s2) (interleave (rest s1) (rest s2))))))))
+(define (interleave c1 c2)
+  (if (or (nil? (seq c1)) (nil? (seq c2)))
+      nil
+      (cons (first c1)
+            (cons (first c2)
+                  (interleave (rest c1) (rest c2))))))
+
+;; interpose - Returns seq with sep between elements
+;; (defn interpose [sep coll] (drop 1 (interleave (repeat sep) coll)))
+(define (interpose sep coll)
+  (if (or (nil? (seq coll)) (nil? (next coll)))
+      (seq coll)
+      (cons (first coll)
+            (cons sep
+                  (interpose sep (rest coll))))))
+
+;;; ========== repeat, repeatedly, range ==========
+;;; Adapted from clojure/core.clj lines 2900-3000
+
+;; repeat - Returns seq of n x's (finite version)
+(define (repeat n x)
+  (if (<= n 0)
+      nil
+      (cons x (repeat (- n 1) x))))
+
+;; repeatedly - Returns seq of n calls to f
+(define (repeatedly n f)
+  (if (<= n 0)
+      nil
+      (cons (f) (repeatedly (- n 1) f))))
+
+;; range - Returns range of numbers
+;; (defn range
+;;   ([] ..infinite..)
+;;   ([end] (range 0 end 1))
+;;   ([start end] (range start end 1))
+;;   ([start end step] ...))
+(define (range . args)
+  (define (range-step start end step)
+    (if (if (pos? step) (>= start end) (<= start end))
+        nil
+        (cons start (range-step (+ start step) end step))))
+  (if (null? args)
+      nil  ;; no infinite range without laziness
+      (if (null? (cdr args))
+          (range-step 0 (car args) 1)
+          (if (null? (cdr (cdr args)))
+              (range-step (car args) (car (cdr args)) 1)
+              (range-step (car args) (car (cdr args)) (car (cdr (cdr args))))))))
+
+;;; ========== iterate ==========
+
+;; iterate - Returns (x (f x) (f (f x)) ...) - finite version
+(define (iterate n f x)
+  (if (<= n 0)
+      nil
+      (cons x (iterate (- n 1) f (f x)))))
+
+;;; ========== some, every?, not-every?, not-any? ==========
+;;; Adapted from clojure/core.clj lines 2560-2600
+
+;; some - Returns first logical true value of (pred x)
+;; (defn some [pred coll]
+;;   (when-let [s (seq coll)]
+;;     (or (pred (first s)) (recur pred (next s)))))
+(define (some pred coll)
+  (if (nil? (seq coll))
+      nil
+      (let ((result (pred (first coll))))
+        (if result
+            result
+            (some pred (next coll))))))
+
+;; every? - Returns true if pred is true for all items
+;; (defn every? [pred coll]
+;;   (cond (nil? (seq coll)) true
+;;         (pred (first coll)) (recur pred (next coll))
+;;         :else false))
+(define (every? pred coll)
+  (if (nil? (seq coll))
+      t
+      (if (pred (first coll))
+          (every? pred (next coll))
+          nil)))
+
+;; not-every? - Returns true if pred is false for some item
+(define (not-every? pred coll)
+  (not (every? pred coll)))
+
+;; not-any? - Returns true if pred is false for all items
+(define (not-any? pred coll)
+  (not (some pred coll)))
+
+;;; ========== partition ==========
+;;; Adapted from clojure/core.clj lines 3100-3150
+
+;; partition - Returns seq of lists of n items
+;; (defn partition [n coll]
+;;   (lazy-seq (when-let [s (seq coll)]
+;;     (let [p (doall (take n s))]
+;;       (when (= n (count p))
+;;         (cons p (partition n (nthrest s n))))))))
+(define (partition n coll)
+  (if (< (count coll) n)
+      nil
+      (cons (take n coll) (partition n (drop n coll)))))
+
+;; partition-all - Like partition but includes incomplete final partition
+(define (partition-all n coll)
+  (if (nil? (seq coll))
+      nil
+      (cons (take n coll) (partition-all n (drop n coll)))))
+
+;;; ========== distinct, dedupe ==========
+;;; Adapted from clojure/core.clj lines 4900-4950
+
+;; distinct - Returns seq with duplicates removed
+(define (distinct coll)
+  (define (step xs seen)
+    (if (nil? (seq xs))
+        nil
+        (let ((x (first xs)))
+          (if (member x seen)
+              (step (rest xs) seen)
+              (cons x (step (rest xs) (cons x seen)))))))
+  (step coll nil))
+
+;; member - helper: checks if x is in list
+(define (member x coll)
+  (if (nil? (seq coll))
+      nil
+      (if (= x (first coll))
+          coll
+          (member x (rest coll)))))
+
+;; dedupe - Removes consecutive duplicates
+(define (dedupe coll)
+  (if (nil? (seq coll))
+      nil
+      (if (nil? (next coll))
+          coll
+          (if (= (first coll) (second coll))
+              (dedupe (rest coll))
+              (cons (first coll) (dedupe (rest coll)))))))
+
+;;; ========== flatten ==========
+
+;; flatten - Takes nested seqs and returns flat seq
+(define (flatten coll)
+  (if (nil? (seq coll))
+      nil
+      (if (coll? (first coll))
+          (append (flatten (first coll)) (flatten (rest coll)))
+          (cons (first coll) (flatten (rest coll))))))
+
+;;; ========== sort, sort-by ==========
+;;; Using quicksort since we don't have Java's sort
+
+(define (sort coll)
+  (if (or (nil? (seq coll)) (nil? (next coll)))
+      (seq coll)
+      (let ((pivot (first coll))
+            (rst (rest coll)))
+        (append
+         (sort (filter (lambda (x) (< x pivot)) rst))
+         (cons pivot nil)
+         (sort (filter (lambda (x) (>= x pivot)) rst))))))
+
+(define (sort-by keyfn coll)
+  (if (or (nil? (seq coll)) (nil? (next coll)))
+      (seq coll)
+      (let ((pivot-key (keyfn (first coll)))
+            (pivot (first coll))
+            (rst (rest coll)))
+        (append
+         (sort-by keyfn (filter (lambda (x) (< (keyfn x) pivot-key)) rst))
+         (cons pivot nil)
+         (sort-by keyfn (filter (lambda (x) (>= (keyfn x) pivot-key)) rst))))))
+
+;;; ========== group-by, frequencies ==========
+;;; Adapted from clojure/core.clj lines 7000-7050
+
+;; group-by - Returns alist of (f x) -> [items with same (f x)]
+;; (defn group-by [f coll]
+;;   (persistent! (reduce (fn [ret x]
+;;     (let [k (f x)] (assoc! ret k (conj (get ret k []) x))))
+;;     (transient {}) coll)))
+(define (group-by f coll)
+  (define (add-to-group groups key val)
+    (if (nil? groups)
+        (list (cons key (list val)))
+        (if (= key (car (car groups)))
+            (cons (cons key (cons val (cdr (car groups))))
+                  (cdr groups))
+            (cons (car groups) (add-to-group (cdr groups) key val)))))
+  (reduce (lambda (groups x)
+            (add-to-group groups (f x) x))
+          nil coll))
+
+;; frequencies - Returns alist of item -> count
+;; (defn frequencies [coll]
+;;   (persistent! (reduce (fn [counts x]
+;;     (assoc! counts x (inc (get counts x 0))))
+;;     (transient {}) coll)))
+(define (frequencies coll)
+  (define (inc-count counts x)
+    (if (nil? counts)
+        (list (cons x 1))
+        (if (= x (car (car counts)))
+            (cons (cons x (+ 1 (cdr (car counts)))) (cdr counts))
+            (cons (car counts) (inc-count (cdr counts) x)))))
+  (reduce inc-count nil coll))
+
+;;; ========== zipmap, juxt ==========
+
+;; zipmap - Returns alist from keys and vals
+(define (zipmap keys vals)
+  (if (or (nil? (seq keys)) (nil? (seq vals)))
+      nil
+      (cons (cons (first keys) (first vals))
+            (zipmap (rest keys) (rest vals)))))
+
+;; juxt - Returns fn that returns list of results of fns
+(define (juxt . fns)
+  (lambda (x)
+    (map (lambda (f) (f x)) fns)))
+
+;;; ========== nth, nthrest ==========
+
+;; nth - Returns item at index (0-based)
+(define (nth coll n)
+  (if (or (nil? (seq coll)) (< n 0))
+      nil
+      (if (= n 0)
+          (first coll)
+          (nth (rest coll) (- n 1)))))
+
+;; nthrest - Returns rest after n items
+(define (nthrest coll n)
+  (drop n coll))
+
+;;; ========== conj, into ==========
+
+;; conj - adds item to collection (prepends for lists)
+(define (conj coll x)
+  (cons x coll))
+
+;; into - reduce conj onto to from
+(define (into to from)
+  (reduce conj to from))
+
+;;; ========== assoc-list operations (since we don't have maps) ==========
+
+;; get - get value from alist
+(define (get alist key . default)
+  (define (lookup xs)
+    (if (nil? (seq xs))
+        (if (nil? default) nil (car default))
+        (if (= key (car (car xs)))
+            (cdr (car xs))
+            (lookup (cdr xs)))))
+  (lookup alist))
+
+;; assoc - add/update key in alist
+(define (assoc alist key val)
+  (cons (cons key val)
+        (filter (lambda (pair) (not (= (car pair) key))) alist)))
+
+;; dissoc - remove key from alist
+(define (dissoc alist key)
+  (filter (lambda (pair) (not (= (car pair) key))) alist))
+
+;; contains? - check if key in alist
+(define (contains? alist key)
+  (some? (some (lambda (pair) (= (car pair) key)) alist)))
+
+;; keys - get all keys from alist
+(define (keys alist)
+  (map car alist))
+
+;; vals - get all values from alist
+(define (vals alist)
+  (map cdr alist))
+
+;;; ========== Math functions ==========
+
+(define (inc n) (+ n 1))
+(define (dec n) (- n 1))
+
+(define (max . args)
+  (reduce (lambda (a b) (if (> a b) a b)) (car args) (cdr args)))
+
+(define (min . args)
+  (reduce (lambda (a b) (if (< a b) a b)) (car args) (cdr args)))
+
+;;; ========== Utility functions ==========
+
+;; apply already provided by Purple
+
+;; str - would need string support
+;; format - would need string support
+
+;;; ========== remove (from clojure.core) ==========
+
+;; remove - Returns seq of items where (pred item) is false
+;; (defn remove [pred coll] (filter (complement pred) coll))
+(define (remove pred coll)
+  (filter (complement pred) coll))
+
+;;; ========== find (returns first match) ==========
+
+(define (find pred coll)
+  (some (lambda (x) (if (pred x) x nil)) coll))
+
+;;; ========== keep (map + remove nils) ==========
+
+(define (keep f coll)
+  (filter some? (map f coll)))
+
+;;; ========== reduce-kv (for alists) ==========
+
+(define (reduce-kv f init alist)
+  (reduce (lambda (acc pair)
+            (f acc (car pair) (cdr pair)))
+          init alist))
+
+;;; ========== update (for alists) ==========
+
+(define (update alist key f)
+  (assoc alist key (f (get alist key))))
+
+;;; ========== merge (for alists) ==========
+
+(define (merge . alists)
+  (reduce (lambda (acc alist)
+            (reduce (lambda (a pair)
+                      (assoc a (car pair) (cdr pair)))
+                    acc alist))
+          nil alists))
+
+;;; ========== select-keys (for alists) ==========
+
+(define (select-keys alist ks)
+  (filter (lambda (pair) (member (car pair) ks)) alist))
+
+;;; ========== Lazy Sequences ==========
+;;; Thunk-based lazy sequences for Violet
+
+;; A lazy-seq is represented as (:lazy-seq thunk cache)
+;; where thunk is a zero-arg function and cache holds the realized value
+
+(define (lazy-seq thunk)
+  "Create a lazy sequence from a thunk"
+  (list ':lazy-seq thunk (atom nil) (atom nil)))  ; (tag thunk realized? cache)
+
+(define (lazy-seq? x)
+  (and (pair? x) (eq? (car x) ':lazy-seq)))
+
+(define (force-lazy ls)
+  "Force a lazy sequence, returning its value"
+  (if (not (lazy-seq? ls))
+      ls
+      (let ((realized (nth 2 ls))
+            (cache (nth 3 ls)))
+        (if (deref realized)
+            (deref cache)
+            (let ((thunk (nth 1 ls)))
+              (let ((val (thunk)))
+                (reset! cache val)
+                (reset! realized t)
+                val))))))
+
+;; Lazy versions of core functions
+(define (lazy-take n coll)
+  (lazy-seq (lambda ()
+    (if (or (<= n 0) (nil? (seq (force-lazy coll))))
+        nil
+        (cons (first (force-lazy coll))
+              (lazy-take (- n 1) (rest (force-lazy coll))))))))
+
+(define (lazy-drop n coll)
+  (lazy-seq (lambda ()
+    (if (<= n 0)
+        (force-lazy coll)
+        (lazy-drop (- n 1) (rest (force-lazy coll)))))))
+
+(define (lazy-map f coll)
+  (lazy-seq (lambda ()
+    (let ((s (force-lazy coll)))
+      (if (nil? (seq s))
+          nil
+          (cons (f (first s)) (lazy-map f (rest s))))))))
+
+(define (lazy-filter pred coll)
+  (lazy-seq (lambda ()
+    (let ((s (force-lazy coll)))
+      (if (nil? (seq s))
+          nil
+          (if (pred (first s))
+              (cons (first s) (lazy-filter pred (rest s)))
+              (force-lazy (lazy-filter pred (rest s)))))))))
+
+;; cycle - Returns infinite lazy sequence cycling through coll
+(define (cycle coll)
+  (lazy-seq (lambda ()
+    (if (nil? (seq coll))
+        nil
+        (concat coll (cycle coll))))))
+
+;; iterate (lazy infinite version)
+(define (lazy-iterate f x)
+  (lazy-seq (lambda ()
+    (cons x (lazy-iterate f (f x))))))
+
+;; repeat (lazy infinite version)
+(define (lazy-repeat x)
+  (lazy-seq (lambda ()
+    (cons x (lazy-repeat x)))))
+
+;;; ========== More Sequence Functions ==========
+
+;; reductions - Returns lazy seq of intermediate reduce values
+(define (reductions f init coll)
+  (if (nil? (seq coll))
+      (list init)
+      (cons init (reductions f (f init (first coll)) (rest coll)))))
+
+;; partition-by - Splits when f returns new value
+(define (partition-by f coll)
+  (if (nil? (seq coll))
+      nil
+      (let ((fst (first coll))
+            (fv (f (first coll))))
+        (let ((run (cons fst (take-while (lambda (x) (= fv (f x))) (rest coll)))))
+          (cons run (partition-by f (drop (count run) coll)))))))
+
+;; map-indexed - Maps with index
+(define (map-indexed f coll)
+  (define (step idx xs)
+    (if (nil? (seq xs))
+        nil
+        (cons (f idx (first xs))
+              (step (+ idx 1) (rest xs)))))
+  (step 0 coll))
+
+;; keep-indexed - Like map-indexed but removes nils
+(define (keep-indexed f coll)
+  (filter some? (map-indexed f coll)))
+
+;; shuffle - Random permutation (Fisher-Yates would need random)
+;; Placeholder - needs random number support
+(define (shuffle coll)
+  coll)  ; No-op without random
+
+;; rand-nth - Random element (needs random)
+(define (rand-nth coll)
+  (first coll))  ; No-op without random
+
+;;; ========== Transducers (simplified) ==========
+;;; Full transducers need more infrastructure, but we can provide
+;;; composable transformations
+
+(define (mapping f)
+  "Returns a transducer that maps f"
+  (lambda (rf)
+    (lambda (result input)
+      (rf result (f input)))))
+
+(define (filtering pred)
+  "Returns a transducer that filters by pred"
+  (lambda (rf)
+    (lambda (result input)
+      (if (pred input)
+          (rf result input)
+          result))))
+
+(define (taking n)
+  "Returns a transducer that takes n items"
+  (lambda (rf)
+    (let ((count (atom n)))
+      (lambda (result input)
+        (if (<= (deref count) 0)
+            result
+            (do
+              (swap! count dec)
+              (rf result input)))))))
+
+(define (transduce xform f init coll)
+  "Reduce with a transducer"
+  (reduce (xform f) init coll))
+
+;;; ========== More Predicates ==========
+
+(define (nat-int? n)
+  "Returns true if n is a non-negative integer"
+  (and (number? n) (>= n 0)))
+
+(define (pos-int? n)
+  "Returns true if n is a positive integer"
+  (and (number? n) (> n 0)))
+
+(define (neg-int? n)
+  "Returns true if n is a negative integer"
+  (and (number? n) (< n 0)))
+
+(define (number? x)
+  ;; Primitive check - assumes Purple provides this or we detect via arithmetic
+  t)  ; Placeholder
+
+(define (string? x)
+  ;; Check if x is a string (Purple string type)
+  nil)  ; Placeholder - depends on Purple's type system
+
+(define (keyword? x)
+  ;; Keywords start with : in our representation
+  (and (symbol? x)
+       ;; Would need string ops to check first char
+       nil))
+
+(define (symbol? x)
+  ;; Non-nil, non-number atom that's not a pair
+  (and (not (null? x))
+       (not (pair? x))
+       (not (number? x))))
+
+(define (fn? x)
+  "Returns true if x is a function"
+  ;; Hard to detect in pure Lisp without trying to call it
+  nil)  ; Placeholder
+
+(define (ifn? x)
+  "Returns true if x is invocable (fn, keyword, map, set, vector)"
+  (fn? x))
+
+;;; ========== Comparison ==========
+
+(define (compare x y)
+  "Returns negative, zero, or positive based on comparison"
+  (cond
+    ((< x y) -1)
+    ((> x y) 1)
+    (t 0)))
+
+(define (compare-by keyfn x y)
+  "Compare by key function"
+  (compare (keyfn x) (keyfn y)))
+
+;;; ========== More Math ==========
+
+(define (abs n)
+  (if (< n 0) (- 0 n) n))
+
+(define (quot n d)
+  "Integer division truncating toward zero"
+  (/ n d))  ; Assumes Purple / truncates
+
+(define (rem n d)
+  "Remainder of dividing n by d"
+  (% n d))
+
+(define (mod n d)
+  "Modulus (result has same sign as divisor)"
+  (let ((r (% n d)))
+    (if (or (zero? r) (= (pos? r) (pos? d)))
+        r
+        (+ r d))))
+
+(define (sum coll)
+  (reduce + 0 coll))
+
+(define (product coll)
+  (reduce * 1 coll))
+
+(define (average coll)
+  (if (nil? (seq coll))
+      0
+      (/ (sum coll) (count coll))))
+
+;;; ========== More Collection Operations ==========
+
+;; empty - Returns empty collection of same type
+(define (empty coll)
+  (if (nil? coll)
+      nil
+      nil))  ; Lists are the only type for now
+
+;; not-empty - Returns coll if not empty, else nil
+(define (not-empty coll)
+  (if (nil? (seq coll)) nil coll))
+
+;; bounded-count - Count up to n items
+(define (bounded-count n coll)
+  (if (or (<= n 0) (nil? (seq coll)))
+      0
+      (+ 1 (bounded-count (- n 1) (rest coll)))))
+
+;; doall - Force entire lazy seq
+(define (doall coll)
+  (if (lazy-seq? coll)
+      (let ((s (force-lazy coll)))
+        (if (nil? (seq s))
+            nil
+            (cons (first s) (doall (rest s)))))
+      coll))
+
+;; dorun - Force lazy seq for side effects, return nil
+(define (dorun coll)
+  (do (doall coll) nil))
+
+;; run! - Apply f to each item for side effects
+(define (run! f coll)
+  (if (nil? (seq coll))
+      nil
+      (do
+        (f (first coll))
+        (run! f (rest coll)))))
+
+;; doseq - Macro for run! (would be in macros)
+;; (doseq [x coll] body) -> (run! (fn [x] body) coll)
+
+;;; ========== Tree Operations ==========
+
+;; tree-seq - Returns lazy seq of nodes in tree
+(define (tree-seq branch? children root)
+  (define (walk node)
+    (cons node
+          (if (branch? node)
+              (mapcat walk (children node))
+              nil)))
+  (walk root))
+
+;; postwalk - Walk tree bottom-up
+(define (postwalk f tree)
+  (if (coll? tree)
+      (f (map (lambda (x) (postwalk f x)) tree))
+      (f tree)))
+
+;; prewalk - Walk tree top-down
+(define (prewalk f tree)
+  (let ((walked (f tree)))
+    (if (coll? walked)
+        (map (lambda (x) (prewalk f x)) walked)
+        walked)))
+
+;;; ========== Set Operations (using lists) ==========
+
+(define (set coll)
+  "Create a set (distinct list) from collection"
+  (distinct coll))
+
+(define (union s1 s2)
+  "Set union"
+  (distinct (concat s1 s2)))
+
+(define (intersection s1 s2)
+  "Set intersection"
+  (filter (lambda (x) (member x s2)) s1))
+
+(define (difference s1 s2)
+  "Set difference (s1 - s2)"
+  (filter (lambda (x) (not (member x s2))) s1))
+
+(define (subset? s1 s2)
+  "Is s1 a subset of s2?"
+  (every? (lambda (x) (member x s2)) s1))
+
+(define (superset? s1 s2)
+  "Is s1 a superset of s2?"
+  (subset? s2 s1))
+
+;;; ========== Threading Support ==========
+;;; These are normally macros - see macros.violet and preprocess.purple
+;;; Here we just document them
+
+;; -> thread-first: (-> x (f a) (g b)) => (g (f x a) b)
+;; ->> thread-last: (->> x (f a) (g b)) => (g a (f b x))
+;; as-> named threading
+;; cond-> conditional threading
+;; cond->> conditional thread-last
+;; some-> nil-safe threading
+;; some->> nil-safe thread-last
+
+;;; ========== Debugging ==========
+
+(define (tap f x)
+  "Call f on x for side effect, return x"
+  (do (f x) x))
+
+(define (spy x)
+  "Print x and return it"
+  (do (print x) x))
+
+;;; ========== fnil, memoize ==========
+
+(define (fnil f default)
+  "Returns function that replaces nil first arg with default"
+  (lambda args
+    (if (nil? (car args))
+        (apply f (cons default (cdr args)))
+        (apply f args))))
+
+;; memoize - would need proper hash-map, simplified version
+(define (memoize f)
+  "Returns memoized version of f (simplified, list-based)"
+  (let ((cache (atom nil)))
+    (lambda args
+      (let ((cached (get (deref cache) args)))
+        (if cached
+            cached
+            (let ((result (apply f args)))
+              (swap! cache (lambda (c) (assoc c args result)))
+              result))))))
+
+;;; ========== End of Violet Core ==========

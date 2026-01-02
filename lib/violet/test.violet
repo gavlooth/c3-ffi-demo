@@ -1,0 +1,336 @@
+;;; Violet Tests - Adapted from clojure/test_clojure/sequences.clj
+
+;;; Test framework
+(define *tests-run* 0)
+(define *tests-passed* 0)
+(define *tests-failed* 0)
+
+(define (list-equal? a b)
+  (if (and (null? a) (null? b))
+      t
+      (if (or (null? a) (null? b))
+          nil
+          (if (and (pair? a) (pair? b))
+              (and (list-equal? (car a) (car b))
+                   (list-equal? (cdr a) (cdr b)))
+              (= a b)))))
+
+(define (pair? x)
+  (not (or (null? x) (number? x))))
+
+(define (number? x)
+  ;; In Purple, we can try arithmetic - this is a hack
+  t)  ;; assume atoms that aren't nil are numbers for comparison
+
+(define (my-and a b) (if a b nil))
+(define (and a b) (my-and a b))
+
+(define (assert-equal name expected actual)
+  (set! *tests-run* (+ *tests-run* 1))
+  (if (list-equal? expected actual)
+      (do
+        (set! *tests-passed* (+ *tests-passed* 1))
+        (display "PASS: ")
+        (display name)
+        (newline))
+      (do
+        (set! *tests-failed* (+ *tests-failed* 1))
+        (display "FAIL: ")
+        (display name)
+        (newline)
+        (display "  expected: ")
+        (print expected)
+        (display "  actual:   ")
+        (print actual))))
+
+;;; ========== Core definitions ==========
+
+(define first car)
+(define rest cdr)
+(define reduce fold)
+(define count length)
+
+(define (nil? x) (null? x))
+(define (seq coll) (if (null? coll) nil coll))
+(define (next coll) (let ((r (rest coll))) (if (null? r) nil r)))
+(define (second coll) (first (next coll)))
+
+(define (pos? n) (> n 0))
+(define (neg? n) (< n 0))
+(define (even? n) (= (% n 2) 0))
+(define (inc n) (+ n 1))
+(define (dec n) (- n 1))
+
+(define (some? x) (not (null? x)))
+
+(define (take n coll)
+  (if (or (<= n 0) (null? coll))
+      nil
+      (cons (first coll) (take (- n 1) (rest coll)))))
+
+(define (drop n coll)
+  (if (or (<= n 0) (null? coll))
+      coll
+      (drop (- n 1) (rest coll))))
+
+(define (take-while pred coll)
+  (if (null? coll)
+      nil
+      (if (pred (first coll))
+          (cons (first coll) (take-while pred (rest coll)))
+          nil)))
+
+(define (drop-while pred coll)
+  (if (null? coll)
+      nil
+      (if (pred (first coll))
+          (drop-while pred (rest coll))
+          coll)))
+
+(define (partition n coll)
+  (if (< (count coll) n)
+      nil
+      (cons (take n coll) (partition n (drop n coll)))))
+
+(define (partition-all n coll)
+  (if (null? coll)
+      nil
+      (cons (take n coll) (partition-all n (drop n coll)))))
+
+(define (interleave c1 c2)
+  (if (or (null? c1) (null? c2))
+      nil
+      (cons (first c1)
+            (cons (first c2)
+                  (interleave (rest c1) (rest c2))))))
+
+(define (interpose sep coll)
+  (if (or (null? coll) (null? (cdr coll)))
+      coll
+      (cons (first coll)
+            (cons sep
+                  (interpose sep (rest coll))))))
+
+(define (member x coll)
+  (if (null? coll)
+      nil
+      (if (= x (first coll))
+          t
+          (member x (rest coll)))))
+
+(define (distinct coll)
+  (define (step xs seen)
+    (if (null? xs)
+        nil
+        (let ((x (first xs)))
+          (if (member x seen)
+              (step (rest xs) seen)
+              (cons x (step (rest xs) (cons x seen)))))))
+  (step coll nil))
+
+(define (flatten coll)
+  (if (null? coll)
+      nil
+      (if (pair? (first coll))
+          (append (flatten (first coll)) (flatten (rest coll)))
+          (cons (first coll) (flatten (rest coll))))))
+
+(define (my-concat . colls)
+  (if (null? colls)
+      nil
+      (if (null? (cdr colls))
+          (car colls)
+          (append (car colls) (apply my-concat (cdr colls))))))
+
+(define (some pred coll)
+  (if (null? coll)
+      nil
+      (if (pred (first coll))
+          t
+          (some pred (rest coll)))))
+
+(define (every? pred coll)
+  (if (null? coll)
+      t
+      (if (pred (first coll))
+          (every? pred (rest coll))
+          nil)))
+
+(define (group-by f coll)
+  (define (add-to-group groups key val)
+    (if (null? groups)
+        (list (cons key (list val)))
+        (if (= key (car (car groups)))
+            (cons (cons key (append (cdr (car groups)) (list val)))
+                  (cdr groups))
+            (cons (car groups) (add-to-group (cdr groups) key val)))))
+  (reduce (lambda (groups x) (add-to-group groups (f x) x)) nil coll))
+
+(define (frequencies coll)
+  (define (inc-count counts x)
+    (if (null? counts)
+        (list (cons x 1))
+        (if (= x (car (car counts)))
+            (cons (cons x (+ 1 (cdr (car counts)))) (cdr counts))
+            (cons (car counts) (inc-count (cdr counts) x)))))
+  (reduce inc-count nil coll))
+
+(define (range-step start end step)
+  (if (if (pos? step) (>= start end) (<= start end))
+      nil
+      (cons start (range-step (+ start step) end step))))
+
+(define (range . args)
+  (if (null? args)
+      nil
+      (if (null? (cdr args))
+          (range-step 0 (car args) 1)
+          (if (null? (cdr (cdr args)))
+              (range-step (car args) (car (cdr args)) 1)
+              (range-step (car args) (car (cdr args)) (car (cdr (cdr args))))))))
+
+(define (repeat n x)
+  (if (<= n 0) nil (cons x (repeat (- n 1) x))))
+
+(define (iterate n f x)
+  (if (<= n 0) nil (cons x (iterate (- n 1) f (f x)))))
+
+;;; ========== TESTS ==========
+
+(display "=== Violet Tests ===")
+(newline)
+(newline)
+
+;;; take tests
+(display "-- take --")
+(newline)
+(assert-equal "take 1" (quote (1)) (take 1 (quote (1 2 3 4 5))))
+(assert-equal "take 3" (quote (1 2 3)) (take 3 (quote (1 2 3 4 5))))
+(assert-equal "take 5" (quote (1 2 3 4 5)) (take 5 (quote (1 2 3 4 5))))
+(assert-equal "take 9 (overflow)" (quote (1 2 3 4 5)) (take 9 (quote (1 2 3 4 5))))
+(assert-equal "take 0" nil (take 0 (quote (1 2 3 4 5))))
+(assert-equal "take -1" nil (take -1 (quote (1 2 3 4 5))))
+
+;;; drop tests
+(display "-- drop --")
+(newline)
+(assert-equal "drop 1" (quote (2 3 4 5)) (drop 1 (quote (1 2 3 4 5))))
+(assert-equal "drop 3" (quote (4 5)) (drop 3 (quote (1 2 3 4 5))))
+(assert-equal "drop 5" nil (drop 5 (quote (1 2 3 4 5))))
+(assert-equal "drop 9 (overflow)" nil (drop 9 (quote (1 2 3 4 5))))
+(assert-equal "drop 0" (quote (1 2 3 4 5)) (drop 0 (quote (1 2 3 4 5))))
+
+;;; take-while tests
+(display "-- take-while --")
+(newline)
+(assert-equal "take-while empty" nil (take-while pos? nil))
+(assert-equal "take-while all pass" (quote (1 2 3 4)) (take-while pos? (quote (1 2 3 4))))
+(assert-equal "take-while partial" (quote (1 2 3)) (take-while pos? (quote (1 2 3 -1))))
+(assert-equal "take-while none pass" nil (take-while pos? (quote (-1 1 2 3))))
+
+;;; drop-while tests
+(display "-- drop-while --")
+(newline)
+(assert-equal "drop-while empty" nil (drop-while pos? nil))
+(assert-equal "drop-while all pass" nil (drop-while pos? (quote (1 2 3 4))))
+(assert-equal "drop-while partial" (quote (-1)) (drop-while pos? (quote (1 2 3 -1))))
+(assert-equal "drop-while mid" (quote (-1 2 3)) (drop-while pos? (quote (1 -1 2 3))))
+
+;;; partition tests
+(display "-- partition --")
+(newline)
+(assert-equal "partition incomplete" (quote ((1 2))) (partition 2 (quote (1 2 3))))
+(assert-equal "partition exact" (quote ((1 2) (3 4))) (partition 2 (quote (1 2 3 4))))
+(assert-equal "partition empty" nil (partition 2 nil))
+
+;;; partition-all tests
+(display "-- partition-all --")
+(newline)
+(assert-equal "partition-all" (quote ((1 2 3 4) (5 6 7 8) (9))) (partition-all 4 (quote (1 2 3 4 5 6 7 8 9))))
+
+;;; interleave tests
+(display "-- interleave --")
+(newline)
+(assert-equal "interleave equal" (quote (1 3 2 4)) (interleave (quote (1 2)) (quote (3 4))))
+(assert-equal "interleave unequal" (quote (1 3)) (interleave (quote (1)) (quote (3 4))))
+(assert-equal "interleave empty" nil (interleave nil (quote (3 4))))
+
+;;; interpose tests
+(display "-- interpose --")
+(newline)
+(assert-equal "interpose empty" nil (interpose 0 nil))
+(assert-equal "interpose single" (quote (1)) (interpose 0 (quote (1))))
+(assert-equal "interpose two" (quote (1 0 2)) (interpose 0 (quote (1 2))))
+(assert-equal "interpose three" (quote (1 0 2 0 3)) (interpose 0 (quote (1 2 3))))
+
+;;; distinct tests
+(display "-- distinct --")
+(newline)
+(assert-equal "distinct no dups" (quote (1 2 3)) (distinct (quote (1 2 3))))
+(assert-equal "distinct with dups" (quote (1 2 3)) (distinct (quote (1 2 3 1 1 1))))
+(assert-equal "distinct many dups" (quote (1 2 3)) (distinct (quote (1 2 3 1 2 2 1 1))))
+
+;;; flatten tests
+(display "-- flatten --")
+(newline)
+(assert-equal "flatten nil" nil (flatten nil))
+(assert-equal "flatten nested" (quote (1 2 3 4 5)) (flatten (quote ((1 2) (3 4 (5))))))
+(assert-equal "flatten flat" (quote (1 2 3 4 5)) (flatten (quote (1 2 3 4 5))))
+
+;;; concat tests
+(display "-- concat --")
+(newline)
+(assert-equal "concat empty" nil (my-concat))
+(assert-equal "concat two" (quote (1 2 3 4)) (my-concat (quote (1 2)) (quote (3 4))))
+(assert-equal "concat three" (quote (1 2 3 4 5 6)) (my-concat (quote (1 2)) (quote (3 4)) (quote (5 6))))
+
+;;; some tests
+(display "-- some --")
+(newline)
+(assert-equal "some found" t (some pos? (quote (1))))
+(assert-equal "some not found" nil (some pos? (quote (-1))))
+(assert-equal "some partial" t (some pos? (quote (-1 2))))
+
+;;; every? tests
+(display "-- every? --")
+(newline)
+(assert-equal "every? single true" t (every? pos? (quote (1))))
+(assert-equal "every? all true" t (every? pos? (quote (1 2 3 4 5))))
+(assert-equal "every? single false" nil (every? pos? (quote (-1))))
+(assert-equal "every? partial false" nil (every? pos? (quote (1 -2))))
+
+;;; range tests
+(display "-- range --")
+(newline)
+(assert-equal "range 0" nil (range 0))
+(assert-equal "range 1" (quote (0)) (range 1))
+(assert-equal "range 5" (quote (0 1 2 3 4)) (range 5))
+(assert-equal "range 0 3" (quote (0 1 2)) (range 0 3))
+(assert-equal "range 3 9 2" (quote (3 5 7)) (range 3 9 2))
+(assert-equal "range neg step" (quote (10 8 6 4 2)) (range 10 0 -2))
+
+;;; repeat tests
+(display "-- repeat --")
+(newline)
+(assert-equal "repeat 0" nil (repeat 0 7))
+(assert-equal "repeat 5" (quote (7 7 7 7 7)) (repeat 5 7))
+
+;;; iterate tests
+(display "-- iterate --")
+(newline)
+(assert-equal "iterate 1" (quote (0)) (iterate 1 inc 0))
+(assert-equal "iterate 5" (quote (0 1 2 3 4)) (iterate 5 inc 0))
+
+;;; ========== Summary ==========
+(newline)
+(display "=== Summary ===")
+(newline)
+(display "Passed: ")
+(display *tests-passed*)
+(display " / ")
+(display *tests-run*)
+(newline)
+(if (= *tests-failed* 0)
+    (display "All tests passed!")
+    (do (display "Failed: ") (display *tests-failed*)))
+(newline)

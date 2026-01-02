@@ -1,0 +1,32 @@
+;;; Simple Violet program - core operations only
+
+;;; Recursive factorial
+(define (factorial n)
+  (if (<= n 1)
+      1
+      (* n (factorial (- n 1)))))
+
+;;; Recursive fibonacci
+(define (fib n)
+  (if (<= n 1)
+      n
+      (+ (fib (- n 1)) (fib (- n 2)))))
+
+;;; Sum of list using fold
+(define (sum-list xs)
+  (fold + 0 xs))
+
+;;; Map square over list
+(define (square x) (* x x))
+
+;;; Range function
+(define (range-helper start end acc)
+  (if (>= start end)
+      acc
+      (range-helper start (- end 1) (cons (- end 1) acc))))
+
+(define (my-range n)
+  (range-helper 0 n nil))
+
+;;; Main computations - return values
+(factorial 10)

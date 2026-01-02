@@ -1,0 +1,267 @@
+;;; Violet Multimethods - Polymorphic dispatch based on arbitrary functions
+;;;
+;;; Implemented entirely in Purple - no core language modifications.
+;;; Uses atoms for mutable dispatch tables.
+
+;;; ============================================================
+;;; Multimethod Infrastructure
+;;; ============================================================
+
+;;; A multimethod is represented as:
+;;; { :dispatch-fn  <function>
+;;;   :methods      <atom of alist ((dispatch-val . method-fn) ...)>
+;;;   :default      <atom of default-fn or nil> }
+
+(define (make-multimethod dispatch-fn)
+  "Create a new multimethod with the given dispatch function"
+  (let ((methods (atom nil))
+        (default-method (atom nil)))
+    (lambda (op . args)
+      (cond
+        ((eq? op ':add-method)
+         ;; (mm :add-method dispatch-val method-fn)
+         (let ((dispatch-val (car args))
+               (method-fn (car (cdr args))))
+           (swap! methods (lambda (m) (cons (cons dispatch-val method-fn) m)))))
+
+        ((eq? op ':get-method)
+         ;; (mm :get-method dispatch-val)
+         (let ((dispatch-val (car args)))
+           (assoc-get dispatch-val (deref methods))))
+
+        ((eq? op ':set-default)
+         ;; (mm :set-default method-fn)
+         (reset! default-method (car args)))
+
+        ((eq? op ':dispatch-fn)
+         dispatch-fn)
+
+        ((eq? op ':call)
+         ;; (mm :call arg1 arg2 ...)
+         ;; This is the actual multimethod invocation
+         (let ((dispatch-val (apply dispatch-fn args))
+               (method (assoc-get dispatch-val (deref methods))))
+           (if method
+               (apply method args)
+               (let ((dflt (deref default-method)))
+                 (if dflt
+                     (apply dflt args)
+                     (error (string-append "No method for dispatch value: "
+                                          (to-string dispatch-val))))))))
+
+        (t
+         ;; Default: treat as :call
+         (let ((all-args (cons op args)))
+           (let ((dispatch-val (apply dispatch-fn all-args))
+                 (method (assoc-get dispatch-val (deref methods))))
+             (if method
+                 (apply method all-args)
+                 (let ((dflt (deref default-method)))
+                   (if dflt
+                       (apply dflt all-args)
+                       (error (string-append "No method for dispatch value: "
+                                            (to-string dispatch-val)))))))))))))
+
+;;; ============================================================
+;;; Helper Functions
+;;; ============================================================
+
+(define (assoc-get key alist)
+  "Get value associated with key in alist, or nil"
+  (if (null? alist)
+      nil
+      (if (equal? key (car (car alist)))
+          (cdr (car alist))
+          (assoc-get key (cdr alist)))))
+
+(define (to-string x)
+  "Convert x to string representation"
+  (cond
+    ((null? x) "nil")
+    ((number? x) (number->string x))
+    ((symbol? x) (symbol->string x))
+    ((string? x) x)
+    ((pair? x) (string-append "(" (to-string (car x)) " . " (to-string (cdr x)) ")"))
+    (t "<unknown>")))
+
+;;; ============================================================
+;;; Multimethod Macros (to be expanded by preprocessor)
+;;; ============================================================
+
+;;; These are the forms users write. The preprocessor transforms them
+;;; into calls to make-multimethod and method registration.
+
+;;; (defmulti name dispatch-fn)
+;;; Expands to:
+;;; (define name (make-multimethod dispatch-fn))
+
+;;; (defmethod name dispatch-val [params] body)
+;;; Expands to:
+;;; (name :add-method dispatch-val (lambda params body))
+
+;;; ============================================================
+;;; Convenience Dispatch Functions
+;;; ============================================================
+
+(define (dispatch-on-type x)
+  "Dispatch function that returns the type of x"
+  (cond
+    ((null? x) ':nil)
+    ((number? x) ':number)
+    ((symbol? x) ':symbol)
+    ((string? x) ':string)
+    ((pair? x) ':list)
+    ((vector? x) ':vector)
+    ((map? x) ':map)
+    (t ':unknown)))
+
+(define (dispatch-on-first-type args)
+  "Dispatch on type of first argument"
+  (if (null? args)
+      ':nil
+      (dispatch-on-type (car args))))
+
+(define (dispatch-on-count x)
+  "Dispatch on count/length of collection"
+  (cond
+    ((null? x) 0)
+    ((pair? x) (length x))
+    ((vector? x) (vector-length x))
+    ((string? x) (string-length x))
+    (t 0)))
+
+;;; ============================================================
+;;; Keyword-based dispatch (common Clojure pattern)
+;;; ============================================================
+
+(define (dispatch-on-key key)
+  "Create dispatch function that extracts a key from a map argument"
+  (lambda (m)
+    (if (map? m)
+        (map-get m key)
+        (if (pair? m)
+            (assoc-get key m)
+            nil))))
+
+;;; ============================================================
+;;; Example Usage (in comments)
+;;; ============================================================
+
+;;; ;; Define a multimethod that dispatches on :type key
+;;; (defmulti process-shape (dispatch-on-key :type))
+;;;
+;;; ;; Add methods for different dispatch values
+;;; (defmethod process-shape :circle [shape]
+;;;   (let ((r (map-get shape :radius)))
+;;;     (* 3.14159 r r)))
+;;;
+;;; (defmethod process-shape :rectangle [shape]
+;;;   (* (map-get shape :width) (map-get shape :height)))
+;;;
+;;; (defmethod process-shape :default [shape]
+;;;   (error "Unknown shape type"))
+;;;
+;;; ;; Use it
+;;; (process-shape {:type :circle :radius 5})  ; => 78.54
+
+;;; ============================================================
+;;; Hierarchies (for isa? relationships)
+;;; ============================================================
+
+;;; Clojure supports hierarchies for multimethod dispatch.
+;;; We implement a simple version.
+
+(define (make-hierarchy)
+  "Create a new hierarchy"
+  (atom nil))  ; alist of (child . parents)
+
+(define (derive! hierarchy child parent)
+  "Add parent relationship to hierarchy"
+  (swap! hierarchy
+         (lambda (h)
+           (let ((existing (assoc-get child h)))
+             (if existing
+                 (cons (cons child (cons parent existing))
+                       (remove-key child h))
+                 (cons (cons child (list parent)) h))))))
+
+(define (remove-key key alist)
+  (filter (lambda (pair) (not (equal? key (car pair)))) alist))
+
+(define (parents hierarchy child)
+  "Get immediate parents of child in hierarchy"
+  (assoc-get child (deref hierarchy)))
+
+(define (ancestors hierarchy child)
+  "Get all ancestors of child in hierarchy"
+  (let ((ps (parents hierarchy child)))
+    (if (null? ps)
+        nil
+        (append ps (apply append (map (lambda (p) (ancestors hierarchy p)) ps))))))
+
+(define (isa? hierarchy child parent)
+  "Check if child isa parent in hierarchy"
+  (or (equal? child parent)
+      (contains? parent (ancestors hierarchy child))))
+
+(define (contains? x lst)
+  (if (null? lst) nil
+      (if (equal? x (car lst)) t
+          (contains? x (cdr lst)))))
+
+;;; ============================================================
+;;; Multimethod with Hierarchy Support
+;;; ============================================================
+
+(define (make-multimethod-h dispatch-fn hierarchy)
+  "Create multimethod with hierarchy-aware dispatch"
+  (let ((methods (atom nil))
+        (default-method (atom nil)))
+    (lambda (op . args)
+      (cond
+        ((eq? op ':add-method)
+         (let ((dispatch-val (car args))
+               (method-fn (car (cdr args))))
+           (swap! methods (lambda (m) (cons (cons dispatch-val method-fn) m)))))
+
+        ((eq? op ':set-default)
+         (reset! default-method (car args)))
+
+        (t
+         ;; Dispatch with hierarchy awareness
+         (let ((all-args (if (eq? op ':call) args (cons op args))))
+           (let ((dispatch-val (apply dispatch-fn all-args))
+                 (method-table (deref methods)))
+             ;; Try exact match first
+             (let ((method (assoc-get dispatch-val method-table)))
+               (if method
+                   (apply method all-args)
+                   ;; Try ancestors
+                   (let ((anc (ancestors hierarchy dispatch-val)))
+                     (let ((ancestor-method (find-first-method anc method-table)))
+                       (if ancestor-method
+                           (apply ancestor-method all-args)
+                           (let ((dflt (deref default-method)))
+                             (if dflt
+                                 (apply dflt all-args)
+                                 (error (string-append "No method for: "
+                                                      (to-string dispatch-val)))))))))))))))))
+
+(define (find-first-method ancestors method-table)
+  "Find first method in method-table matching any ancestor"
+  (if (null? ancestors)
+      nil
+      (let ((method (assoc-get (car ancestors) method-table)))
+        (if method
+            method
+            (find-first-method (cdr ancestors) method-table)))))
+
+;;; ============================================================
+;;; Prefer Method (for ambiguous hierarchies)
+;;; ============================================================
+
+(define (prefer-method! mm dispatch-val-x dispatch-val-y)
+  "Prefer dispatch-val-x over dispatch-val-y when both match"
+  ;; This would require storing preferences in the multimethod
+  ;; Simplified: just document that order in methods list determines preference
+  nil)

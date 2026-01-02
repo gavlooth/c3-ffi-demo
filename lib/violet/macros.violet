@@ -1,0 +1,414 @@
+;;; Violet Macros - Clojure-style macros for Violet
+;;;
+;;; These macros are expanded by the preprocessor before evaluation.
+;;; They transform Clojure-style syntax to Purple primitives.
+;;;
+;;; NOTE: These are defined as transformation rules for the preprocessor,
+;;; not as runtime functions.
+
+;;; ============================================================
+;;; Control Flow Macros
+;;; ============================================================
+
+;;; when - (when test body...) => (if test (do body...) nil)
+;;; Preprocessor transforms this automatically
+
+;;; when-not - (when-not test body...) => (if test nil (do body...))
+
+;;; when-let - (when-let [x expr] body...) => (let [x expr] (when x body...))
+
+;;; when-some - (when-some [x expr] body...) => (let [x expr] (when (some? x) body...))
+
+;;; when-first - (when-first [x coll] body...) => (when-let [xs (seq coll)] (let [x (first xs)] body...))
+
+;;; if-let - (if-let [x expr] then else) => (let [x expr] (if x then else))
+
+;;; if-some - (if-some [x expr] then else) => (let [x expr] (if (some? x) then else))
+
+;;; if-not - (if-not test then else) => (if test else then)
+(define (if-not test then else)
+  (if test else then))
+
+;;; ============================================================
+;;; Cond Variants
+;;; ============================================================
+
+;;; cond - (cond c1 e1 c2 e2 ... :else eN) => nested ifs
+;;; Preprocessor transforms this
+
+;;; condp - (condp pred expr c1 e1 c2 e2 ...) => (cond (pred c1 expr) e1 ...)
+;;; This is a macro that expands to cond with (pred clause-val expr) tests
+
+;;; case - (case expr c1 e1 c2 e2 default) => (cond (= expr c1) e1 ...)
+;;; Similar to condp but uses = for comparison
+
+;;; ============================================================
+;;; Threading Macros (Transformed by Preprocessor)
+;;; ============================================================
+
+;;; -> thread-first
+;;; (-> x (f a) (g b)) => (g (f x a) b)
+;;; x is inserted as first argument to each form
+
+;;; ->> thread-last
+;;; (->> x (f a) (g b)) => (g a (f b x))
+;;; x is inserted as last argument to each form
+
+;;; as-> named threading
+;;; (as-> x name (f name a) (g b name)) => (let [name x] (let [name (f name a)] (g b name)))
+;;; Explicit naming of the threaded value
+
+;;; cond-> conditional threading
+;;; (cond-> x c1 (f a) c2 (g b)) => (-> x (when c1 (f a)) (when c2 (g b)))
+;;; Only threads through forms whose conditions are true
+
+;;; cond->> conditional thread-last
+;;; Same as cond-> but inserts at end
+
+;;; some-> nil-safe threading
+;;; (some-> x (f a) (g b)) => thread-first but short-circuits on nil
+
+;;; some->> nil-safe thread-last
+;;; Same as some-> but inserts at end
+
+;;; ============================================================
+;;; Definition Macros
+;;; ============================================================
+
+;;; defn - (defn name [params] body) => (define name (lambda params body))
+;;; With docstring: (defn name "doc" [params] body)
+;;; With metadata: (defn ^:private name [params] body)
+
+;;; defn- - (defn- name [params] body) => private defn
+;;; Just a naming convention in Violet (no actual visibility)
+
+;;; def - (def name value) => (define name value)
+;;; (def name "doc" value) => with docstring
+
+;;; defonce - (defonce name value) => only define if not already defined
+(define (defonce-impl name value env)
+  ;; Would check if name is bound in env
+  ;; For now, just define
+  value)
+
+;;; defmacro - Define a macro (for the preprocessor)
+;;; (defmacro name [params] body)
+;;; The body should return the transformed code
+
+;;; ============================================================
+;;; Let Variants
+;;; ============================================================
+
+;;; let - (let [bindings] body) => transformed with destructuring support
+
+;;; letfn - (letfn [(f [x] body1) (g [y] body2)] expr)
+;;; Mutual recursion - transforms to letrec
+(define (letfn-transform fns body)
+  ;; Transform to letrec with lambdas
+  (let ((bindings (map (lambda (fn-def)
+                         (let ((name (car fn-def))
+                               (params (car (cdr fn-def)))
+                               (fn-body (car (cdr (cdr fn-def)))))
+                           (list name (list 'lambda params fn-body))))
+                       fns)))
+    (list 'letrec bindings body)))
+
+;;; binding - Dynamic binding (would need special support)
+;;; For now, just regular let
+(define binding let)
+
+;;; ============================================================
+;;; Loop/Recur
+;;; ============================================================
+
+;;; loop - (loop [bindings] body) => named let with recur support
+;;; recur - (recur args) => tail-recursive call back to loop
+
+;;; The preprocessor transforms loop/recur to a self-calling lambda:
+;;; (loop [x 0 y 1] (if (zero? x) y (recur (dec x) (+ x y))))
+;;; =>
+;;; ((lambda self (x y) (if (zero? x) y (self (dec x) (+ x y)))) 0 1)
+
+(define (transform-loop bindings body)
+  "Transform loop to recursive lambda"
+  (let ((vars (take-every 2 bindings 0))
+        (inits (take-every 2 bindings 1)))
+    (let ((lam (list 'lambda 'self vars (replace-recur 'self body))))
+      (cons lam inits))))
+
+(define (take-every n lst offset)
+  "Take every nth element starting at offset"
+  (if (null? lst)
+      nil
+      (if (< (length lst) (+ offset 1))
+          nil
+          (cons (nth offset lst)
+                (take-every n (drop n lst) offset)))))
+
+(define (replace-recur self-name expr)
+  "Replace (recur ...) with (self-name ...)"
+  (if (not (pair? expr))
+      expr
+      (if (eq? (car expr) 'recur)
+          (cons self-name (map (lambda (e) (replace-recur self-name e)) (cdr expr)))
+          (map (lambda (e) (replace-recur self-name e)) expr))))
+
+;;; ============================================================
+;;; Exception Handling
+;;; ============================================================
+
+;;; try/catch/finally
+;;; (try expr (catch ExType e handler) (finally cleanup))
+;;; Transforms to Purple's error handling
+
+;;; throw - (throw ex) => (error ex)
+(define throw error)
+
+;;; ============================================================
+;;; Assertion/Testing Macros
+;;; ============================================================
+
+;;; assert - (assert test) => (when-not test (throw (str "Assert failed: " 'test)))
+(define (assert test)
+  (if (not test)
+      (error "Assertion failed")
+      nil))
+
+;;; assert - with message
+(define (assert-msg test msg)
+  (if (not test)
+      (error msg)
+      nil))
+
+;;; ============================================================
+;;; Lazy Sequence Macros
+;;; ============================================================
+
+;;; lazy-seq - (lazy-seq body) => (lazy-seq (lambda () body))
+;;; Already defined in core.violet
+
+;;; delay - (delay expr) => create a delay object
+(define (delay-fn thunk)
+  (let ((realized (atom nil))
+        (value (atom nil)))
+    (lambda ()
+      (if (deref realized)
+          (deref value)
+          (let ((v (thunk)))
+            (reset! value v)
+            (reset! realized t)
+            v)))))
+
+;;; force - force a delay
+(define (force d)
+  (d))
+
+;;; ============================================================
+;;; Destructuring (Preprocessor Handles This)
+;;; ============================================================
+
+;;; Sequential destructuring:
+;;; [a b c] => bind a, b, c to first 3 elements
+;;; [a b & rest] => bind a, b, and rest to remaining
+;;; [a _ c] => skip second element
+;;; [a :as all] => bind a to first, all to entire seq
+
+;;; Map destructuring:
+;;; {a :a b :b} => bind a to (:a m), b to (:b m)
+;;; {a :a :or {a default}} => with default
+;;; {:keys [a b]} => bind a to (:a m), b to (:b m)
+;;; {:strs [a b]} => bind a to ("a" m), b to ("b" m)
+;;; {:syms [a b]} => bind a to ('a m), b to ('b m)
+;;; {x :x :as m} => bind x and also m to whole map
+
+;;; ============================================================
+;;; For/Doseq Comprehensions
+;;; ============================================================
+
+;;; for - list comprehension
+;;; (for [x xs y ys :when (pred x y)] (f x y))
+;;; Expands to nested mapcat with filter
+
+(define (for-transform bindings body)
+  "Transform for comprehension to mapcat/filter"
+  (define (process-bindings bs)
+    (if (null? bs)
+        (list 'list body)
+        (let ((b (car bs))
+              (rest-bs (cdr bs)))
+          (cond
+            ((eq? b ':when)
+             (list 'if (car rest-bs)
+                   (process-bindings (cdr rest-bs))
+                   nil))
+            ((eq? b ':let)
+             (list 'let (car rest-bs)
+                   (process-bindings (cdr rest-bs))))
+            ((eq? b ':while)
+             (list 'if (car rest-bs)
+                   (process-bindings (cdr rest-bs))
+                   nil))
+            (t
+             (let ((var b)
+                   (coll (car rest-bs)))
+               (list 'mapcat
+                     (list 'lambda (list var) (process-bindings (cdr rest-bs)))
+                     coll)))))))
+  (process-bindings bindings))
+
+;;; doseq - like for but for side effects, returns nil
+;;; (doseq [x xs] (println x))
+
+(define (doseq-transform bindings body)
+  "Transform doseq to run!"
+  (define (process-bindings bs)
+    (if (null? bs)
+        body
+        (let ((b (car bs))
+              (rest-bs (cdr bs)))
+          (cond
+            ((eq? b ':when)
+             (list 'when (car rest-bs)
+                   (process-bindings (cdr rest-bs))))
+            ((eq? b ':let)
+             (list 'let (car rest-bs)
+                   (process-bindings (cdr rest-bs))))
+            (t
+             (let ((var b)
+                   (coll (car rest-bs)))
+               (list 'run!
+                     (list 'lambda (list var) (process-bindings (cdr rest-bs)))
+                     coll)))))))
+  (list 'do (process-bindings bindings) nil))
+
+;;; ============================================================
+;;; Dotimes
+;;; ============================================================
+
+;;; dotimes - (dotimes [i n] body) => iterate i from 0 to n-1
+(define (dotimes-transform var-n body)
+  (let ((var (car var-n))
+        (n (car (cdr var-n))))
+    (list 'run! (list 'lambda (list var) body) (list 'range n))))
+
+;;; ============================================================
+;;; Comment Macro
+;;; ============================================================
+
+;;; comment - (comment ...) => nil
+;;; Ignores all forms inside
+(define (comment . forms) nil)
+
+;;; ============================================================
+;;; Declare
+;;; ============================================================
+
+;;; declare - forward declaration
+;;; (declare f g h) => (define f nil) (define g nil) (define h nil)
+;;; Allows mutual recursion without forward reference errors
+
+;;; ============================================================
+;;; Import/Require (simplified)
+;;; ============================================================
+
+;;; require - (require '[violet.core :as v])
+;;; In Violet, this just loads the file
+
+;;; use - (use 'violet.core)
+;;; Load and import all public symbols
+
+;;; import - Not applicable (Java-specific)
+
+;;; ============================================================
+;;; ns - Namespace declaration (simplified)
+;;; ============================================================
+
+;;; (ns my.namespace
+;;;   (:require [violet.core :as v])
+;;;   (:use [violet.string]))
+;;;
+;;; In Violet, namespaces are simpler - just prefixes
+
+(define (ns-transform name clauses)
+  "Transform ns declaration to loads"
+  (let ((requires (filter (lambda (c) (eq? (car c) ':require)) clauses))
+        (uses (filter (lambda (c) (eq? (car c) ':use)) clauses)))
+    ;; Would generate load statements
+    nil))
+
+;;; ============================================================
+;;; Metadata Macros
+;;; ============================================================
+
+;;; ^:private, ^:dynamic, ^:const - metadata annotations
+;;; These are processed by the preprocessor
+
+;;; with-meta - attach metadata
+(define (with-meta obj m)
+  ;; In Violet, we could attach as a property
+  ;; For now, return the object unchanged
+  obj)
+
+;;; meta - get metadata
+(define (meta obj)
+  nil)  ; Placeholder
+
+;;; vary-meta - update metadata
+(define (vary-meta obj f . args)
+  obj)  ; Placeholder
+
+;;; ============================================================
+;;; Polymorphism Macros
+;;; ============================================================
+
+;;; defmulti - (defmulti name dispatch-fn)
+;;; Creates a multimethod (see multimethods.violet)
+
+;;; defmethod - (defmethod name dispatch-val [params] body)
+;;; Adds a method to a multimethod
+
+;;; defprotocol - (defprotocol Name (method [params] "doc") ...)
+;;; Defines a protocol (see protocols.violet)
+
+;;; extend-protocol - extend protocol to types
+;;; extend-type - extend type to implement protocols
+
+;;; reify - NOT IMPLEMENTED (Java-specific)
+;;; proxy - NOT IMPLEMENTED (Java-specific)
+
+;;; ============================================================
+;;; Misc Macros
+;;; ============================================================
+
+;;; time - (time expr) => print time and return value
+(define (time-macro expr-thunk)
+  ;; Would need timing support
+  (expr-thunk))
+
+;;; dotimes - iterate n times
+;;; Already covered above
+
+;;; while - (while test body)
+(define (while-impl test body-fn)
+  (if (test)
+      (do (body-fn) (while-impl test body-fn))
+      nil))
+
+;;; locking - (locking x body) => synchronized on x
+;;; For concurrent access - maps to Purple's mutex
+(define (locking-impl lock body-fn)
+  ;; Would need mutex support
+  (body-fn))
+
+;;; io! - marks code as having side effects
+(define (io! . body)
+  (last body))
+
+;;; ============================================================
+;;; Deprecated - Left for reference
+;;; ============================================================
+
+;;; These exist in Clojure but are deprecated or superseded:
+;;; - dosync (refs/STM - we use atoms instead)
+;;; - sync (replaced by locking)
+;;; - send, send-off (agents - could implement with channels)
