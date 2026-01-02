@@ -1011,6 +1011,72 @@ func PrimIsThread(args, menv *ast.Value) *ast.Value {
 	return ast.Nil
 }
 
+// PrimThread implements thread primitive - spawns an OS thread
+// Note: Since thread is a primitive, its argument is already evaluated
+// If it's a lambda/thunk, we apply it; otherwise we use the value directly
+func PrimThread(args, menv *ast.Value) *ast.Value {
+	val := getOneArg(args)
+	if val == nil {
+		return ast.NewError("thread: requires an argument")
+	}
+	t := ast.NewThread()
+	go func() {
+		var result *ast.Value
+		// If it's a callable (lambda, prim, etc), apply it
+		if ast.IsLambda(val) || ast.IsRecLambda(val) || ast.IsPrim(val) {
+			result = applyPrimFn(val, ast.Nil, menv)
+		} else {
+			// Otherwise use the evaluated value directly
+			result = val
+		}
+		// Store result and signal done
+		t.ThreadResult = result
+		t.ThreadDone <- result
+	}()
+	return t
+}
+
+// PrimThreadJoin implements thread-join primitive - waits for thread to complete
+func PrimThreadJoin(args, menv *ast.Value) *ast.Value {
+	t := getOneArg(args)
+	if t == nil || !ast.IsThread(t) {
+		return ast.NewError("thread-join: requires a thread")
+	}
+	// Wait for thread to complete
+	result := <-t.ThreadDone
+	// Put result back in case join is called again
+	t.ThreadDone <- result
+	return result
+}
+
+// PrimGo implements go primitive - spawns a green thread
+func PrimGo(args, menv *ast.Value) *ast.Value {
+	thunk := getOneArg(args)
+	if thunk == nil {
+		return ast.NewError("go: requires a thunk")
+	}
+	// Add thunk to green scheduler
+	sched := GetGreenScheduler()
+	sched.Spawn(func() {
+		applyPrimFn(thunk, ast.Nil, menv)
+	})
+	// Return nil/unit immediately (async spawn)
+	return ast.Nil
+}
+
+// PrimChan implements chan primitive - creates a green channel
+func PrimChan(args, menv *ast.Value) *ast.Value {
+	capacity := 0
+	if args != nil && !ast.IsNil(args) {
+		first := args.Car
+		if first != nil && ast.IsInt(first) {
+			capacity = int(first.Int)
+		}
+	}
+	ch := NewGreenChannel(capacity)
+	return ast.NewGreenChan(ch)
+}
+
 // PrimIsAtom implements atom? primitive
 func PrimIsAtom(args, menv *ast.Value) *ast.Value {
 	a := getOneArg(args)
@@ -1018,6 +1084,58 @@ func PrimIsAtom(args, menv *ast.Value) *ast.Value {
 		return SymT
 	}
 	return ast.Nil
+}
+
+// PrimAtom implements atom primitive - creates an atomic reference
+func PrimAtom(args, menv *ast.Value) *ast.Value {
+	a := getOneArg(args)
+	if a == nil {
+		a = ast.Nil
+	}
+	return ast.NewAtom(a)
+}
+
+// PrimDeref implements deref primitive - reads the value from an atom
+func PrimDeref(args, menv *ast.Value) *ast.Value {
+	a := getOneArg(args)
+	if a == nil || !ast.IsAtom(a) {
+		return ast.NewError("deref: expected atom")
+	}
+	return a.AtomValue
+}
+
+// PrimReset implements reset! primitive - sets the value in an atom
+func PrimReset(args, menv *ast.Value) *ast.Value {
+	atom, val, ok := getTwoArgs(args)
+	if !ok {
+		return ast.NewError("reset!: expected 2 arguments")
+	}
+	if !ast.IsAtom(atom) {
+		return ast.NewError("reset!: first argument must be an atom")
+	}
+	atom.AtomValue = val
+	return val
+}
+
+// PrimSwap implements swap! primitive - atomically updates the atom with a function
+func PrimSwap(args, menv *ast.Value) *ast.Value {
+	if args == nil || !ast.IsCell(args) {
+		return ast.NewError("swap!: expected at least 2 arguments")
+	}
+	atom := args.Car
+	if !ast.IsAtom(atom) {
+		return ast.NewError("swap!: first argument must be an atom")
+	}
+	fn := args.Cdr.Car
+	// Build argument list: current-value
+	argList := ast.List1(atom.AtomValue)
+	// Apply the function
+	result := applyPrimFn(fn, argList, menv)
+	if ast.IsError(result) {
+		return result
+	}
+	atom.AtomValue = result
+	return result
 }
 
 // PrimIsGreenChan implements green-chan? primitive
@@ -1282,6 +1400,17 @@ func DefaultEnv() *ast.Value {
 	env = EnvExtend(env, ast.NewSym("thread?"), ast.NewPrim(PrimIsThread))
 	env = EnvExtend(env, ast.NewSym("atom?"), ast.NewPrim(PrimIsAtom))
 	env = EnvExtend(env, ast.NewSym("green-chan?"), ast.NewPrim(PrimIsGreenChan))
+	// Atom operations
+	env = EnvExtend(env, ast.NewSym("atom"), ast.NewPrim(PrimAtom))
+	env = EnvExtend(env, ast.NewSym("deref"), ast.NewPrim(PrimDeref))
+	env = EnvExtend(env, ast.NewSym("reset!"), ast.NewPrim(PrimReset))
+	env = EnvExtend(env, ast.NewSym("swap!"), ast.NewPrim(PrimSwap))
+	// Thread operations
+	env = EnvExtend(env, ast.NewSym("thread"), ast.NewPrim(PrimThread))
+	env = EnvExtend(env, ast.NewSym("thread-join"), ast.NewPrim(PrimThreadJoin))
+	// Green thread operations
+	env = EnvExtend(env, ast.NewSym("go"), ast.NewPrim(PrimGo))
+	env = EnvExtend(env, ast.NewSym("chan"), ast.NewPrim(PrimChan))
 	// Introspection operations
 	env = EnvExtend(env, ast.NewSym("ctr-tag"), ast.NewPrim(PrimCtrTag))
 	env = EnvExtend(env, ast.NewSym("ctr-arg"), ast.NewPrim(PrimCtrArg))

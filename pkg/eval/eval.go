@@ -1282,7 +1282,7 @@ func evalControl(args, menv *ast.Value) *ast.Value {
 	panic(shiftEscape{proc: result, resetTag: resetTag, delimited: true})
 }
 
-// evalGo implements (go expr) - spawns a green thread
+// evalGo implements (go expr) - spawns a green thread (fire-and-forget)
 func evalGo(args, menv *ast.Value) *ast.Value {
 	if ast.IsNil(args) {
 		return ast.NewError("go: requires an expression")
@@ -1290,31 +1290,15 @@ func evalGo(args, menv *ast.Value) *ast.Value {
 
 	expr := args.Car
 
-	// Create a thunk that will evaluate the expression
-	thunk := ast.NewLambda(ast.Nil, expr, menv.Env)
-
-	// Use goroutines for true concurrency
-	result := make(chan *ast.Value, 1)
+	// Use goroutines for true concurrency (fire-and-forget)
 	go func() {
 		// Create a new menv for the goroutine
 		goMenv := ast.NewMenv(menv.Env, menv.Parent, menv.Level, menv.CopyHandlers())
-		r := Eval(expr, goMenv)
-		result <- r
+		Eval(expr, goMenv)
 	}()
 
-	// Create a process value to represent the spawned goroutine
-	proc := ast.NewProcess(thunk)
-	proc.ProcState = ProcRunning
-
-	// Store the result channel in a way we can access it
-	// For simplicity, we'll use a goroutine that waits for completion
-	go func() {
-		r := <-result
-		proc.ProcResult = r
-		proc.ProcState = ProcDone
-	}()
-
-	return proc
+	// Return nil (unit) - go is fire-and-forget like Go's goroutines
+	return ast.Nil
 }
 
 // evalSelect implements (select clauses...)
