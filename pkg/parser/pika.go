@@ -3,6 +3,8 @@ package parser
 import (
 	"fmt"
 	"purple_go/pkg/ast"
+	"strconv"
+	"strings"
 	"unicode"
 )
 
@@ -30,15 +32,16 @@ type MemoKey struct {
 	Pos  int
 }
 
-// PikaParser implements a Pika-style parser with homoiconic AST
+// PikaParser implements a Pika-style parser with OmniLisp bracket semantics
 // Key properties:
 // - Right-to-left parsing (handles left recursion)
 // - O(n) with memoization
 // - AST nodes are first-class Lisp data
+// - Supports () [] {} #{} brackets
 type PikaParser struct {
-	Input    []rune
-	Memo     map[MemoKey]PikaResult
-	RuleMap  map[string]func(int) PikaResult
+	Input   []rune
+	Memo    map[MemoKey]PikaResult
+	RuleMap map[string]func(int) PikaResult
 }
 
 // NewPikaParser creates a new Pika parser
@@ -57,11 +60,15 @@ func (p *PikaParser) initRules() {
 		"expr":       p.parseExpr,
 		"atom":       p.parseAtom,
 		"list":       p.parseList,
+		"array":      p.parseArray,
+		"typelit":    p.parseTypeLit,
+		"dict":       p.parseDict,
 		"quote":      p.parseQuote,
 		"quasiquote": p.parseQuasiquote,
 		"unquote":    p.parseUnquote,
 		"number":     p.parseNumber,
 		"symbol":     p.parseSymbol,
+		"keyword":    p.parseKeyword,
 		"string":     p.parseString,
 	}
 }
@@ -138,6 +145,12 @@ func (p *PikaParser) parseExpr(pos int) PikaResult {
 	switch ch {
 	case '(':
 		return p.memoized("list", pos)
+	case '[':
+		return p.memoized("array", pos)
+	case '{':
+		return p.memoized("typelit", pos)
+	case '#':
+		return p.parseSpecial(pos)
 	case '\'':
 		return p.memoized("quote", pos)
 	case '`':
@@ -146,8 +159,14 @@ func (p *PikaParser) parseExpr(pos int) PikaResult {
 		return p.memoized("unquote", pos)
 	case '"':
 		return p.memoized("string", pos)
-	case '#':
-		return p.parseSpecial(pos)
+	case ':':
+		return p.memoized("keyword", pos)
+	case '.':
+		// Check if it's a functional accessor .field
+		if pos+1 < len(p.Input) && p.isSymbolStart(p.Input[pos+1]) {
+			return p.parseFunctionalAccessor(pos)
+		}
+		return p.memoized("atom", pos)
 	default:
 		return p.memoized("atom", pos)
 	}
@@ -166,8 +185,8 @@ func (p *PikaParser) parseAtom(pos int) PikaResult {
 		return p.memoized("number", pos)
 	}
 
-	// Otherwise symbol
-	return p.memoized("symbol", pos)
+	// Otherwise symbol (which may have dot access)
+	return p.parseSymbolWithDotAccess(pos)
 }
 
 // parseNumber parses an integer or float
@@ -184,18 +203,31 @@ func (p *PikaParser) parseNumber(pos int) PikaResult {
 		return Failed(start, "expected number")
 	}
 
-	// Integer part
-	for pos < len(p.Input) && unicode.IsDigit(p.Input[pos]) {
+	// Check for hex/binary
+	if pos+1 < len(p.Input) && p.Input[pos] == '0' {
+		if p.Input[pos+1] == 'x' || p.Input[pos+1] == 'X' {
+			return p.parseHexNumber(start)
+		}
+		if p.Input[pos+1] == 'b' || p.Input[pos+1] == 'B' {
+			return p.parseBinaryNumber(start)
+		}
+	}
+
+	// Integer part (skip underscores)
+	for pos < len(p.Input) && (unicode.IsDigit(p.Input[pos]) || p.Input[pos] == '_') {
 		pos++
 	}
 
 	// Check for float
 	isFloat := false
 	if pos < len(p.Input) && p.Input[pos] == '.' {
-		isFloat = true
-		pos++
-		for pos < len(p.Input) && unicode.IsDigit(p.Input[pos]) {
+		// Make sure it's not a dot accessor
+		if pos+1 < len(p.Input) && unicode.IsDigit(p.Input[pos+1]) {
+			isFloat = true
 			pos++
+			for pos < len(p.Input) && (unicode.IsDigit(p.Input[pos]) || p.Input[pos] == '_') {
+				pos++
+			}
 		}
 	}
 
@@ -211,16 +243,76 @@ func (p *PikaParser) parseNumber(pos int) PikaResult {
 		}
 	}
 
-	numStr := string(p.Input[start:pos])
+	// Remove underscores for parsing
+	numStr := strings.ReplaceAll(string(p.Input[start:pos]), "_", "")
 
 	if isFloat {
-		var val float64
-		fmt.Sscanf(numStr, "%f", &val)
+		val, err := strconv.ParseFloat(numStr, 64)
+		if err != nil {
+			return Failed(start, "invalid float")
+		}
 		return Succeeded(ast.NewFloat(val), pos)
 	}
 
-	var val int64
-	fmt.Sscanf(numStr, "%d", &val)
+	val, err := strconv.ParseInt(numStr, 10, 64)
+	if err != nil {
+		return Failed(start, "invalid integer")
+	}
+	return Succeeded(ast.NewInt(val), pos)
+}
+
+// parseHexNumber parses a hexadecimal number 0xDEADBEEF
+func (p *PikaParser) parseHexNumber(start int) PikaResult {
+	pos := start
+	if p.Input[pos] == '-' || p.Input[pos] == '+' {
+		pos++
+	}
+	pos += 2 // Skip 0x
+
+	hexStart := pos
+	for pos < len(p.Input) {
+		ch := p.Input[pos]
+		if unicode.IsDigit(ch) || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F') || ch == '_' {
+			pos++
+		} else {
+			break
+		}
+	}
+
+	hexStr := strings.ReplaceAll(string(p.Input[hexStart:pos]), "_", "")
+	val, err := strconv.ParseInt(hexStr, 16, 64)
+	if err != nil {
+		return Failed(start, "invalid hex number")
+	}
+
+	if start < len(p.Input) && p.Input[start] == '-' {
+		val = -val
+	}
+	return Succeeded(ast.NewInt(val), pos)
+}
+
+// parseBinaryNumber parses a binary number 0b101010
+func (p *PikaParser) parseBinaryNumber(start int) PikaResult {
+	pos := start
+	if p.Input[pos] == '-' || p.Input[pos] == '+' {
+		pos++
+	}
+	pos += 2 // Skip 0b
+
+	binStart := pos
+	for pos < len(p.Input) && (p.Input[pos] == '0' || p.Input[pos] == '1' || p.Input[pos] == '_') {
+		pos++
+	}
+
+	binStr := strings.ReplaceAll(string(p.Input[binStart:pos]), "_", "")
+	val, err := strconv.ParseInt(binStr, 2, 64)
+	if err != nil {
+		return Failed(start, "invalid binary number")
+	}
+
+	if start < len(p.Input) && p.Input[start] == '-' {
+		val = -val
+	}
 	return Succeeded(ast.NewInt(val), pos)
 }
 
@@ -249,6 +341,8 @@ func (p *PikaParser) parseSymbol(pos int) PikaResult {
 	switch name {
 	case "nil":
 		return Succeeded(ast.Nil, pos)
+	case "nothing":
+		return Succeeded(ast.Nothing, pos)
 	case "#t", "true":
 		return Succeeded(ast.NewSym("#t"), pos)
 	case "#f", "false":
@@ -258,35 +352,235 @@ func (p *PikaParser) parseSymbol(pos int) PikaResult {
 	return Succeeded(ast.NewSym(name), pos)
 }
 
-// parseString parses a string literal
+// parseSymbolWithDotAccess parses a symbol with optional dot access
+// e.g., foo, foo.bar, foo.bar.baz, foo.(0), foo.[1 2 3]
+func (p *PikaParser) parseSymbolWithDotAccess(pos int) PikaResult {
+	result := p.memoized("symbol", pos)
+	if !result.Success {
+		return result
+	}
+
+	current := result.Value
+	pos = result.Pos
+
+	// Check for dot access chains
+	for pos < len(p.Input) && p.Input[pos] == '.' {
+		pos++ // Skip '.'
+
+		if pos >= len(p.Input) {
+			break
+		}
+
+		ch := p.Input[pos]
+
+		if ch == '(' {
+			// Dynamic access: obj.(expr)
+			pos++ // Skip '('
+			exprResult := p.memoized("expr", pos)
+			if !exprResult.Success {
+				return exprResult
+			}
+			pos = p.skipWhitespace(exprResult.Pos)
+			if pos >= len(p.Input) || p.Input[pos] != ')' {
+				return Failed(pos, "expected ')' in dynamic access")
+			}
+			pos++ // Skip ')'
+
+			// (get current expr)
+			current = ast.NewCell(ast.NewSym("get"),
+				ast.NewCell(current,
+					ast.NewCell(exprResult.Value, ast.Nil)))
+
+		} else if ch == '[' {
+			// Multi-access: obj.[indices]
+			arrayResult := p.memoized("array", pos)
+			if !arrayResult.Success {
+				return arrayResult
+			}
+			pos = arrayResult.Pos
+
+			// (multi-get current indices)
+			current = ast.NewCell(ast.NewSym("multi-get"),
+				ast.NewCell(current,
+					ast.NewCell(arrayResult.Value, ast.Nil)))
+
+		} else if p.isSymbolStart(ch) {
+			// Field access: obj.field
+			symResult := p.memoized("symbol", pos)
+			if !symResult.Success {
+				return symResult
+			}
+			pos = symResult.Pos
+
+			// (get current 'field)
+			quotedField := ast.NewCell(ast.NewSym("quote"),
+				ast.NewCell(symResult.Value, ast.Nil))
+			current = ast.NewCell(ast.NewSym("get"),
+				ast.NewCell(current,
+					ast.NewCell(quotedField, ast.Nil)))
+		} else {
+			// Not a valid dot access, backtrack
+			pos--
+			break
+		}
+	}
+
+	return Succeeded(current, pos)
+}
+
+// parseFunctionalAccessor parses .field -> (lambda (it) (get it 'field))
+func (p *PikaParser) parseFunctionalAccessor(pos int) PikaResult {
+	pos++ // Skip initial '.'
+
+	// Parse the accessor chain
+	var accessors []string
+	for pos < len(p.Input) {
+		if !p.isSymbolStart(p.Input[pos]) {
+			break
+		}
+
+		start := pos
+		for pos < len(p.Input) && p.isSymbolChar(p.Input[pos]) {
+			pos++
+		}
+		accessors = append(accessors, string(p.Input[start:pos]))
+
+		// Check for more dots
+		if pos < len(p.Input) && p.Input[pos] == '.' {
+			pos++
+		} else {
+			break
+		}
+	}
+
+	if len(accessors) == 0 {
+		return Failed(pos, "expected field name after '.'")
+	}
+
+	// Build: (lambda (it) (get (get it 'field1) 'field2) ...)
+	itSym := ast.NewSym("it")
+	body := itSym
+	for _, field := range accessors {
+		quotedField := ast.NewCell(ast.NewSym("quote"),
+			ast.NewCell(ast.NewSym(field), ast.Nil))
+		body = ast.NewCell(ast.NewSym("get"),
+			ast.NewCell(body,
+				ast.NewCell(quotedField, ast.Nil)))
+	}
+
+	lambda := ast.NewCell(ast.NewSym("lambda"),
+		ast.NewCell(ast.NewCell(itSym, ast.Nil),
+			ast.NewCell(body, ast.Nil)))
+
+	return Succeeded(lambda, pos)
+}
+
+// parseKeyword parses a keyword :symbol
+func (p *PikaParser) parseKeyword(pos int) PikaResult {
+	if pos >= len(p.Input) || p.Input[pos] != ':' {
+		return Failed(pos, "expected keyword")
+	}
+	pos++ // Skip ':'
+
+	start := pos
+	for pos < len(p.Input) && p.isSymbolChar(p.Input[pos]) {
+		pos++
+	}
+
+	if pos == start {
+		return Failed(pos, "expected keyword name after ':'")
+	}
+
+	name := string(p.Input[start:pos])
+	return Succeeded(ast.NewKeyword(name), pos)
+}
+
+// parseString parses a string literal with interpolation
 func (p *PikaParser) parseString(pos int) PikaResult {
 	if pos >= len(p.Input) || p.Input[pos] != '"' {
 		return Failed(pos, "expected string")
 	}
 	pos++
 
-	var chars []rune
+	var parts []*ast.Value
+	var currentChars []rune
+
+	flushChars := func() {
+		if len(currentChars) > 0 {
+			// Build string as list of chars
+			result := ast.Nil
+			for i := len(currentChars) - 1; i >= 0; i-- {
+				result = ast.NewCell(ast.NewChar(currentChars[i]), result)
+			}
+			result = ast.NewCell(ast.NewSym("string"), result)
+			parts = append(parts, result)
+			currentChars = nil
+		}
+	}
+
 	for pos < len(p.Input) && p.Input[pos] != '"' {
-		if p.Input[pos] == '\\' && pos+1 < len(p.Input) {
+		ch := p.Input[pos]
+
+		if ch == '\\' && pos+1 < len(p.Input) {
+			// Escape sequence
 			pos++
 			switch p.Input[pos] {
 			case 'n':
-				chars = append(chars, '\n')
+				currentChars = append(currentChars, '\n')
 			case 't':
-				chars = append(chars, '\t')
+				currentChars = append(currentChars, '\t')
 			case 'r':
-				chars = append(chars, '\r')
+				currentChars = append(currentChars, '\r')
 			case '\\':
-				chars = append(chars, '\\')
+				currentChars = append(currentChars, '\\')
 			case '"':
-				chars = append(chars, '"')
+				currentChars = append(currentChars, '"')
+			case '$':
+				currentChars = append(currentChars, '$')
 			default:
-				chars = append(chars, p.Input[pos])
+				currentChars = append(currentChars, p.Input[pos])
+			}
+			pos++
+		} else if ch == '$' {
+			// String interpolation
+			if pos+1 < len(p.Input) {
+				nextCh := p.Input[pos+1]
+				if nextCh == '(' {
+					// $(expr)
+					flushChars()
+					pos += 2 // Skip '$('
+					exprResult := p.memoized("expr", pos)
+					if !exprResult.Success {
+						return exprResult
+					}
+					pos = p.skipWhitespace(exprResult.Pos)
+					if pos >= len(p.Input) || p.Input[pos] != ')' {
+						return Failed(pos, "expected ')' in string interpolation")
+					}
+					pos++ // Skip ')'
+					parts = append(parts, exprResult.Value)
+				} else if p.isSymbolStart(nextCh) {
+					// $name
+					flushChars()
+					pos++ // Skip '$'
+					start := pos
+					for pos < len(p.Input) && p.isSymbolChar(p.Input[pos]) {
+						pos++
+					}
+					name := string(p.Input[start:pos])
+					parts = append(parts, ast.NewSym(name))
+				} else {
+					currentChars = append(currentChars, ch)
+					pos++
+				}
+			} else {
+				currentChars = append(currentChars, ch)
+				pos++
 			}
 		} else {
-			chars = append(chars, p.Input[pos])
+			currentChars = append(currentChars, ch)
+			pos++
 		}
-		pos++
 	}
 
 	if pos >= len(p.Input) {
@@ -294,19 +588,28 @@ func (p *PikaParser) parseString(pos int) PikaResult {
 	}
 	pos++ // Skip closing quote
 
-	// String as a list of characters (homoiconic)
-	// (string 'h' 'e' 'l' 'l' 'o')
-	// Build the list from the end
-	result := ast.Nil
-	for i := len(chars) - 1; i >= 0; i-- {
-		result = ast.NewCell(ast.NewChar(chars[i]), result)
-	}
-	result = ast.NewCell(ast.NewSym("string"), result)
+	flushChars()
 
+	// If no interpolation, return simple string
+	if len(parts) == 1 {
+		return Succeeded(parts[0], pos)
+	}
+
+	// Build (string-concat part1 part2 ...)
+	if len(parts) == 0 {
+		// Empty string
+		return Succeeded(ast.NewCell(ast.NewSym("string"), ast.Nil), pos)
+	}
+
+	result := ast.Nil
+	for i := len(parts) - 1; i >= 0; i-- {
+		result = ast.NewCell(parts[i], result)
+	}
+	result = ast.NewCell(ast.NewSym("string-concat"), result)
 	return Succeeded(result, pos)
 }
 
-// parseList parses a list (s-expression)
+// parseList parses a list (s-expression) with ()
 func (p *PikaParser) parseList(pos int) PikaResult {
 	if pos >= len(p.Input) || p.Input[pos] != '(' {
 		return Failed(pos, "expected '('")
@@ -361,6 +664,109 @@ func (p *PikaParser) parseList(pos int) PikaResult {
 	}
 
 	return Succeeded(result, pos)
+}
+
+// parseArray parses an array literal with []
+func (p *PikaParser) parseArray(pos int) PikaResult {
+	if pos >= len(p.Input) || p.Input[pos] != '[' {
+		return Failed(pos, "expected '['")
+	}
+	pos++
+	pos = p.skipWhitespace(pos)
+
+	var elements []*ast.Value
+
+	for pos < len(p.Input) && p.Input[pos] != ']' {
+		result := p.memoized("expr", pos)
+		if !result.Success {
+			return result
+		}
+		elements = append(elements, result.Value)
+		pos = p.skipWhitespace(result.Pos)
+	}
+
+	if pos >= len(p.Input) {
+		return Failed(pos, "expected ']'")
+	}
+	pos++ // Skip ']'
+
+	return Succeeded(ast.NewArray(elements), pos)
+}
+
+// parseTypeLit parses a type literal with {}
+func (p *PikaParser) parseTypeLit(pos int) PikaResult {
+	if pos >= len(p.Input) || p.Input[pos] != '{' {
+		return Failed(pos, "expected '{'")
+	}
+	pos++
+	pos = p.skipWhitespace(pos)
+
+	// Get type name (first element must be a symbol)
+	if pos >= len(p.Input) || !p.isSymbolStart(p.Input[pos]) {
+		return Failed(pos, "expected type name in {}")
+	}
+
+	nameResult := p.memoized("symbol", pos)
+	if !nameResult.Success {
+		return nameResult
+	}
+	typeName := nameResult.Value.Str
+	pos = p.skipWhitespace(nameResult.Pos)
+
+	// Get type parameters
+	var params []*ast.Value
+	for pos < len(p.Input) && p.Input[pos] != '}' {
+		result := p.memoized("expr", pos)
+		if !result.Success {
+			return result
+		}
+		params = append(params, result.Value)
+		pos = p.skipWhitespace(result.Pos)
+	}
+
+	if pos >= len(p.Input) {
+		return Failed(pos, "expected '}'")
+	}
+	pos++ // Skip '}'
+
+	return Succeeded(ast.NewTypeLit(typeName, params), pos)
+}
+
+// parseDict parses a dictionary literal with #{}
+func (p *PikaParser) parseDict(pos int) PikaResult {
+	// Already verified we're at #{
+	pos += 2 // Skip '#{'
+	pos = p.skipWhitespace(pos)
+
+	var keys, values []*ast.Value
+
+	for pos < len(p.Input) && p.Input[pos] != '}' {
+		// Parse key
+		keyResult := p.memoized("expr", pos)
+		if !keyResult.Success {
+			return keyResult
+		}
+		keys = append(keys, keyResult.Value)
+		pos = p.skipWhitespace(keyResult.Pos)
+
+		// Parse value
+		if pos >= len(p.Input) || p.Input[pos] == '}' {
+			return Failed(pos, "expected value after key in dict")
+		}
+		valResult := p.memoized("expr", pos)
+		if !valResult.Success {
+			return valResult
+		}
+		values = append(values, valResult.Value)
+		pos = p.skipWhitespace(valResult.Pos)
+	}
+
+	if pos >= len(p.Input) {
+		return Failed(pos, "expected '}'")
+	}
+	pos++ // Skip '}'
+
+	return Succeeded(ast.NewDict(keys, values), pos)
 }
 
 // parseQuote parses a quoted expression
@@ -425,7 +831,7 @@ func (p *PikaParser) parseUnquote(pos int) PikaResult {
 	return Succeeded(quoted, result.Pos)
 }
 
-// parseSpecial parses special syntax like #t, #f, #\char
+// parseSpecial parses special syntax like #t, #f, #\char, #{dict}
 func (p *PikaParser) parseSpecial(pos int) PikaResult {
 	if pos >= len(p.Input) || p.Input[pos] != '#' {
 		return Failed(pos, "expected #")
@@ -443,6 +849,9 @@ func (p *PikaParser) parseSpecial(pos int) PikaResult {
 	case 'f':
 		pos++
 		return Succeeded(ast.NewSym("#f"), pos)
+	case '{':
+		// Dictionary literal #{}
+		return p.parseDict(pos - 1) // Back up to include #
 	case '\\':
 		// Character literal
 		pos++
@@ -487,6 +896,17 @@ func (p *PikaParser) parseSpecial(pos int) PikaResult {
 		vec := ast.NewCell(ast.NewSym("vec"), listResult.Value)
 		return Succeeded(vec, listResult.Pos)
 
+	case '\'':
+		// Syntax quote #'
+		pos++
+		result := p.memoized("expr", pos)
+		if !result.Success {
+			return result
+		}
+		// (syntax <expr>)
+		syntax := ast.NewCell(ast.NewSym("syntax"), ast.NewCell(result.Value, ast.Nil))
+		return Succeeded(syntax, result.Pos)
+
 	default:
 		return Failed(pos, fmt.Sprintf("unknown special syntax #%c", p.Input[pos]))
 	}
@@ -529,16 +949,16 @@ func (p *PikaParser) isSymbolStart(ch rune) bool {
 	if unicode.IsLetter(ch) {
 		return true
 	}
-	// Extended symbol characters
+	// Extended symbol characters (but not : which is keyword prefix)
 	switch ch {
-	case '!', '$', '%', '&', '*', '+', '-', '.', '/', ':', '<', '=', '>', '?', '@', '^', '_', '~':
+	case '!', '$', '%', '&', '*', '+', '-', '/', '<', '=', '>', '?', '@', '^', '_', '~':
 		return true
 	}
 	return false
 }
 
 func (p *PikaParser) isSymbolChar(ch rune) bool {
-	return p.isSymbolStart(ch) || unicode.IsDigit(ch)
+	return p.isSymbolStart(ch) || unicode.IsDigit(ch) || ch == '!' || ch == '?'
 }
 
 // Left Recursion Support

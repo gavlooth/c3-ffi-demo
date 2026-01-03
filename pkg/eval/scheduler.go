@@ -159,11 +159,22 @@ func ChanRecv(ch *ast.Value) (*ast.Value, bool) {
 }
 
 // ChanSendBlocking sends a value, blocking if necessary
-func ChanSendBlocking(ch *ast.Value, val *ast.Value) {
+// Returns true if send succeeded, false if channel was closed
+func ChanSendBlocking(ch *ast.Value, val *ast.Value) (success bool) {
 	if !ast.IsChan(ch) {
-		return
+		return false
 	}
+
+	// Use defer/recover to handle sending to closed channel
+	defer func() {
+		if recover() != nil {
+			success = false
+		}
+	}()
+
+	// Attempt to send - will panic if channel is closed
 	ch.ChanSend <- val
+	return true
 }
 
 // ChanRecvBlocking receives a value, blocking if necessary

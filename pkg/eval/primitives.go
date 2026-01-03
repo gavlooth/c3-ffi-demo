@@ -953,6 +953,7 @@ func PrimMakeChan(args, menv *ast.Value) *ast.Value {
 }
 
 // PrimChanSend implements chan-send! primitive (blocking)
+// OmniLisp: Returns true if send succeeded, false if channel was closed
 func PrimChanSend(args, menv *ast.Value) *ast.Value {
 	ch, val, ok := getTwoArgs(args)
 	if !ok {
@@ -961,8 +962,10 @@ func PrimChanSend(args, menv *ast.Value) *ast.Value {
 	if !ast.IsChan(ch) {
 		return ast.NewError("chan-send!: first argument must be a channel")
 	}
-	ChanSendBlocking(ch, val)
-	return val
+	if ChanSendBlocking(ch, val) {
+		return SymT
+	}
+	return ast.Nil
 }
 
 // PrimChanRecv implements chan-recv! primitive (blocking)
@@ -1316,6 +1319,476 @@ func PrimReifyEnv(args, menv *ast.Value) *ast.Value {
 	return GetGlobalEnv()
 }
 
+// ============ OmniLisp Array Primitives ============
+
+// PrimMakeArray creates a new array: (make-array n) or (make-array n val)
+func PrimMakeArray(args, menv *ast.Value) *ast.Value {
+	n := getOneArg(args)
+	if n == nil || !ast.IsInt(n) {
+		return ast.NewError("make-array: expected integer size")
+	}
+	size := int(n.Int)
+	if size < 0 {
+		return ast.NewError("make-array: negative size")
+	}
+
+	elements := make([]*ast.Value, size)
+	// Check for fill value
+	if args.Cdr != nil && ast.IsCell(args.Cdr) {
+		fill := args.Cdr.Car
+		for i := range elements {
+			elements[i] = fill
+		}
+	} else {
+		for i := range elements {
+			elements[i] = ast.Nil
+		}
+	}
+	return ast.NewArray(elements)
+}
+
+// PrimArrayRef gets an element from an array: (array-ref arr idx)
+func PrimArrayRef(args, menv *ast.Value) *ast.Value {
+	arr, idx, ok := getTwoArgs(args)
+	if !ok {
+		return ast.NewError("array-ref: expected array and index")
+	}
+	if !ast.IsArray(arr) {
+		return ast.NewError("array-ref: first argument must be array")
+	}
+	if !ast.IsInt(idx) {
+		return ast.NewError("array-ref: index must be integer")
+	}
+	result := ast.ArrayGet(arr, int(idx.Int))
+	if result == nil {
+		return ast.NewError("array-ref: index out of bounds")
+	}
+	return result
+}
+
+// PrimArraySet sets an element in an array: (array-set! arr idx val)
+func PrimArraySet(args, menv *ast.Value) *ast.Value {
+	if args == nil || !ast.IsCell(args) {
+		return ast.NewError("array-set!: expected 3 arguments")
+	}
+	arr := args.Car
+	if !ast.IsArray(arr) {
+		return ast.NewError("array-set!: first argument must be array")
+	}
+	rest := args.Cdr
+	if rest == nil || !ast.IsCell(rest) {
+		return ast.NewError("array-set!: expected index")
+	}
+	idx := rest.Car
+	if !ast.IsInt(idx) {
+		return ast.NewError("array-set!: index must be integer")
+	}
+	rest = rest.Cdr
+	if rest == nil || !ast.IsCell(rest) {
+		return ast.NewError("array-set!: expected value")
+	}
+	val := rest.Car
+	i := int(idx.Int)
+	if i < 0 || i >= len(arr.ArrayData) {
+		return ast.NewError("array-set!: index out of bounds")
+	}
+	arr.ArrayData[i] = val
+	return val
+}
+
+// PrimArrayLength returns the length of an array: (array-length arr)
+func PrimArrayLength(args, menv *ast.Value) *ast.Value {
+	arr := getOneArg(args)
+	if arr == nil || !ast.IsArray(arr) {
+		return ast.NewError("array-length: expected array")
+	}
+	return ast.NewInt(int64(len(arr.ArrayData)))
+}
+
+// PrimArrayPush appends to an array: (array-push! arr val)
+func PrimArrayPush(args, menv *ast.Value) *ast.Value {
+	arr, val, ok := getTwoArgs(args)
+	if !ok {
+		return ast.NewError("array-push!: expected array and value")
+	}
+	if !ast.IsArray(arr) {
+		return ast.NewError("array-push!: first argument must be array")
+	}
+	ast.ArrayPush(arr, val)
+	return arr
+}
+
+// PrimArrayPop removes and returns last element: (array-pop! arr)
+func PrimArrayPop(args, menv *ast.Value) *ast.Value {
+	arr := getOneArg(args)
+	if arr == nil || !ast.IsArray(arr) {
+		return ast.NewError("array-pop!: expected array")
+	}
+	result := ast.ArrayPop(arr)
+	if result == nil {
+		return ast.NewError("array-pop!: empty array")
+	}
+	return result
+}
+
+// PrimIsArray checks if value is an array: (array? v)
+func PrimIsArray(args, menv *ast.Value) *ast.Value {
+	v := getOneArg(args)
+	if ast.IsArray(v) {
+		return ast.NewSym("#t")
+	}
+	return ast.NewSym("#f")
+}
+
+// PrimArrayToList converts array to list: (array->list arr)
+func PrimArrayToList(args, menv *ast.Value) *ast.Value {
+	arr := getOneArg(args)
+	if arr == nil || !ast.IsArray(arr) {
+		return ast.NewError("array->list: expected array")
+	}
+	result := ast.Nil
+	for i := len(arr.ArrayData) - 1; i >= 0; i-- {
+		result = ast.NewCell(arr.ArrayData[i], result)
+	}
+	return result
+}
+
+// PrimListToArray converts list to array: (list->array lst)
+func PrimListToArray(args, menv *ast.Value) *ast.Value {
+	lst := getOneArg(args)
+	var elements []*ast.Value
+	for !ast.IsNil(lst) && ast.IsCell(lst) {
+		elements = append(elements, lst.Car)
+		lst = lst.Cdr
+	}
+	return ast.NewArray(elements)
+}
+
+// ============ OmniLisp Dictionary Primitives ============
+
+// PrimMakeDict creates an empty dictionary: (make-dict)
+func PrimMakeDict(args, menv *ast.Value) *ast.Value {
+	return ast.NewDictEmpty()
+}
+
+// PrimDictRef gets a value from a dictionary: (dict-ref dict key)
+func PrimDictRef(args, menv *ast.Value) *ast.Value {
+	dict, key, ok := getTwoArgs(args)
+	if !ok {
+		return ast.NewError("dict-ref: expected dict and key")
+	}
+	if !ast.IsDict(dict) {
+		return ast.NewError("dict-ref: first argument must be dict")
+	}
+	result := ast.DictGet(dict, key)
+	if result == nil {
+		return ast.Nil
+	}
+	return result
+}
+
+// PrimDictSet sets a value in a dictionary: (dict-set! dict key val)
+func PrimDictSet(args, menv *ast.Value) *ast.Value {
+	if args == nil || !ast.IsCell(args) {
+		return ast.NewError("dict-set!: expected 3 arguments")
+	}
+	dict := args.Car
+	if !ast.IsDict(dict) {
+		return ast.NewError("dict-set!: first argument must be dict")
+	}
+	rest := args.Cdr
+	if rest == nil || !ast.IsCell(rest) {
+		return ast.NewError("dict-set!: expected key")
+	}
+	key := rest.Car
+	rest = rest.Cdr
+	if rest == nil || !ast.IsCell(rest) {
+		return ast.NewError("dict-set!: expected value")
+	}
+	val := rest.Car
+	ast.DictSet(dict, key, val)
+	return val
+}
+
+// PrimDictLength returns the number of entries: (dict-length dict)
+func PrimDictLength(args, menv *ast.Value) *ast.Value {
+	dict := getOneArg(args)
+	if dict == nil || !ast.IsDict(dict) {
+		return ast.NewError("dict-length: expected dict")
+	}
+	return ast.NewInt(int64(ast.DictLen(dict)))
+}
+
+// PrimDictKeys returns list of keys: (dict-keys dict)
+func PrimDictKeys(args, menv *ast.Value) *ast.Value {
+	dict := getOneArg(args)
+	if dict == nil || !ast.IsDict(dict) {
+		return ast.NewError("dict-keys: expected dict")
+	}
+	result := ast.Nil
+	for i := len(dict.DictKeys) - 1; i >= 0; i-- {
+		result = ast.NewCell(dict.DictKeys[i], result)
+	}
+	return result
+}
+
+// PrimDictValues returns list of values: (dict-values dict)
+func PrimDictValues(args, menv *ast.Value) *ast.Value {
+	dict := getOneArg(args)
+	if dict == nil || !ast.IsDict(dict) {
+		return ast.NewError("dict-values: expected dict")
+	}
+	result := ast.Nil
+	for i := len(dict.DictValues) - 1; i >= 0; i-- {
+		result = ast.NewCell(dict.DictValues[i], result)
+	}
+	return result
+}
+
+// PrimIsDict checks if value is a dict: (dict? v)
+func PrimIsDict(args, menv *ast.Value) *ast.Value {
+	v := getOneArg(args)
+	if ast.IsDict(v) {
+		return ast.NewSym("#t")
+	}
+	return ast.NewSym("#f")
+}
+
+// ============ OmniLisp Tuple Primitives ============
+
+// PrimTuple creates a tuple: (tuple a b c)
+func PrimTuple(args, menv *ast.Value) *ast.Value {
+	var elements []*ast.Value
+	for !ast.IsNil(args) && ast.IsCell(args) {
+		elements = append(elements, args.Car)
+		args = args.Cdr
+	}
+	return ast.NewTuple(elements)
+}
+
+// PrimTupleRef gets element from tuple: (tuple-ref tup idx)
+func PrimTupleRef(args, menv *ast.Value) *ast.Value {
+	tup, idx, ok := getTwoArgs(args)
+	if !ok {
+		return ast.NewError("tuple-ref: expected tuple and index")
+	}
+	if !ast.IsTuple(tup) {
+		return ast.NewError("tuple-ref: first argument must be tuple")
+	}
+	if !ast.IsInt(idx) {
+		return ast.NewError("tuple-ref: index must be integer")
+	}
+	result := ast.TupleGet(tup, int(idx.Int))
+	if result == nil {
+		return ast.NewError("tuple-ref: index out of bounds")
+	}
+	return result
+}
+
+// PrimTupleLength returns tuple length: (tuple-length tup)
+func PrimTupleLength(args, menv *ast.Value) *ast.Value {
+	tup := getOneArg(args)
+	if tup == nil || !ast.IsTuple(tup) {
+		return ast.NewError("tuple-length: expected tuple")
+	}
+	return ast.NewInt(int64(len(tup.TupleData)))
+}
+
+// PrimIsTuple checks if value is a tuple: (tuple? v)
+func PrimIsTuple(args, menv *ast.Value) *ast.Value {
+	v := getOneArg(args)
+	if ast.IsTuple(v) {
+		return ast.NewSym("#t")
+	}
+	return ast.NewSym("#f")
+}
+
+// ============ OmniLisp Type Primitives ============
+
+// PrimIsTypeLit checks if value is a type literal: (type-lit? v)
+func PrimIsTypeLit(args, menv *ast.Value) *ast.Value {
+	v := getOneArg(args)
+	if ast.IsTypeLit(v) {
+		return ast.NewSym("#t")
+	}
+	return ast.NewSym("#f")
+}
+
+// PrimTypeName gets the name of a type literal: (type-name t)
+func PrimTypeName(args, menv *ast.Value) *ast.Value {
+	t := getOneArg(args)
+	if t == nil || !ast.IsTypeLit(t) {
+		return ast.NewError("type-name: expected type literal")
+	}
+	return ast.NewSym(t.TypeName)
+}
+
+// PrimTypeParams gets the parameters of a type literal: (type-params t)
+func PrimTypeParams(args, menv *ast.Value) *ast.Value {
+	t := getOneArg(args)
+	if t == nil || !ast.IsTypeLit(t) {
+		return ast.NewError("type-params: expected type literal")
+	}
+	result := ast.Nil
+	for i := len(t.TypeParams) - 1; i >= 0; i-- {
+		result = ast.NewCell(t.TypeParams[i], result)
+	}
+	return result
+}
+
+// ============ OmniLisp Keyword Primitives ============
+
+// PrimIsKeyword checks if value is a keyword: (keyword? v)
+func PrimIsKeyword(args, menv *ast.Value) *ast.Value {
+	v := getOneArg(args)
+	if ast.IsKeyword(v) {
+		return ast.NewSym("#t")
+	}
+	return ast.NewSym("#f")
+}
+
+// PrimKeywordName gets the name of a keyword: (keyword-name k)
+func PrimKeywordName(args, menv *ast.Value) *ast.Value {
+	k := getOneArg(args)
+	if k == nil || !ast.IsKeyword(k) {
+		return ast.NewError("keyword-name: expected keyword")
+	}
+	return ast.NewSym(k.Str)
+}
+
+// PrimSymbolToKeyword converts symbol to keyword: (symbol->keyword s)
+func PrimSymbolToKeyword(args, menv *ast.Value) *ast.Value {
+	s := getOneArg(args)
+	if s == nil || !ast.IsSym(s) {
+		return ast.NewError("symbol->keyword: expected symbol")
+	}
+	return ast.NewKeyword(s.Str)
+}
+
+// PrimKeywordToSymbol converts keyword to symbol: (keyword->symbol k)
+func PrimKeywordToSymbol(args, menv *ast.Value) *ast.Value {
+	k := getOneArg(args)
+	if k == nil || !ast.IsKeyword(k) {
+		return ast.NewError("keyword->symbol: expected keyword")
+	}
+	return ast.NewSym(k.Str)
+}
+
+// ============ OmniLisp Nothing Primitives ============
+
+// PrimIsNothing checks if value is nothing: (nothing? v)
+func PrimIsNothing(args, menv *ast.Value) *ast.Value {
+	v := getOneArg(args)
+	if ast.IsNothing(v) {
+		return ast.NewSym("#t")
+	}
+	return ast.NewSym("#f")
+}
+
+// ============ OmniLisp Get/Set Primitives (for dot notation) ============
+
+// PrimGet implements generic get: (get obj key)
+// Works for arrays (by index), dicts (by key), and user types (by field)
+func PrimGet(args, menv *ast.Value) *ast.Value {
+	obj, key, ok := getTwoArgs(args)
+	if !ok {
+		return ast.NewError("get: expected object and key")
+	}
+
+	switch {
+	case ast.IsArray(obj):
+		if !ast.IsInt(key) {
+			return ast.NewError("get: array index must be integer")
+		}
+		result := ast.ArrayGet(obj, int(key.Int))
+		if result == nil {
+			return ast.NewError("get: array index out of bounds")
+		}
+		return result
+
+	case ast.IsDict(obj):
+		result := ast.DictGet(obj, key)
+		if result == nil {
+			return ast.Nil
+		}
+		return result
+
+	case ast.IsTuple(obj):
+		if !ast.IsInt(key) {
+			return ast.NewError("get: tuple index must be integer")
+		}
+		result := ast.TupleGet(obj, int(key.Int))
+		if result == nil {
+			return ast.NewError("get: tuple index out of bounds")
+		}
+		return result
+
+	case ast.IsUserType(obj):
+		var fieldName string
+		if ast.IsSym(key) {
+			fieldName = key.Str
+		} else if ast.IsKeyword(key) {
+			fieldName = key.Str
+		} else {
+			return ast.NewError("get: user type field must be symbol or keyword")
+		}
+		result := ast.UserTypeGetField(obj, fieldName)
+		if result == nil {
+			return ast.Nil
+		}
+		return result
+
+	default:
+		return ast.NewError("get: unsupported object type")
+	}
+}
+
+// PrimSet implements generic set: (set! obj key val)
+func PrimSet(args, menv *ast.Value) *ast.Value {
+	if args == nil || !ast.IsCell(args) {
+		return ast.NewError("set!: expected 3 arguments")
+	}
+	obj := args.Car
+	rest := args.Cdr
+	if rest == nil || !ast.IsCell(rest) {
+		return ast.NewError("set!: expected key")
+	}
+	key := rest.Car
+	rest = rest.Cdr
+	if rest == nil || !ast.IsCell(rest) {
+		return ast.NewError("set!: expected value")
+	}
+	val := rest.Car
+
+	switch {
+	case ast.IsArray(obj):
+		if !ast.IsInt(key) {
+			return ast.NewError("set!: array index must be integer")
+		}
+		ast.ArraySet(obj, int(key.Int), val)
+		return val
+
+	case ast.IsDict(obj):
+		ast.DictSet(obj, key, val)
+		return val
+
+	case ast.IsUserType(obj):
+		var fieldName string
+		if ast.IsSym(key) {
+			fieldName = key.Str
+		} else if ast.IsKeyword(key) {
+			fieldName = key.Str
+		} else {
+			return ast.NewError("set!: user type field must be symbol or keyword")
+		}
+		ast.UserTypeSetField(obj, fieldName, val)
+		return val
+
+	default:
+		return ast.NewError("set!: unsupported object type")
+	}
+}
+
 // DefaultEnv creates the default environment with primitives
 func DefaultEnv() *ast.Value {
 	env := ast.Nil
@@ -1415,6 +1888,51 @@ func DefaultEnv() *ast.Value {
 	env = EnvExtend(env, ast.NewSym("ctr-tag"), ast.NewPrim(PrimCtrTag))
 	env = EnvExtend(env, ast.NewSym("ctr-arg"), ast.NewPrim(PrimCtrArg))
 	env = EnvExtend(env, ast.NewSym("reify-env"), ast.NewPrim(PrimReifyEnv))
+
+	// OmniLisp Array operations
+	env = EnvExtend(env, ast.NewSym("make-array"), ast.NewPrim(PrimMakeArray))
+	env = EnvExtend(env, ast.NewSym("array-ref"), ast.NewPrim(PrimArrayRef))
+	env = EnvExtend(env, ast.NewSym("array-set!"), ast.NewPrim(PrimArraySet))
+	env = EnvExtend(env, ast.NewSym("array-length"), ast.NewPrim(PrimArrayLength))
+	env = EnvExtend(env, ast.NewSym("array-push!"), ast.NewPrim(PrimArrayPush))
+	env = EnvExtend(env, ast.NewSym("array-pop!"), ast.NewPrim(PrimArrayPop))
+	env = EnvExtend(env, ast.NewSym("array?"), ast.NewPrim(PrimIsArray))
+	env = EnvExtend(env, ast.NewSym("array->list"), ast.NewPrim(PrimArrayToList))
+	env = EnvExtend(env, ast.NewSym("list->array"), ast.NewPrim(PrimListToArray))
+
+	// OmniLisp Dictionary operations
+	env = EnvExtend(env, ast.NewSym("make-dict"), ast.NewPrim(PrimMakeDict))
+	env = EnvExtend(env, ast.NewSym("dict-ref"), ast.NewPrim(PrimDictRef))
+	env = EnvExtend(env, ast.NewSym("dict-set!"), ast.NewPrim(PrimDictSet))
+	env = EnvExtend(env, ast.NewSym("dict-length"), ast.NewPrim(PrimDictLength))
+	env = EnvExtend(env, ast.NewSym("dict-keys"), ast.NewPrim(PrimDictKeys))
+	env = EnvExtend(env, ast.NewSym("dict-values"), ast.NewPrim(PrimDictValues))
+	env = EnvExtend(env, ast.NewSym("dict?"), ast.NewPrim(PrimIsDict))
+
+	// OmniLisp Tuple operations
+	env = EnvExtend(env, ast.NewSym("tuple"), ast.NewPrim(PrimTuple))
+	env = EnvExtend(env, ast.NewSym("tuple-ref"), ast.NewPrim(PrimTupleRef))
+	env = EnvExtend(env, ast.NewSym("tuple-length"), ast.NewPrim(PrimTupleLength))
+	env = EnvExtend(env, ast.NewSym("tuple?"), ast.NewPrim(PrimIsTuple))
+
+	// OmniLisp Type operations
+	env = EnvExtend(env, ast.NewSym("type-lit?"), ast.NewPrim(PrimIsTypeLit))
+	env = EnvExtend(env, ast.NewSym("type-name"), ast.NewPrim(PrimTypeName))
+	env = EnvExtend(env, ast.NewSym("type-params"), ast.NewPrim(PrimTypeParams))
+
+	// OmniLisp Keyword operations
+	env = EnvExtend(env, ast.NewSym("keyword?"), ast.NewPrim(PrimIsKeyword))
+	env = EnvExtend(env, ast.NewSym("keyword-name"), ast.NewPrim(PrimKeywordName))
+	env = EnvExtend(env, ast.NewSym("symbol->keyword"), ast.NewPrim(PrimSymbolToKeyword))
+	env = EnvExtend(env, ast.NewSym("keyword->symbol"), ast.NewPrim(PrimKeywordToSymbol))
+
+	// OmniLisp Nothing/Unit
+	env = EnvExtend(env, ast.NewSym("nothing?"), ast.NewPrim(PrimIsNothing))
+	env = EnvExtend(env, ast.NewSym("nothing"), ast.Nothing)
+
+	// OmniLisp Generic get/set (for dot notation)
+	env = EnvExtend(env, ast.NewSym("get"), ast.NewPrim(PrimGet))
+
 	// Constants
 	env = EnvExtend(env, ast.NewSym("t"), SymT)
 	env = EnvExtend(env, ast.NewSym("nil"), ast.Nil)

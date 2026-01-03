@@ -25,8 +25,30 @@ extern "C" {
 
 typedef struct Obj Obj;
 typedef struct Closure Closure;
-typedef struct BorrowRef BorrowRef;
 typedef struct Arena Arena;
+
+/* Forward declaration for internal GenObj (legacy) */
+struct GenObj;
+
+/* Forward declaration for Generation type (used by BorrowRef).
+ * Actual definition is later, conditional on IPGE_ROBUST_MODE. */
+#ifndef IPGE_ROBUST_MODE
+#define IPGE_ROBUST_MODE 0
+#endif
+#if IPGE_ROBUST_MODE
+typedef uint64_t Generation;
+#else
+typedef uint16_t Generation;
+#endif
+
+/* BorrowRef: Heap-allocated borrowed reference for legacy API compatibility.
+ * For new code, prefer using the packed BorrowedRef type instead. */
+typedef struct BorrowRef {
+    struct GenObj* target;       /* Legacy GenObj system (internal use) */
+    Generation remembered_gen;   /* Snapshot of generation at borrow time */
+    const char* source_desc;     /* Debug description */
+    struct Obj* ipge_target;     /* IPGE: Direct Obj* for generation check */
+} BorrowRef;
 
 /* Closure function signature */
 typedef Obj* (*ClosureFn)(Obj** captures, Obj** args, int argc);
@@ -133,26 +155,78 @@ static inline Obj* mk_char_unboxed(long c) {
  * No indirection table - generation stored inline in object.
  *
  * Reference: RFC by Christos Chatzifountas
+ *
+ * Two modes available:
+ * 1. COMPACT (default): 16-bit generation packed with 48-bit pointer = 64-bit ref
+ * 2. ROBUST: 64-bit generation + 64-bit pointer = 128-bit ref (more collision resistant)
+ *
+ * Set IPGE_ROBUST_MODE=1 to use 128-bit references (slower but more resistant to
+ * pathological allocation patterns with >65K reuses of same memory address).
  */
 
+/* IPGE_ROBUST_MODE is defined earlier (near BorrowRef) */
+
+#if IPGE_ROBUST_MODE
+/* ---- ROBUST MODE: 64-bit generation (18 quintillion cycles) ---- */
 #define IPGE_MULTIPLIER  0x5851f42D4C957F2DULL  /* Knuth MMIX */
 #define IPGE_INCREMENT   0x1442695040888963ULL  /* Must be odd */
 
-/* Evolve generation ID (called on alloc/free) */
-static inline uint64_t ipge_evolve(uint64_t gen) {
+/* Generation typedef is at top of file */
+
+static inline Generation ipge_evolve(Generation gen) {
     return (gen * IPGE_MULTIPLIER) + IPGE_INCREMENT;
 }
 
-/* Borrowed reference - carries pointer + expected generation */
+/* Borrowed reference - 128 bits (robust, slower) */
 typedef struct {
     Obj* ptr;
-    uint64_t gen;
+    Generation gen;
 } BorrowedRef;
+
+#define BORROW_REF_PACK(ptr, gen)    ((BorrowedRef){ (ptr), (gen) })
+#define BORROW_REF_PTR(ref)          ((ref).ptr)
+#define BORROW_REF_GEN(ref)          ((ref).gen)
+
+#else
+/* ---- COMPACT MODE: 16-bit generation (65K cycles per slot) ---- */
+/*
+ * Packed format: [gen:16][ptr:48] in a single uint64_t
+ * x86-64 uses 48-bit addresses, upper 16 bits available for generation.
+ * Random seed + bijective evolution = thread-safe, no collisions for 65K reuses.
+ */
+#define IPGE16_MULTIPLIER  0xAC4BULL  /* Odd = bijection over Z/2^16 */
+#define IPGE16_INCREMENT   0x9E37ULL  /* Odd increment */
+
+/* Generation typedef is at top of file */
+
+static inline Generation ipge_evolve(Generation gen) {
+    return (Generation)((gen * IPGE16_MULTIPLIER) + IPGE16_INCREMENT);
+}
+
+/* Borrowed reference - 64 bits (compact, fast) */
+typedef uint64_t BorrowedRef;
+
+#define BORROW_REF_PACK(ptr, gen) \
+    (((uint64_t)(gen) << 48) | ((uint64_t)(uintptr_t)(ptr) & 0xFFFFFFFFFFFFULL))
+#define BORROW_REF_PTR(ref) \
+    ((Obj*)((uintptr_t)((ref) & 0xFFFFFFFFFFFFULL)))
+#define BORROW_REF_GEN(ref) \
+    ((Generation)((ref) >> 48))
+
+#endif /* IPGE_ROBUST_MODE */
+
+/* Legacy 64-bit evolution for internal use */
+#define IPGE64_MULTIPLIER  0x5851f42D4C957F2DULL
+#define IPGE64_INCREMENT   0x1442695040888963ULL
+
+static inline uint64_t ipge_evolve64(uint64_t gen) {
+    return (gen * IPGE64_MULTIPLIER) + IPGE64_INCREMENT;
+}
 
 /* ========== Core Object Type ========== */
 
 typedef struct Obj {
-    uint64_t generation;    /* IPGE generation ID for memory safety */
+    Generation generation;  /* IPGE generation ID for memory safety */
     int mark;               /* Reference count or mark bit */
     int tag;                /* ObjTag */
     int is_pair;            /* 1 if pair, 0 if not */
@@ -166,7 +240,7 @@ typedef struct Obj {
         void* ptr;
     };
 } Obj;
-/* Size: 40 bytes */
+/* Size: 32 bytes (compact mode) or 40 bytes (robust mode) */
 
 /* ========== Scope Tethering (Vale-style) ========== */
 /*
@@ -190,7 +264,7 @@ static inline void untether_obj(Obj* obj) {
 }
 
 /* Fast deref with tether check */
-static inline Obj* tethered_deref(Obj* obj, uint64_t expected_gen) {
+static inline Obj* tethered_deref(Obj* obj, Generation expected_gen) {
     if (!obj) return NULL;
     if (IS_IMMEDIATE(obj)) return obj;
     if (obj->tethered) return obj;  /* Fast path */
@@ -200,7 +274,7 @@ static inline Obj* tethered_deref(Obj* obj, uint64_t expected_gen) {
 /* Tethered reference type */
 typedef struct TetheredRef {
     Obj* ptr;
-    uint64_t gen;
+    Generation gen;
 } TetheredRef;
 
 /* Create tethered reference */
@@ -277,26 +351,40 @@ static inline long obj_to_char(Obj* p) {
 /* ========== IPGE Functions (need Obj defined) ========== */
 
 /* Validate a borrowed reference */
-static inline int ipge_valid(Obj* obj, uint64_t expected_gen) {
+static inline int ipge_valid(Obj* obj, Generation expected_gen) {
     if (!obj || IS_IMMEDIATE(obj)) return 1;  /* Immediates always valid */
     return obj->generation == expected_gen;
 }
 
 /* Borrow a reference (snapshot current generation) */
 static inline BorrowedRef borrow_ref(Obj* obj) {
+#if IPGE_ROBUST_MODE
     BorrowedRef ref = { obj, 0 };
     if (obj && !IS_IMMEDIATE(obj)) {
         ref.gen = obj->generation;
     }
     return ref;
+#else
+    if (!obj || IS_IMMEDIATE(obj)) return 0;
+    return BORROW_REF_PACK(obj, obj->generation);
+#endif
 }
 
 /* Dereference with validation */
 static inline Obj* deref_borrowed(BorrowedRef ref) {
+#if IPGE_ROBUST_MODE
     if (!ipge_valid(ref.ptr, ref.gen)) {
         return NULL;  /* Use-after-free detected */
     }
     return ref.ptr;
+#else
+    Obj* ptr = BORROW_REF_PTR(ref);
+    Generation gen = BORROW_REF_GEN(ref);
+    if (!ipge_valid(ptr, gen)) {
+        return NULL;  /* Use-after-free detected */
+    }
+    return ptr;
+#endif
 }
 
 /* ========== Object Constructors ========== */
@@ -344,7 +432,7 @@ void box_set(Obj* b, Obj* v);
 
 Obj* obj_car(Obj* p);
 Obj* obj_cdr(Obj* p);
-int list_length(Obj* xs);
+Obj* list_length(Obj* xs);
 Obj* list_map(Obj* fn, Obj* xs);
 Obj* list_fold(Obj* fn, Obj* init, Obj* xs);
 Obj* list_foldr(Obj* fn, Obj* init, Obj* xs);
@@ -436,23 +524,29 @@ Obj* borrow_get(BorrowRef* ref);
 
 /* ========== Concurrency: Channels ========== */
 
-Obj* channel_create(int buffered);
-void channel_send(Obj* ch, Obj* val);
+Obj* make_channel(int capacity);
+int channel_send(Obj* ch, Obj* val);
 Obj* channel_recv(Obj* ch);
 void channel_close(Obj* ch);
+static inline Obj* channel_create(int buffered) { return make_channel(buffered); }
 
 /* ========== Concurrency: Atoms ========== */
 
-Obj* atom_create(Obj* initial);
+Obj* make_atom(Obj* initial);
 Obj* atom_deref(Obj* atom);
 Obj* atom_reset(Obj* atom, Obj* newval);
 Obj* atom_swap(Obj* atom, Obj* fn);
-Obj* atom_compare_and_set(Obj* atom, Obj* expected, Obj* newval);
+Obj* atom_cas(Obj* atom, Obj* expected, Obj* newval);
+static inline Obj* atom_create(Obj* initial) { return make_atom(initial); }
+static inline Obj* atom_compare_and_set(Obj* atom, Obj* expected, Obj* newval) {
+    return atom_cas(atom, expected, newval);
+}
 
 /* ========== Concurrency: Threads ========== */
 
-Obj* thread_create(Obj* closure);
+Obj* spawn_thread(Obj* closure);
 Obj* thread_join(Obj* thread);
+static inline Obj* thread_create(Obj* closure) { return spawn_thread(closure); }
 
 /* ========== Safe Points ========== */
 

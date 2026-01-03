@@ -30,6 +30,14 @@ const (
 	TThread    // OS thread handle
 	TProcess   // Green thread / process
 	TUserType  // User-defined type instance
+
+	// OmniLisp types
+	TArray     // Mutable array [1 2 3]
+	TDict      // Dictionary #{:a 1 :b 2}
+	TTuple     // Immutable tuple (tuple 1 2 3)
+	TNothing   // Unit value (nothing) - distinct from nil
+	TTypeLit   // Type literal {Int}, {Array Int}
+	TKeyword   // Keyword :symbol
 )
 
 // PrimFn is a primitive function signature
@@ -133,6 +141,20 @@ type Value struct {
 	UserTypeName       string            // Type name (e.g., "Node")
 	UserTypeFields     map[string]*Value // Field name -> value
 	UserTypeFieldOrder []string          // Field names in definition order
+
+	// TArray - mutable array [1 2 3]
+	ArrayData []*Value
+
+	// TDict - dictionary #{:a 1 :b 2}
+	DictKeys   []*Value // Keys in insertion order
+	DictValues []*Value // Corresponding values
+
+	// TTuple - immutable tuple (tuple 1 2 3)
+	TupleData []*Value
+
+	// TTypeLit - type literal {Int}, {Array Int}
+	TypeName   string   // Base type name
+	TypeParams []*Value // Type parameters (for parametric types)
 }
 
 // Nil is the singleton nil value
@@ -287,6 +309,227 @@ func UserTypeSetField(v *Value, fieldName string, val *Value) {
 	if v != nil && v.Tag == TUserType && v.UserTypeFields != nil {
 		v.UserTypeFields[fieldName] = val
 	}
+}
+
+// ============ OmniLisp Type Constructors ============
+
+// Nothing is the singleton nothing value (unit type)
+var Nothing = &Value{Tag: TNothing}
+
+// NewArray creates a mutable array value
+func NewArray(elements []*Value) *Value {
+	return &Value{
+		Tag:       TArray,
+		ArrayData: elements,
+	}
+}
+
+// NewArrayEmpty creates an empty array with given capacity
+func NewArrayEmpty(capacity int) *Value {
+	return &Value{
+		Tag:       TArray,
+		ArrayData: make([]*Value, 0, capacity),
+	}
+}
+
+// NewDict creates a dictionary value from key-value pairs
+func NewDict(keys, values []*Value) *Value {
+	return &Value{
+		Tag:        TDict,
+		DictKeys:   keys,
+		DictValues: values,
+	}
+}
+
+// NewDictEmpty creates an empty dictionary
+func NewDictEmpty() *Value {
+	return &Value{
+		Tag:        TDict,
+		DictKeys:   make([]*Value, 0),
+		DictValues: make([]*Value, 0),
+	}
+}
+
+// NewTuple creates an immutable tuple value
+func NewTuple(elements []*Value) *Value {
+	return &Value{
+		Tag:       TTuple,
+		TupleData: elements,
+	}
+}
+
+// NewTypeLit creates a type literal value {Int}, {Array Int}
+func NewTypeLit(name string, params []*Value) *Value {
+	return &Value{
+		Tag:        TTypeLit,
+		TypeName:   name,
+		TypeParams: params,
+	}
+}
+
+// NewKeyword creates a keyword value :symbol
+func NewKeyword(name string) *Value {
+	return &Value{
+		Tag: TKeyword,
+		Str: name,
+	}
+}
+
+// ============ OmniLisp Type Predicates ============
+
+// IsArray checks if a value is an array
+func IsArray(v *Value) bool {
+	return v != nil && v.Tag == TArray
+}
+
+// IsDict checks if a value is a dictionary
+func IsDict(v *Value) bool {
+	return v != nil && v.Tag == TDict
+}
+
+// IsTuple checks if a value is a tuple
+func IsTuple(v *Value) bool {
+	return v != nil && v.Tag == TTuple
+}
+
+// IsNothing checks if a value is nothing (unit)
+func IsNothing(v *Value) bool {
+	return v != nil && v.Tag == TNothing
+}
+
+// IsTypeLit checks if a value is a type literal
+func IsTypeLit(v *Value) bool {
+	return v != nil && v.Tag == TTypeLit
+}
+
+// IsKeyword checks if a value is a keyword
+func IsKeyword(v *Value) bool {
+	return v != nil && v.Tag == TKeyword
+}
+
+// ============ OmniLisp Array Operations ============
+
+// ArrayLen returns the length of an array
+func ArrayLen(v *Value) int {
+	if v == nil || v.Tag != TArray {
+		return 0
+	}
+	return len(v.ArrayData)
+}
+
+// ArrayGet gets an element from an array by index
+func ArrayGet(v *Value, idx int) *Value {
+	if v == nil || v.Tag != TArray || idx < 0 || idx >= len(v.ArrayData) {
+		return nil
+	}
+	return v.ArrayData[idx]
+}
+
+// ArraySet sets an element in an array by index
+func ArraySet(v *Value, idx int, val *Value) {
+	if v != nil && v.Tag == TArray && idx >= 0 && idx < len(v.ArrayData) {
+		v.ArrayData[idx] = val
+	}
+}
+
+// ArrayPush appends an element to an array
+func ArrayPush(v *Value, val *Value) {
+	if v != nil && v.Tag == TArray {
+		v.ArrayData = append(v.ArrayData, val)
+	}
+}
+
+// ArrayPop removes and returns the last element of an array
+func ArrayPop(v *Value) *Value {
+	if v == nil || v.Tag != TArray || len(v.ArrayData) == 0 {
+		return nil
+	}
+	last := v.ArrayData[len(v.ArrayData)-1]
+	v.ArrayData = v.ArrayData[:len(v.ArrayData)-1]
+	return last
+}
+
+// ============ OmniLisp Dict Operations ============
+
+// DictLen returns the number of key-value pairs in a dictionary
+func DictLen(v *Value) int {
+	if v == nil || v.Tag != TDict {
+		return 0
+	}
+	return len(v.DictKeys)
+}
+
+// DictGet retrieves a value from a dictionary by key
+func DictGet(v *Value, key *Value) *Value {
+	if v == nil || v.Tag != TDict {
+		return nil
+	}
+	for i, k := range v.DictKeys {
+		if ValuesEqual(k, key) {
+			return v.DictValues[i]
+		}
+	}
+	return nil
+}
+
+// DictSet sets a key-value pair in a dictionary
+func DictSet(v *Value, key, val *Value) {
+	if v == nil || v.Tag != TDict {
+		return
+	}
+	// Check if key exists
+	for i, k := range v.DictKeys {
+		if ValuesEqual(k, key) {
+			v.DictValues[i] = val
+			return
+		}
+	}
+	// Add new key-value pair
+	v.DictKeys = append(v.DictKeys, key)
+	v.DictValues = append(v.DictValues, val)
+}
+
+// ValuesEqual checks if two values are equal
+func ValuesEqual(a, b *Value) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	if a.Tag != b.Tag {
+		return false
+	}
+	switch a.Tag {
+	case TInt, TChar:
+		return a.Int == b.Int
+	case TFloat:
+		return a.Float == b.Float
+	case TSym, TKeyword, TCode, TError:
+		return a.Str == b.Str
+	case TNil, TNothing:
+		return true
+	default:
+		return a == b // Pointer equality for complex types
+	}
+}
+
+// ============ OmniLisp Tuple Operations ============
+
+// TupleLen returns the length of a tuple
+func TupleLen(v *Value) int {
+	if v == nil || v.Tag != TTuple {
+		return 0
+	}
+	return len(v.TupleData)
+}
+
+// TupleGet gets an element from a tuple by index
+func TupleGet(v *Value, idx int) *Value {
+	if v == nil || v.Tag != TTuple || idx < 0 || idx >= len(v.TupleData) {
+		return nil
+	}
+	return v.TupleData[idx]
 }
 
 // NewMenv creates a meta-environment value with handler table
@@ -579,6 +822,61 @@ func (v *Value) String() string {
 		}
 		sb.WriteString(">")
 		return sb.String()
+
+	// OmniLisp types
+	case TArray:
+		var sb strings.Builder
+		sb.WriteByte('[')
+		for i, elem := range v.ArrayData {
+			if i > 0 {
+				sb.WriteByte(' ')
+			}
+			sb.WriteString(elem.String())
+		}
+		sb.WriteByte(']')
+		return sb.String()
+
+	case TDict:
+		var sb strings.Builder
+		sb.WriteString("#{")
+		for i := range v.DictKeys {
+			if i > 0 {
+				sb.WriteByte(' ')
+			}
+			sb.WriteString(v.DictKeys[i].String())
+			sb.WriteByte(' ')
+			sb.WriteString(v.DictValues[i].String())
+		}
+		sb.WriteByte('}')
+		return sb.String()
+
+	case TTuple:
+		var sb strings.Builder
+		sb.WriteString("(tuple")
+		for _, elem := range v.TupleData {
+			sb.WriteByte(' ')
+			sb.WriteString(elem.String())
+		}
+		sb.WriteByte(')')
+		return sb.String()
+
+	case TNothing:
+		return "nothing"
+
+	case TTypeLit:
+		var sb strings.Builder
+		sb.WriteByte('{')
+		sb.WriteString(v.TypeName)
+		for _, param := range v.TypeParams {
+			sb.WriteByte(' ')
+			sb.WriteString(param.String())
+		}
+		sb.WriteByte('}')
+		return sb.String()
+
+	case TKeyword:
+		return ":" + v.Str
+
 	default:
 		return "?"
 	}
@@ -663,6 +961,19 @@ func TagName(t Tag) string {
 		return "PROCESS"
 	case TUserType:
 		return "USERTYPE"
+	// OmniLisp types
+	case TArray:
+		return "ARRAY"
+	case TDict:
+		return "DICT"
+	case TTuple:
+		return "TUPLE"
+	case TNothing:
+		return "NOTHING"
+	case TTypeLit:
+		return "TYPELIT"
+	case TKeyword:
+		return "KEYWORD"
 	default:
 		return fmt.Sprintf("UNKNOWN(%d)", t)
 	}

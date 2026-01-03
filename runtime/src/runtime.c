@@ -529,6 +529,7 @@ Obj* mk_char_stack(long c) {
 
 void release_children(Obj* x) {
     if (!x) return;
+    if (IS_IMMEDIATE(x)) return;
     switch (x->tag) {
     case TAG_PAIR:
         dec_ref(x->a);
@@ -547,6 +548,12 @@ void release_children(Obj* x) {
     case TAG_CHANNEL:
         if (x->ptr) free_channel_obj(x);
         break;
+    case TAG_ATOM:
+        if (x->ptr) free_atom_obj(x);
+        break;
+    case TAG_THREAD:
+        if (x->ptr) free_thread_obj(x);
+        break;
     default:
         if (x->tag >= TAG_USER_BASE) {
             release_user_obj(x);
@@ -558,6 +565,7 @@ void release_children(Obj* x) {
 /* TREE: Direct free (ASAP) */
 void free_tree(Obj* x) {
     if (!x) return;
+    if (IS_IMMEDIATE(x)) return;
     if (is_stack_obj(x)) return;
     switch (x->tag) {
     case TAG_PAIR:
@@ -1712,6 +1720,16 @@ BorrowRef* borrow_create(Obj* obj, const char* source_desc) {
     return ref;
 }
 
+Obj* borrow_get(BorrowRef* ref) {
+    if (!ref) return NULL;
+    if (!borrow_is_valid(ref)) return NULL;
+    if (ref->ipge_target) {
+        inc_ref(ref->ipge_target);
+        return ref->ipge_target;
+    }
+    return NULL;
+}
+
 void borrow_invalidate_obj(Obj* obj) {
     if (!obj || IS_IMMEDIATE(obj)) return;
     /* IPGE: Evolve generation to invalidate all borrowed refs */
@@ -2698,6 +2716,9 @@ struct Channel {
     int count;          /* Current number of items */
     int read_pos;       /* Read position */
     int write_pos;      /* Write position */
+    Obj* slot;          /* Unbuffered handoff slot */
+    bool has_slot;
+    int waiting_receivers;
     pthread_mutex_t lock;
     pthread_cond_t not_empty;
     pthread_cond_t not_full;
@@ -2709,11 +2730,21 @@ Obj* make_channel(int capacity) {
     Channel* ch = malloc(sizeof(Channel));
     if (!ch) return NULL;
 
-    ch->capacity = capacity > 0 ? capacity : 1;
-    ch->buffer = malloc(sizeof(Obj*) * ch->capacity);
+    ch->capacity = capacity;
+    ch->buffer = NULL;
+    if (ch->capacity > 0) {
+        ch->buffer = malloc(sizeof(Obj*) * ch->capacity);
+        if (!ch->buffer) {
+            free(ch);
+            return NULL;
+        }
+    }
     ch->count = 0;
     ch->read_pos = 0;
     ch->write_pos = 0;
+    ch->slot = NULL;
+    ch->has_slot = false;
+    ch->waiting_receivers = 0;
     ch->closed = false;
 
     pthread_mutex_init(&ch->lock, NULL);
@@ -2737,6 +2768,10 @@ Obj* make_channel(int capacity) {
     return obj;
 }
 
+Obj* channel_create(int buffered) {
+    return make_channel(buffered);
+}
+
 static Channel* channel_payload(Obj* ch_obj) {
     if (!ch_obj || ch_obj->tag != TAG_CHANNEL) return NULL;
     return (Channel*)ch_obj->ptr;
@@ -2744,11 +2779,36 @@ static Channel* channel_payload(Obj* ch_obj) {
 
 /* Send value through channel (TRANSFERS OWNERSHIP) */
 /* After send, caller should NOT use or free the value */
-static bool channel_send(Obj* ch_obj, Obj* value) {
+int channel_send(Obj* ch_obj, Obj* value) {
     Channel* ch = channel_payload(ch_obj);
     if (!ch || ch->closed) return false;
 
     pthread_mutex_lock(&ch->lock);
+
+    if (ch->capacity == 0) {
+        while (ch->waiting_receivers == 0 && !ch->closed) {
+            pthread_cond_wait(&ch->not_full, &ch->lock);
+        }
+        if (ch->closed) {
+            pthread_mutex_unlock(&ch->lock);
+            return false;
+        }
+        while (ch->has_slot && !ch->closed) {
+            pthread_cond_wait(&ch->not_full, &ch->lock);
+        }
+        if (ch->closed) {
+            pthread_mutex_unlock(&ch->lock);
+            return false;
+        }
+        ch->slot = value;
+        ch->has_slot = true;
+        pthread_cond_signal(&ch->not_empty);
+        while (ch->has_slot && !ch->closed) {
+            pthread_cond_wait(&ch->not_full, &ch->lock);
+        }
+        pthread_mutex_unlock(&ch->lock);
+        return !ch->closed;
+    }
 
     /* Wait for space */
     while (ch->count >= ch->capacity && !ch->closed) {
@@ -2778,6 +2838,25 @@ Obj* channel_recv(Obj* ch_obj) {
     if (!ch) return NULL;
 
     pthread_mutex_lock(&ch->lock);
+
+    if (ch->capacity == 0) {
+        ch->waiting_receivers++;
+        pthread_cond_signal(&ch->not_full);
+        while (!ch->has_slot && !ch->closed) {
+            pthread_cond_wait(&ch->not_empty, &ch->lock);
+        }
+        ch->waiting_receivers--;
+        if (!ch->has_slot) {
+            pthread_mutex_unlock(&ch->lock);
+            return NULL;
+        }
+        Obj* value = ch->slot;
+        ch->slot = NULL;
+        ch->has_slot = false;
+        pthread_cond_signal(&ch->not_full);
+        pthread_mutex_unlock(&ch->lock);
+        return value;
+    }
 
     /* Wait for data */
     while (ch->count == 0 && !ch->closed) {
@@ -2819,11 +2898,17 @@ void free_channel_obj(Obj* ch_obj) {
     if (!ch) return;
 
     /* Free any remaining values (ownership cleanup) */
-    while (ch->count > 0) {
-        Obj* val = ch->buffer[ch->read_pos];
-        if (val) dec_ref(val);
-        ch->read_pos = (ch->read_pos + 1) % ch->capacity;
-        ch->count--;
+    if (ch->capacity == 0) {
+        if (ch->has_slot && ch->slot) {
+            dec_ref(ch->slot);
+        }
+    } else {
+        while (ch->count > 0) {
+            Obj* val = ch->buffer[ch->read_pos];
+            if (val) dec_ref(val);
+            ch->read_pos = (ch->read_pos + 1) % ch->capacity;
+            ch->count--;
+        }
     }
 
     free(ch->buffer);
@@ -2925,6 +3010,10 @@ Obj* make_atom(Obj* initial) {
     return obj;
 }
 
+Obj* atom_create(Obj* initial) {
+    return make_atom(initial);
+}
+
 static Atom* atom_payload(Obj* atom_obj) {
     if (!atom_obj || atom_obj->tag != TAG_ATOM) return NULL;
     return (Atom*)atom_obj->ptr;
@@ -2996,6 +3085,10 @@ Obj* atom_cas(Obj* atom_obj, Obj* expected, Obj* new_val) {
     pthread_mutex_unlock(&a->lock);
 
     return mk_int(success ? 1 : 0);
+}
+
+Obj* atom_compare_and_set(Obj* atom, Obj* expected, Obj* new_val) {
+    return atom_cas(atom, expected, new_val);
 }
 
 /* Free atom */
@@ -3082,6 +3175,10 @@ Obj* spawn_thread(Obj* closure) {
     obj->ptr = h;
 
     return obj;
+}
+
+Obj* thread_create(Obj* closure) {
+    return spawn_thread(closure);
 }
 
 static ThreadHandle* thread_payload(Obj* thread_obj) {
@@ -3344,5 +3441,3 @@ Obj* exception_get_value(void) {
 
 /* Throw macro */
 #define THROW(value) exception_throw((Obj*)(value))
-
-

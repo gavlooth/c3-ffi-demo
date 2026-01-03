@@ -20,6 +20,7 @@ package eval
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"purple_go/pkg/ast"
@@ -265,6 +266,38 @@ func defaultHLit(exp, menv *ast.Value) *ast.Value {
 }
 
 func defaultHVar(exp, menv *ast.Value) *ast.Value {
+	// OmniLisp: Handle dot notation for field access (obj.field)
+	if strings.Contains(exp.Str, ".") {
+		parts := strings.SplitN(exp.Str, ".", 2)
+		if len(parts) == 2 {
+			objName := parts[0]
+			fieldName := parts[1]
+
+			// Look up the object
+			objSym := ast.NewSym(objName)
+			obj := EnvLookup(menv.Env, objSym)
+			if obj == nil {
+				obj = GlobalLookup(objSym)
+			}
+			if obj == nil {
+				// Could be Type.Variant (enum qualified access)
+				enumDef := GlobalStructRegistry().GetEnum(objName)
+				if enumDef != nil {
+					for _, v := range enumDef.Variants {
+						if v.Name == fieldName {
+							return GlobalLookup(ast.NewSym(fieldName))
+						}
+					}
+				}
+				fmt.Printf("Error: Unbound variable: %s\n", objName)
+				return ast.Nil
+			}
+
+			// Get field from object
+			return GetField(obj, fieldName)
+		}
+	}
+
 	// First check local environment
 	v := EnvLookup(menv.Env, exp)
 	if v != nil {
@@ -481,45 +514,279 @@ func defaultHApp(exp, menv *ast.Value) *ast.Value {
 	return ast.Nil
 }
 
+// LetMode represents the binding mode for let
+type LetMode int
+
+const (
+	LetParallel   LetMode = iota // Default: parallel binding
+	LetSequential                // :seq - sequential binding
+	LetRecursive                 // :rec - recursive binding
+)
+
+// LetModifiers holds parsed let modifiers
+type LetModifiers struct {
+	Mode     LetMode
+	Name     *ast.Value // Named let (loop name)
+	Bindings *ast.Value // Binding form
+	Body     *ast.Value // Body expressions
+}
+
+// parseLetModifiers parses OmniLisp let modifiers
+// Supports:
+//   (let [x 1 y 2] body)              - parallel, array bindings
+//   (let :seq [x 1 y 2] body)         - sequential
+//   (let :rec [x ... y ...] body)     - recursive
+//   (let loop [i 0] body)             - named let
+//   (let :seq loop [i 0] body)        - combined
+func parseLetModifiers(args *ast.Value) *LetModifiers {
+	mods := &LetModifiers{
+		Mode: LetParallel,
+	}
+
+	rest := args
+
+	// Check for modifier keyword
+	if !ast.IsNil(rest) && ast.IsCell(rest) {
+		first := rest.Car
+		if ast.IsKeyword(first) || (ast.IsSym(first) && len(first.Str) > 0 && first.Str[0] == ':') {
+			keyword := first.Str
+			if ast.IsKeyword(first) {
+				keyword = first.Str
+			} else if first.Str[0] == ':' {
+				keyword = first.Str[1:]
+			}
+
+			switch keyword {
+			case "seq":
+				mods.Mode = LetSequential
+				rest = rest.Cdr
+			case "rec":
+				mods.Mode = LetRecursive
+				rest = rest.Cdr
+			}
+		}
+	}
+
+	// Check for named let (loop name)
+	if !ast.IsNil(rest) && ast.IsCell(rest) {
+		first := rest.Car
+		if ast.IsSym(first) && !ast.IsKeyword(first) {
+			// This is a loop name if followed by array/list bindings
+			if !ast.IsNil(rest.Cdr) && ast.IsCell(rest.Cdr) {
+				second := rest.Cdr.Car
+				if ast.IsArray(second) || ast.IsCell(second) {
+					mods.Name = first
+					rest = rest.Cdr
+				}
+			}
+		}
+	}
+
+	// Get bindings and body
+	if !ast.IsNil(rest) && ast.IsCell(rest) {
+		mods.Bindings = rest.Car
+		mods.Body = rest.Cdr.Car
+	}
+
+	return mods
+}
+
+// parseBindings parses bindings from either list or array form
+// List form: ((x 1) (y 2))
+// Array form: [x 1 y 2]
+func parseBindings(bindings *ast.Value) []bindInfo {
+	var result []bindInfo
+
+	// Array form: [x 1 y 2]
+	if ast.IsArray(bindings) {
+		arr := bindings.ArrayData
+		for i := 0; i+1 < len(arr); i += 2 {
+			if ast.IsSym(arr[i]) {
+				result = append(result, bindInfo{
+					sym: arr[i],
+					val: arr[i+1], // Note: value is unevaluated here
+				})
+			} else if ast.IsArray(arr[i]) && len(arr[i].ArrayData) >= 1 {
+				// Typed binding: [[x {Int}] 1]
+				if ast.IsSym(arr[i].ArrayData[0]) {
+					result = append(result, bindInfo{
+						sym: arr[i].ArrayData[0],
+						val: arr[i+1],
+					})
+				}
+			}
+		}
+		return result
+	}
+
+	// List form: ((x 1) (y 2))
+	for b := bindings; !ast.IsNil(b) && ast.IsCell(b); b = b.Cdr {
+		bind := b.Car
+		if ast.IsCell(bind) {
+			sym := bind.Car
+			valExpr := bind.Cdr.Car
+			result = append(result, bindInfo{sym: sym, val: valExpr})
+		}
+	}
+
+	return result
+}
+
 func defaultHLet(exp, menv *ast.Value) *ast.Value {
 	args := exp.Cdr
-	bindings := args.Car
-	body := args.Cdr.Car
 
+	// Parse OmniLisp modifiers
+	mods := parseLetModifiers(args)
+
+	// Parse bindings
+	bindList := parseBindings(mods.Bindings)
+
+	// Handle named let (loop form)
+	if mods.Name != nil {
+		return evalNamedLet(mods.Name, bindList, mods.Body, mods.Mode, menv)
+	}
+
+	// Handle different binding modes
+	switch mods.Mode {
+	case LetSequential:
+		return evalLetSequential(bindList, mods.Body, menv)
+	case LetRecursive:
+		return evalLetRecursive(bindList, mods.Body, menv)
+	default:
+		return evalLetParallel(bindList, mods.Body, menv)
+	}
+}
+
+// evalLetParallel evaluates bindings in parallel (all see same environment)
+func evalLetParallel(bindList []bindInfo, body *ast.Value, menv *ast.Value) *ast.Value {
 	anyCode := false
 	newEnv := menv.Env
 
-	// Collect bindings
-	var bindList []bindInfo
-
-	b := bindings
-	for !ast.IsNil(b) && ast.IsCell(b) {
-		bind := b.Car
-		sym := bind.Car
-		valExpr := bind.Cdr.Car
-		val := Eval(valExpr, menv)
+	// Evaluate all values in the original environment
+	evaluated := make([]bindInfo, len(bindList))
+	for i, bi := range bindList {
+		val := Eval(bi.val, menv)
 		if val == nil {
 			val = ast.Nil
 		}
 		if ast.IsCode(val) {
 			anyCode = true
 		}
-		bindList = append(bindList, bindInfo{sym: sym, val: val})
-		b = b.Cdr
+		evaluated[i] = bindInfo{sym: bi.sym, val: val}
 	}
 
 	if anyCode {
-		// Code generation path - generate C code block
-		return generateLetCode(bindList, body, menv)
+		return generateLetCode(evaluated, body, menv)
 	}
 
-	// Interpretation path
-	for _, bi := range bindList {
+	// Extend environment with all bindings
+	for _, bi := range evaluated {
 		newEnv = EnvExtend(newEnv, bi.sym, bi.val)
 	}
 
-	// Create body menv preserving handlers
 	bodyMenv := ast.NewMenv(newEnv, menv.Parent, menv.Level, menv.CopyHandlers())
+	return Eval(body, bodyMenv)
+}
+
+// evalLetSequential evaluates bindings sequentially (each sees previous bindings)
+func evalLetSequential(bindList []bindInfo, body *ast.Value, menv *ast.Value) *ast.Value {
+	newEnv := menv.Env
+	currentMenv := menv
+
+	for _, bi := range bindList {
+		val := Eval(bi.val, currentMenv)
+		if val == nil {
+			val = ast.Nil
+		}
+		newEnv = EnvExtend(newEnv, bi.sym, val)
+		currentMenv = ast.NewMenv(newEnv, menv.Parent, menv.Level, menv.CopyHandlers())
+	}
+
+	return Eval(body, currentMenv)
+}
+
+// evalLetRecursive evaluates bindings recursively (all see all bindings, even unevaluated)
+func evalLetRecursive(bindList []bindInfo, body *ast.Value, menv *ast.Value) *ast.Value {
+	// Create placeholders
+	uninit := ast.NewPrim(nil)
+	newEnv := menv.Env
+	for _, bi := range bindList {
+		newEnv = EnvExtend(newEnv, bi.sym, uninit)
+	}
+
+	recMenv := ast.NewMenv(newEnv, menv.Parent, menv.Level, menv.CopyHandlers())
+
+	// Evaluate and update
+	for _, bi := range bindList {
+		val := Eval(bi.val, recMenv)
+		if val == nil {
+			val = ast.Nil
+		}
+		// Update the binding in place
+		for e := newEnv; !ast.IsNil(e) && ast.IsCell(e); e = e.Cdr {
+			pair := e.Car
+			if ast.SymEq(pair.Car, bi.sym) {
+				pair.Cdr = val
+				break
+			}
+		}
+	}
+
+	return Eval(body, recMenv)
+}
+
+// evalNamedLet evaluates a named let (loop form)
+// (let loop [i 0] body) -> loop is a function that can be called recursively
+func evalNamedLet(name *ast.Value, bindList []bindInfo, body *ast.Value, mode LetMode, menv *ast.Value) *ast.Value {
+	// Build parameter list and initial values
+	var params []*ast.Value
+	var initVals []*ast.Value
+
+	for _, bi := range bindList {
+		params = append(params, bi.sym)
+		initVals = append(initVals, bi.val)
+	}
+
+	// Create a recursive lambda for the loop
+	paramList := ast.Nil
+	for i := len(params) - 1; i >= 0; i-- {
+		paramList = ast.NewCell(params[i], paramList)
+	}
+
+	// Create the recursive lambda
+	loopLam := ast.NewRecLambda(name, paramList, body, menv.Env)
+
+	// Extend environment with the loop function
+	newEnv := EnvExtend(menv.Env, name, loopLam)
+	loopLam.LamEnv = newEnv // Update closure to include self
+
+	// Evaluate initial values based on mode
+	var evaledVals []*ast.Value
+	switch mode {
+	case LetSequential:
+		currentEnv := newEnv
+		for _, valExpr := range initVals {
+			currentMenv := ast.NewMenv(currentEnv, menv.Parent, menv.Level, menv.CopyHandlers())
+			val := Eval(valExpr, currentMenv)
+			evaledVals = append(evaledVals, val)
+		}
+	default:
+		initMenv := ast.NewMenv(newEnv, menv.Parent, menv.Level, menv.CopyHandlers())
+		for _, valExpr := range initVals {
+			val := Eval(valExpr, initMenv)
+			evaledVals = append(evaledVals, val)
+		}
+	}
+
+	// Create environment with initial bindings
+	bodyEnv := newEnv
+	for i, param := range params {
+		if i < len(evaledVals) {
+			bodyEnv = EnvExtend(bodyEnv, param, evaledVals[i])
+		}
+	}
+
+	bodyMenv := ast.NewMenv(bodyEnv, menv.Parent, menv.Level, menv.CopyHandlers())
 	return Eval(body, bodyMenv)
 }
 
@@ -637,6 +904,50 @@ func Eval(expr, menv *ast.Value) *ast.Value {
 	case ast.TCode:
 		return expr
 
+	// OmniLisp self-evaluating types
+	case ast.TArray:
+		// Evaluate each element in the array
+		elements := make([]*ast.Value, len(expr.ArrayData))
+		for i, elem := range expr.ArrayData {
+			elements[i] = Eval(elem, menv)
+		}
+		return ast.NewArray(elements)
+
+	case ast.TDict:
+		// Evaluate both keys and values
+		keys := make([]*ast.Value, len(expr.DictKeys))
+		values := make([]*ast.Value, len(expr.DictValues))
+		for i := range expr.DictKeys {
+			keys[i] = Eval(expr.DictKeys[i], menv)
+			values[i] = Eval(expr.DictValues[i], menv)
+		}
+		return ast.NewDict(keys, values)
+
+	case ast.TTuple:
+		// Evaluate each element in the tuple
+		elements := make([]*ast.Value, len(expr.TupleData))
+		for i, elem := range expr.TupleData {
+			elements[i] = Eval(elem, menv)
+		}
+		return ast.NewTuple(elements)
+
+	case ast.TTypeLit:
+		// Type literals are self-evaluating
+		// But we may need to evaluate type parameters
+		params := make([]*ast.Value, len(expr.TypeParams))
+		for i, param := range expr.TypeParams {
+			params[i] = Eval(param, menv)
+		}
+		return ast.NewTypeLit(expr.TypeName, params)
+
+	case ast.TKeyword:
+		// Keywords are self-evaluating
+		return expr
+
+	case ast.TNothing:
+		// nothing is self-evaluating
+		return expr
+
 	case ast.TSym:
 		return CallHandler(menv, ast.HIdxVar, expr)
 
@@ -678,6 +989,11 @@ func Eval(expr, menv *ast.Value) *ast.Value {
 			return CallHandler(menv, ast.HIdxLam, expr)
 		}
 
+		// OmniLisp: Arrow lambda shorthand (-> x body) or (-> (x y) body)
+		if ast.SymEqStr(op, "->") {
+			return evalArrowLambda(args, menv)
+		}
+
 		if ast.SymEqStr(op, "match") {
 			return EvalMatch(expr, menv)
 		}
@@ -686,9 +1002,40 @@ func Eval(expr, menv *ast.Value) *ast.Value {
 			return evalDo(args, menv)
 		}
 
-		// set! - mutate existing binding
+		// OmniLisp: begin - sequence expressions, returns last (or nothing if empty)
+		if ast.SymEqStr(op, "begin") {
+			return evalBegin(args, menv)
+		}
+
+		// OmniLisp: send - short form for chan-send!
+		if ast.SymEqStr(op, "send") {
+			return PrimChanSend(args, menv)
+		}
+
+		// OmniLisp: recv - short form for chan-recv!
+		if ast.SymEqStr(op, "recv") {
+			ch := Eval(args.Car, menv)
+			return ChanRecvBlocking(ch)
+		}
+
+		// OmniLisp: for - collect results with nested (Cartesian) semantics
+		if ast.SymEqStr(op, "for") {
+			return evalFor(args, menv, true)
+		}
+
+		// OmniLisp: foreach - side effects with nested semantics
+		if ast.SymEqStr(op, "foreach") {
+			return evalFor(args, menv, false)
+		}
+
+		// set! - mutate existing binding (handles dot notation too)
 		if ast.SymEqStr(op, "set!") {
 			return evalSetBang(args, menv)
+		}
+
+		// OmniLisp: set-field! - mutate struct field
+		if ast.SymEqStr(op, "set-field!") {
+			return evalSetField(args, menv)
 		}
 
 		// define - create top-level definition
@@ -872,6 +1219,11 @@ func Eval(expr, menv *ast.Value) *ast.Value {
 			return evalQuasiquote(args.Car, menv)
 		}
 
+		// OmniLisp: syntax-quote / #' - hygienic quasiquote
+		if ast.SymEqStr(op, "syntax-quote") || ast.SymEqStr(op, "#'") {
+			return evalSyntaxQuote(args, menv)
+		}
+
 		if ast.SymEqStr(op, "sym-eq?") {
 			a := Eval(args.Car, menv)
 			b := Eval(args.Cdr.Car, menv)
@@ -952,6 +1304,27 @@ func Eval(expr, menv *ast.Value) *ast.Value {
 		// (deftype TypeName (field1 Type1) (field2 Type2) ...)
 		if ast.SymEqStr(op, "deftype") {
 			return evalDeftype(args, menv)
+		}
+
+		// OmniLisp Module System
+		// ======================
+
+		// module - Define a module
+		// (module ModuleName (export f1 f2) body...)
+		if ast.SymEqStr(op, "module") {
+			return evalModule(args, menv)
+		}
+
+		// import - Import from a module
+		// (import ModuleName) or (import [ModuleName :as M])
+		if ast.SymEqStr(op, "import") {
+			return evalImport(args, menv)
+		}
+
+		// require - Load a module file
+		// (require "path/to/module.ol")
+		if ast.SymEqStr(op, "require") {
+			return evalRequire(args, menv)
 		}
 
 		// Regular application - use app handler
@@ -1116,9 +1489,159 @@ func evalOr(args, menv *ast.Value) *ast.Value {
 	return ast.Nil
 }
 
+// evalArrowLambda implements arrow lambda shorthand
+// (-> x body) - single parameter
+// (-> (x y) body) - multiple parameters
+func evalArrowLambda(args, menv *ast.Value) *ast.Value {
+	if ast.IsNil(args) || ast.IsNil(args.Cdr) {
+		return ast.NewError("->: requires params and body")
+	}
+
+	paramsExpr := args.Car
+	body := args.Cdr.Car
+
+	var params *ast.Value
+
+	// Single symbol: (-> x body) means (lambda (x) body)
+	if ast.IsSym(paramsExpr) {
+		params = ast.List1(paramsExpr)
+	} else if ast.IsCell(paramsExpr) {
+		// List of params: (-> (x y) body)
+		params = paramsExpr
+	} else if ast.IsArray(paramsExpr) {
+		// Array of params: (-> [x y] body) - convert to list
+		params = ast.Nil
+		for i := len(paramsExpr.ArrayData) - 1; i >= 0; i-- {
+			params = ast.NewCell(paramsExpr.ArrayData[i], params)
+		}
+	} else {
+		return ast.NewError("->: params must be symbol, list, or array")
+	}
+
+	return ast.NewLambda(params, body, menv.Env)
+}
+
+// forBinding represents a binding in a for expression
+type forBinding struct {
+	name *ast.Value // Variable name
+	seq  *ast.Value // Sequence to iterate over
+}
+
+// evalFor implements for/foreach with nested (Cartesian product) semantics
+// (for [x xs y ys] body) - collect results
+// (foreach [x xs y ys] body) - side effects only
+func evalFor(args, menv *ast.Value, collect bool) *ast.Value {
+	if ast.IsNil(args) || ast.IsNil(args.Cdr) {
+		if collect {
+			return ast.NewError("for: requires bindings and body")
+		}
+		return ast.NewError("foreach: requires bindings and body")
+	}
+
+	bindingsExpr := args.Car
+	body := args.Cdr.Car
+
+	// Parse bindings: [x xs y ys ...]
+	var bindings []forBinding
+
+	if ast.IsArray(bindingsExpr) {
+		arr := bindingsExpr.ArrayData
+		for i := 0; i+1 < len(arr); i += 2 {
+			name := arr[i]
+			seqExpr := arr[i+1]
+			if !ast.IsSym(name) {
+				return ast.NewError("for: binding name must be a symbol")
+			}
+			seq := Eval(seqExpr, menv)
+			bindings = append(bindings, forBinding{name: name, seq: seq})
+		}
+	} else if ast.IsCell(bindingsExpr) {
+		// List form: ((x xs) (y ys))
+		for b := bindingsExpr; !ast.IsNil(b) && ast.IsCell(b); b = b.Cdr {
+			binding := b.Car
+			if !ast.IsCell(binding) {
+				return ast.NewError("for: binding must be a pair")
+			}
+			name := binding.Car
+			seqExpr := binding.Cdr.Car
+			if !ast.IsSym(name) {
+				return ast.NewError("for: binding name must be a symbol")
+			}
+			seq := Eval(seqExpr, menv)
+			bindings = append(bindings, forBinding{name: name, seq: seq})
+		}
+	} else {
+		return ast.NewError("for: bindings must be array or list")
+	}
+
+	if len(bindings) == 0 {
+		if collect {
+			return ast.NewArray(nil)
+		}
+		return ast.Nothing
+	}
+
+	// Nested iteration (Cartesian product)
+	var results []*ast.Value
+	evalForNested(bindings, 0, menv, body, collect, &results)
+
+	if collect {
+		return ast.NewArray(results)
+	}
+	return ast.Nothing
+}
+
+// evalForNested recursively evaluates nested for bindings
+func evalForNested(bindings []forBinding, idx int, menv *ast.Value, body *ast.Value, collect bool, results *[]*ast.Value) {
+	if idx >= len(bindings) {
+		// All bindings bound, evaluate body
+		result := Eval(body, menv)
+		if collect {
+			*results = append(*results, result)
+		}
+		return
+	}
+
+	binding := bindings[idx]
+	seq := binding.seq
+
+	// Iterate over the sequence
+	if ast.IsArray(seq) {
+		for _, elem := range seq.ArrayData {
+			newEnv := EnvExtend(menv.Env, binding.name, elem)
+			newMenv := ast.NewMenv(newEnv, menv.Parent, menv.Level, menv.CopyHandlers())
+			evalForNested(bindings, idx+1, newMenv, body, collect, results)
+		}
+	} else if ast.IsCell(seq) {
+		for s := seq; !ast.IsNil(s) && ast.IsCell(s); s = s.Cdr {
+			newEnv := EnvExtend(menv.Env, binding.name, s.Car)
+			newMenv := ast.NewMenv(newEnv, menv.Parent, menv.Level, menv.CopyHandlers())
+			evalForNested(bindings, idx+1, newMenv, body, collect, results)
+		}
+	}
+	// Other sequence types could be added here (e.g., ranges)
+}
+
 // evalDo evaluates a sequence of expressions, returning the last
 func evalDo(args, menv *ast.Value) *ast.Value {
 	var result *ast.Value = ast.Nil
+	rest := args
+	for !ast.IsNil(rest) && ast.IsCell(rest) {
+		result = Eval(rest.Car, menv)
+		rest = rest.Cdr
+	}
+	return result
+}
+
+// evalBegin implements OmniLisp begin
+// (begin) -> nothing
+// (begin e1 e2 ...) -> evaluates all, returns last
+// Does NOT create a new scope
+func evalBegin(args, menv *ast.Value) *ast.Value {
+	if ast.IsNil(args) {
+		return ast.Nothing
+	}
+	var result *ast.Value = ast.Nothing
 	rest := args
 	for !ast.IsNil(rest) && ast.IsCell(rest) {
 		result = Eval(rest.Car, menv)
@@ -1454,6 +1977,31 @@ func evalSetBang(args, menv *ast.Value) *ast.Value {
 	// Evaluate the value
 	val := Eval(args.Cdr.Car, menv)
 
+	// OmniLisp: Handle dot notation for field mutation (set! obj.field value)
+	if strings.Contains(varSym.Str, ".") {
+		parts := strings.SplitN(varSym.Str, ".", 2)
+		if len(parts) == 2 {
+			objName := parts[0]
+			fieldName := parts[1]
+
+			// Look up the object
+			objSym := ast.NewSym(objName)
+			obj := EnvLookup(menv.Env, objSym)
+			if obj == nil {
+				obj = GlobalLookup(objSym)
+			}
+			if obj == nil {
+				return ast.NewError(fmt.Sprintf("set!: unbound variable: %s", objName))
+			}
+
+			// Set the field
+			if err := SetField(obj, fieldName, val); err != nil {
+				return ast.NewError(fmt.Sprintf("set!: %s", err.Error()))
+			}
+			return val
+		}
+	}
+
 	// Try to set in the current environment
 	if EnvSet(menv.Env, varSym, val) {
 		return val
@@ -1471,8 +2019,36 @@ func evalSetBang(args, menv *ast.Value) *ast.Value {
 	return ast.NewError(fmt.Sprintf("set!: unbound variable: %s", varSym.Str))
 }
 
+// evalSetField implements (set-field! obj field value)
+func evalSetField(args, menv *ast.Value) *ast.Value {
+	if ast.IsNil(args) || ast.IsNil(args.Cdr) || ast.IsNil(args.Cdr.Cdr) {
+		return ast.NewError("set-field!: requires object, field, and value")
+	}
+
+	obj := Eval(args.Car, menv)
+	fieldSym := args.Cdr.Car
+	val := Eval(args.Cdr.Cdr.Car, menv)
+
+	var fieldName string
+	if ast.IsSym(fieldSym) {
+		fieldName = fieldSym.Str
+	} else if ast.IsKeyword(fieldSym) {
+		fieldName = fieldSym.Str
+	} else {
+		return ast.NewError("set-field!: field must be a symbol or keyword")
+	}
+
+	if err := SetField(obj, fieldName, val); err != nil {
+		return ast.NewError(fmt.Sprintf("set-field!: %s", err.Error()))
+	}
+	return val
+}
+
 // evalDefine handles (define name value) or (define (name args...) body)
 // Creates a binding in the global environment
+// Also handles OmniLisp extensions:
+//   - (define [method name Type...] (params) body) - method definition
+//   - (define (name [x {Int}] [y {Int}]) body) - typed function (multiple dispatch)
 func evalDefine(args, menv *ast.Value) *ast.Value {
 	if ast.IsNil(args) {
 		return ast.NewError("define: requires at least name")
@@ -1480,12 +2056,45 @@ func evalDefine(args, menv *ast.Value) *ast.Value {
 
 	first := args.Car
 
+	// OmniLisp: Check for struct/enum/mutable type definition {struct ...} or {enum ...}
+	if ast.IsTypeLit(first) {
+		typeName := first.TypeName
+		if typeName == "struct" || typeName == "mutable" {
+			return evalDefineStruct(first, args.Cdr, menv)
+		}
+		if typeName == "enum" {
+			return evalDefineEnum(first, args.Cdr, menv)
+		}
+	}
+
+	// OmniLisp: Check for method definition [method name Type...]
+	if ast.IsArray(first) && len(first.ArrayData) >= 2 {
+		if ast.IsSym(first.ArrayData[0]) && first.ArrayData[0].Str == "method" {
+			return evalDefineMethod(first, args.Cdr, menv)
+		}
+		// OmniLisp: Check for macro definition [macro name]
+		if ast.IsSym(first.ArrayData[0]) && first.ArrayData[0].Str == "macro" {
+			return evalDefineMacro(first, args.Cdr, menv)
+		}
+	}
+
 	// Case 1: (define (name args...) body) - function shorthand
 	if ast.IsCell(first) {
 		name := first.Car
 		if !ast.IsSym(name) {
 			return ast.NewError("define: function name must be a symbol")
 		}
+
+		// OmniLisp: Check if any parameters have type annotations
+		// If so, use multiple dispatch system
+		if result := EvalDefineWithDispatch(first, args.Cdr, menv); result != nil {
+			// Generate summary for interprocedural analysis
+			if cg := codegen.GlobalCodeGenerator(); cg != nil {
+				cg.AnalyzeFunction(name.Str, first.Cdr, args.Cdr.Car)
+			}
+			return result
+		}
+
 		params := first.Cdr
 		body := args.Cdr.Car
 
@@ -1609,6 +2218,35 @@ func evalQuasiquote(expr *ast.Value, menv *ast.Value) *ast.Value {
 func evalQQ(expr *ast.Value, menv *ast.Value, depth int) *ast.Value {
 	if expr == nil || ast.IsNil(expr) {
 		return ast.Nil
+	}
+
+	// OmniLisp: Handle arrays - preserve structure
+	if ast.IsArray(expr) {
+		var items []*ast.Value
+		for _, elem := range expr.ArrayData {
+			items = append(items, evalQQ(elem, menv, depth))
+		}
+		return ast.NewArray(items)
+	}
+
+	// OmniLisp: Handle dicts - preserve structure
+	if ast.IsDict(expr) {
+		keys := make([]*ast.Value, len(expr.DictKeys))
+		vals := make([]*ast.Value, len(expr.DictValues))
+		for i := range expr.DictKeys {
+			keys[i] = evalQQ(expr.DictKeys[i], menv, depth)
+			vals[i] = evalQQ(expr.DictValues[i], menv, depth)
+		}
+		return ast.NewDict(keys, vals)
+	}
+
+	// OmniLisp: Handle tuples - preserve structure
+	if ast.IsTuple(expr) {
+		var items []*ast.Value
+		for _, elem := range expr.TupleData {
+			items = append(items, evalQQ(elem, menv, depth))
+		}
+		return ast.NewTuple(items)
 	}
 
 	// Non-list values are returned as-is

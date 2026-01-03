@@ -386,6 +386,19 @@ func (g *CodeGenerator) inferType(val *ast.Value) string {
 		return "char"
 	case ast.TCode:
 		return "Obj"
+	// OmniLisp types
+	case ast.TArray:
+		return "array"
+	case ast.TDict:
+		return "dict"
+	case ast.TTuple:
+		return "tuple"
+	case ast.TKeyword:
+		return "keyword"
+	case ast.TNothing:
+		return "nothing"
+	case ast.TTypeLit:
+		return "type"
 	case ast.TCell:
 		if ast.IsSym(val.Car) {
 			switch val.Car.Str {
@@ -456,9 +469,78 @@ func (g *CodeGenerator) ValueToCExpr(v *ast.Value) string {
 		carExpr := g.ValueToCExpr(v.Car)
 		cdrExpr := g.ValueToCExpr(v.Cdr)
 		return fmt.Sprintf("mk_pair(%s, %s)", carExpr, cdrExpr)
+
+	// OmniLisp types
+	case ast.TArray:
+		return g.genArrayExpr(v)
+	case ast.TDict:
+		return g.genDictExpr(v)
+	case ast.TTuple:
+		return g.genTupleExpr(v)
+	case ast.TKeyword:
+		return fmt.Sprintf("mk_keyword(\"%s\")", v.Str)
+	case ast.TNothing:
+		return "mk_nothing()"
+	case ast.TTypeLit:
+		return fmt.Sprintf("mk_type(\"%s\")", v.TypeName)
+	case ast.TSym:
+		return fmt.Sprintf("mk_sym(\"%s\")", v.Str)
+
 	default:
 		return "NULL"
 	}
+}
+
+// genArrayExpr generates C code for an array literal
+func (g *CodeGenerator) genArrayExpr(v *ast.Value) string {
+	if v == nil || !ast.IsArray(v) {
+		return "NULL"
+	}
+	n := len(v.ArrayData)
+	if n == 0 {
+		return "mk_array(0)"
+	}
+	// Generate: mk_array_init(n, elem0, elem1, ...)
+	var elems []string
+	for _, elem := range v.ArrayData {
+		elems = append(elems, g.ValueToCExpr(elem))
+	}
+	return fmt.Sprintf("mk_array_init(%d, %s)", n, strings.Join(elems, ", "))
+}
+
+// genDictExpr generates C code for a dictionary literal
+func (g *CodeGenerator) genDictExpr(v *ast.Value) string {
+	if v == nil || !ast.IsDict(v) {
+		return "NULL"
+	}
+	n := len(v.DictKeys)
+	if n == 0 {
+		return "mk_dict(0)"
+	}
+	// Generate: mk_dict_init(n, k0, v0, k1, v1, ...)
+	var kvs []string
+	for i := range v.DictKeys {
+		kvs = append(kvs, g.ValueToCExpr(v.DictKeys[i]))
+		kvs = append(kvs, g.ValueToCExpr(v.DictValues[i]))
+	}
+	return fmt.Sprintf("mk_dict_init(%d, %s)", n, strings.Join(kvs, ", "))
+}
+
+// genTupleExpr generates C code for a tuple literal
+func (g *CodeGenerator) genTupleExpr(v *ast.Value) string {
+	if v == nil || !ast.IsTuple(v) {
+		return "NULL"
+	}
+	n := len(v.TupleData)
+	if n == 0 {
+		return "mk_tuple(0)"
+	}
+	// Generate: mk_tuple_init(n, elem0, elem1, ...)
+	var elems []string
+	for _, elem := range v.TupleData {
+		elems = append(elems, g.ValueToCExpr(elem))
+	}
+	return fmt.Sprintf("mk_tuple_init(%d, %s)", n, strings.Join(elems, ", "))
 }
 
 // ValueToCExprStack converts a Value to a C expression, using stack allocation
@@ -515,6 +597,21 @@ func (g *CodeGenerator) LiftValue(v *ast.Value) *ast.Value {
 		carCode := g.LiftValue(v.Car)
 		cdrCode := g.LiftValue(v.Cdr)
 		return ast.NewCode(fmt.Sprintf("mk_pair(%s, %s)", carCode.Str, cdrCode.Str))
+
+	// OmniLisp types
+	case ast.TArray:
+		return ast.NewCode(g.genArrayExpr(v))
+	case ast.TDict:
+		return ast.NewCode(g.genDictExpr(v))
+	case ast.TTuple:
+		return ast.NewCode(g.genTupleExpr(v))
+	case ast.TKeyword:
+		return ast.NewCode(fmt.Sprintf("mk_keyword(\"%s\")", v.Str))
+	case ast.TNothing:
+		return ast.NewCode("mk_nothing()")
+	case ast.TTypeLit:
+		return ast.NewCode(fmt.Sprintf("mk_type(\"%s\")", v.TypeName))
+
 	default:
 		return ast.NewCode("NULL")
 	}
