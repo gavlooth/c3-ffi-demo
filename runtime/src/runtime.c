@@ -363,6 +363,8 @@ Obj* mk_int(long i) {
     x->mark = 1;
     x->tag = TAG_INT;
     x->is_pair = 0;
+    x->scc_id = -1;  /* Initialize to not in SCC */
+    x->scan_tag = 0;  /* Initialize to not visited by Tarjan */
     x->i = i;
     return x;
 }
@@ -374,6 +376,7 @@ Obj* mk_float(double f) {
     x->mark = 1;
     x->tag = TAG_FLOAT;
     x->is_pair = 0;
+    x->scc_id = -1;  /* Initialize to not in SCC */
     x->f = f;
     return x;
 }
@@ -406,6 +409,8 @@ Obj* mk_pair(Obj* a, Obj* b) {
     x->mark = 1;
     x->tag = TAG_PAIR;
     x->is_pair = 1;
+    x->scc_id = -1;  /* Initialize to not in SCC */
+    x->scan_tag = 0;  /* Initialize to not visited by Tarjan */
     /* Move semantics: ownership transfers to pair, no inc_ref needed */
     x->a = a;
     x->b = b;
@@ -917,6 +922,11 @@ SCC* create_scc(void) {
 
 void scc_add_member(SCC* scc, Obj* obj) {
     if (!scc || !obj) return;
+    /* Check if object is already in an SCC */
+    if (obj->scc_id >= 0) {
+        /* Object is already in an SCC, don't add again */
+        return;
+    }
     if (scc->member_count >= scc->member_capacity) {
         int new_cap = scc->member_capacity * 2;
         Obj** new_members = realloc(scc->members, new_cap * sizeof(Obj*));
@@ -945,12 +955,43 @@ void release_scc(SCC* scc) {
     if (!scc) return;
     scc->ref_count--;
     if (scc->ref_count <= 0 && scc->frozen) {
-        /* Free all members */
+        /* Free all members - mark as freed first to prevent double-free
+         * In a cycle, objects reference each other. We need to:
+         * 1. Mark all objects as freed (mark = -1)
+         * 2. Clear all child pointers (to prevent dec_ref on cycle members)
+         * 3. Then free the objects
+         */
         for (int i = 0; i < scc->member_count; i++) {
             Obj* obj = scc->members[i];
             if (obj) {
+                /* Mark as freed to prevent any future refcount ops */
+                obj->mark = -1;
+            }
+        }
+
+        /* Now clear child pointers and free */
+        for (int i = 0; i < scc->member_count; i++) {
+            Obj* obj = scc->members[i];
+            if (obj) {
+                /* Clear child pointers - important for cyclic references! */
+                if (obj->is_pair) {
+                    obj->a = NULL;
+                    obj->b = NULL;
+                } else if (obj->ptr && obj->tag == TAG_BOX) {
+                    obj->ptr = NULL;
+                } else if (obj->ptr && obj->tag == TAG_CLOSURE) {
+                    /* Closure has its own cleanup, but ptr points to Closure struct */
+                    obj->ptr = NULL;
+                } else if (obj->ptr && (obj->tag == TAG_SYM || obj->tag == TAG_ERROR)) {
+                    /* These have dynamically allocated strings */
+                    free(obj->ptr);
+                    obj->ptr = NULL;
+                }
                 invalidate_weak_refs_for(obj);
+                borrow_invalidate_obj(obj);
                 free(obj);
+                /* Mark as freed to catch duplicates */
+                scc->members[i] = NULL;
             }
         }
         free(scc->members);
@@ -971,12 +1012,21 @@ void release_scc(SCC* scc) {
 /* Release object considering SCC membership */
 void release_with_scc(Obj* obj) {
     if (!obj) return;
+    /* Check if object was already freed by SCC release (mark == -1) */
+    if (obj->mark < 0) {
+        /* Object was already freed, don't do anything */
+        return;
+    }
     if (obj->scc_id >= 0) {
         SCC* scc = find_scc(obj->scc_id);
         if (scc) {
             release_scc(scc);
             return;
         }
+        /* SCC was already freed - object was already freed as part of SCC
+         * Don't call dec_ref because it would cause a double-free.
+         * Just return and leave the object alone. */
+        return;
     }
     dec_ref(obj);
 }

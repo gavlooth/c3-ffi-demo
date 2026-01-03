@@ -91,8 +91,8 @@ Vendoring checklist:
 - [x] Preserve existing validation suites (`asan`, `tsan`, `valgrind`, stress tests).
 - [ ] Add coverage reporting for C (gcov/llvm-cov).
 
-## Phase 10 — Remove Go Toolchain (In Progress)
-- [ ] Remove Go sources and `go.mod` once parity is complete.
+## Phase 10 — Remove Go Toolchain ✅
+- [x] Remove Go sources and `go.mod` once parity is complete.
 - [x] Update docs to describe the C-only build and toolchain.
 - [x] Add a final parity checklist and signed-off verification results.
 - [x] Complete repo-wide rename: `purple` → `omnilisp` (binary name, docs, examples, file headers, tests).

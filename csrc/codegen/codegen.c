@@ -498,51 +498,91 @@ static void codegen_let(CodeGenContext* ctx, OmniValue* expr) {
 }
 
 static void codegen_lambda(CodeGenContext* ctx, OmniValue* expr) {
-    /* For now, we generate inline lambdas as function pointers */
-    /* Full closure support requires more infrastructure */
+    /* Generate lambda as a static function */
     int lambda_id = ctx->lambda_counter++;
 
     OmniValue* args = omni_cdr(expr);
     OmniValue* params = omni_car(args);
     OmniValue* body = omni_cdr(args);
 
-    /* Generate lambda function */
+    /* Generate lambda function name */
     char fn_name[64];
     snprintf(fn_name, sizeof(fn_name), "_lambda_%d", lambda_id);
 
-    /* Build function definition */
-    char def[4096];
+    /* Build function definition into a buffer */
+    char def[8192];
     char* p = def;
     p += sprintf(p, "static Obj* %s(", fn_name);
 
-    /* Parameters */
+    /* Parameters - register them before generating body */
     bool first = true;
-    if (omni_is_cell(params)) {
-        while (!omni_is_nil(params) && omni_is_cell(params)) {
+    OmniValue* param_list = params;
+    if (omni_is_cell(param_list)) {
+        while (!omni_is_nil(param_list) && omni_is_cell(param_list)) {
             if (!first) p += sprintf(p, ", ");
             first = false;
-            OmniValue* param = omni_car(params);
+            OmniValue* param = omni_car(param_list);
             if (omni_is_sym(param)) {
                 char* c_name = omni_codegen_mangle(param->str_val);
                 p += sprintf(p, "Obj* %s", c_name);
                 register_symbol(ctx, param->str_val, c_name);
                 free(c_name);
             }
-            params = omni_cdr(params);
+            param_list = omni_cdr(param_list);
         }
     }
     if (first) {
         p += sprintf(p, "void");
     }
-    p += sprintf(p, ")");
+    p += sprintf(p, ") {\n");
 
-    /* Add forward declaration */
-    char decl[256];
-    snprintf(decl, sizeof(decl), "%s;", def);
-    omni_codegen_add_forward_decl(ctx, decl);
+    /* Generate body - find last expression for return */
+    OmniValue* result = NULL;
+    OmniValue* body_iter = body;
+    while (!omni_is_nil(body_iter) && omni_is_cell(body_iter)) {
+        result = omni_car(body_iter);
+        body_iter = omni_cdr(body_iter);
+    }
 
-    /* Emit to lambda reference */
-    omni_codegen_emit_raw(ctx, "/* lambda */ NULL");  /* Placeholder */
+    /* Generate body using a temp context to capture output */
+    if (result) {
+        CodeGenContext* tmp = omni_codegen_new_buffer();
+        tmp->indent_level = 1;
+        tmp->lambda_counter = ctx->lambda_counter;
+        /* Copy symbol table */
+        for (size_t i = 0; i < ctx->symbols.count; i++) {
+            register_symbol(tmp, ctx->symbols.names[i], ctx->symbols.c_names[i]);
+        }
+
+        omni_codegen_emit(tmp, "return ");
+        codegen_expr(tmp, result);
+        omni_codegen_emit_raw(tmp, ";\n");
+
+        /* Update lambda counter from nested lambdas */
+        ctx->lambda_counter = tmp->lambda_counter;
+
+        /* Copy any nested lambda definitions */
+        for (size_t i = 0; i < tmp->lambda_defs.count; i++) {
+            omni_codegen_add_lambda_def(ctx, tmp->lambda_defs.defs[i]);
+        }
+
+        char* body_code = omni_codegen_get_output(tmp);
+        if (body_code) {
+            p += sprintf(p, "%s", body_code);
+            free(body_code);
+        }
+        omni_codegen_free(tmp);
+    } else {
+        p += sprintf(p, "    return NIL;\n");
+    }
+
+    p += sprintf(p, "}");
+
+    /* Add to lambda definitions */
+    omni_codegen_add_lambda_def(ctx, def);
+
+    /* Emit function name at call site */
+    omni_codegen_emit_raw(ctx, "%s", fn_name);
 }
 
 static void codegen_define(CodeGenContext* ctx, OmniValue* expr) {
@@ -816,6 +856,26 @@ void omni_codegen_program(CodeGenContext* ctx, OmniValue** exprs, size_t count) 
         }
     }
 
+    /* Generate main() to a buffer first to collect lambdas */
+    CodeGenContext* main_ctx = omni_codegen_new_buffer();
+    main_ctx->analysis = ctx->analysis;
+    main_ctx->lambda_counter = ctx->lambda_counter;
+    /* Copy symbol table */
+    for (size_t i = 0; i < ctx->symbols.count; i++) {
+        register_symbol(main_ctx, ctx->symbols.names[i], ctx->symbols.c_names[i]);
+    }
+    omni_codegen_main(main_ctx, exprs, count);
+    char* main_code = omni_codegen_get_output(main_ctx);
+
+    /* Collect lambdas generated during main */
+    for (size_t i = 0; i < main_ctx->lambda_defs.count; i++) {
+        omni_codegen_add_lambda_def(ctx, main_ctx->lambda_defs.defs[i]);
+    }
+
+    /* Don't free analysis from temp context */
+    main_ctx->analysis = NULL;
+    omni_codegen_free(main_ctx);
+
     /* Emit forward declarations */
     for (size_t i = 0; i < ctx->forward_decls.count; i++) {
         omni_codegen_emit_raw(ctx, "%s\n", ctx->forward_decls.decls[i]);
@@ -826,11 +886,14 @@ void omni_codegen_program(CodeGenContext* ctx, OmniValue** exprs, size_t count) 
 
     /* Emit lambda definitions */
     for (size_t i = 0; i < ctx->lambda_defs.count; i++) {
-        omni_codegen_emit_raw(ctx, "%s\n", ctx->lambda_defs.defs[i]);
+        omni_codegen_emit_raw(ctx, "%s\n\n", ctx->lambda_defs.defs[i]);
     }
 
     /* Emit main function */
-    omni_codegen_main(ctx, exprs, count);
+    if (main_code) {
+        omni_codegen_emit_raw(ctx, "%s", main_code);
+        free(main_code);
+    }
 }
 
 /* ============== ASAP Memory Management ============== */

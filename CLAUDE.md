@@ -1,14 +1,14 @@
-# Purple C Scratch - ASAP Memory Management
+# OmniLisp - ASAP Memory Management
 
 ## CRITICAL: ASAP is NOT Garbage Collection
 
 **ASAP (As Static As Possible)** is a **compile-time static memory management** strategy.
 It does NOT use runtime garbage collection.
+
 ### Core Principle
 
 The compiler analyzes the program and **statically inserts `free()` calls** at the optimal
 points during code generation. All deallocation decisions are made at compile time.
-There is alreay an implementation in ~/code/purple_c_scratch   rewrite it in go Use libraries to avoid exesive custom code
 
 ### Target: C99 + POSIX
 
@@ -17,37 +17,27 @@ The goal is to emit **ANSI C99 + POSIX** code:
 - **POSIX pthreads** for thread synchronization (`pthread_mutex_t`, `pthread_rwlock_t`)
 - Compile with: `gcc -std=c99 -pthread` or `clang -std=c99 -pthread`
 
-### CRITICAL: Go is NOT Involved in Runtime/Interpretation
+### Pure C Toolchain
 
-**Go is ONLY used for the compiler toolchain** (parsing, analysis, code generation).
-Go must NEVER be involved in:
-- Program execution/interpretation
-- Runtime operations
-- JIT execution paths
-- Any hot code paths
+The entire toolchain (compiler, runtime, parser) is implemented in **pure C99**:
+- `csrc/` - Compiler (parser, AST, analysis, codegen, CLI)
+- `runtime/` - Runtime library (memory management, primitives, concurrency)
+- `third_party/` - Vendored C libraries (uthash, sds, linenoise, stb_ds)
 
+### Building
+
+```bash
+# Build the compiler
+make -C csrc
+
+# Build the runtime
+make -C runtime
+
+# Run the compiler
+./csrc/omnilisp -e '(+ 1 2)'        # Compile and run expression
+./csrc/omnilisp program.omni        # Compile and run file
+./csrc/omnilisp -c program.omni     # Emit C code
 ```
-WRONG: Generated code calls back into Go functions
-WRONG: Interpreter in Go evaluates user code at runtime
-WRONG: JIT that requires Go runtime for execution
-RIGHT: Go compiler emits standalone C code → gcc/clang → native binary
-RIGHT: JIT emits C → compiles → caches native code (no Go in hot path)
-RIGHT: Runtime is pure C with no Go dependencies
-```
-
-### JIT + Runtime Cache Strategy
-
-To avoid Go in hot paths:
-1. **AOT Compilation**: Compile Purple → C → native binary (preferred)
-2. **JIT with C Cache**: Emit C code → compile once → cache `.so`/`.dylib` → dlopen
-3. **Bytecode + C VM**: Compile to bytecode → interpret in C VM (no Go)
-
-The Go-based `eval` is for:
-- Development/testing only
-- REPL convenience during development
-- NOT for production execution
-
-Production execution paths must be **pure C** with zero Go involvement.
 
 You can use other algorithms along ASAP as long as they don't do "stop the world". So mark/sweep and traditional garbage collection is out of the question
 as well as "cyclic collection" algorithms that stop the world (either all or most of them are)
