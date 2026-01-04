@@ -1006,13 +1006,39 @@ Use `%` to control placement:
 
 ## 15. Foreign Function Interface
 
-```lisp
-(@ffi "function_name" arg1 arg2 ...)
+> **Full Documentation**: See [FFI_PROPOSAL.md](./FFI_PROPOSAL.md) for comprehensive FFI design including library loading, type system, ownership annotations, memory regions, callbacks, and complete examples (SDL2, SQLite, signal handling).
 
-;; Examples
+### 15.1 Quick Syntax
+
+```lisp
+;; Basic FFI call (low-level)
+(@ffi "function_name" arg1 arg2 ...)
 (@ffi "printf" "Value: %d\n" 42)
-(@ffi "malloc" size)
+
+;; Library loading
+(import {ffi "libfoo.so" :as foo})
+
+;; Function declaration with ownership
+(define {extern malloc :from libc}
+  [size {CSize}]
+  -> {^:owned CPtr})
+
+;; Safe handle-based usage
+(with-ffi [h (ffi/alloc {Point})]
+  (set! (deref h).x 10.0)
+  (process h))
+;; h automatically freed
 ```
+
+### 15.2 Key Features
+
+| Feature | Description |
+|---------|-------------|
+| Handle-based safety | 64-bit handles with generation counters prevent use-after-free |
+| Ownership annotations | `^:owned`, `^:borrowed`, `^:consumed`, `^:escapes` |
+| Region allocation | Arena, linear, offset, pool regions via IRegion infrastructure |
+| Safe callbacks | WeakHandles that invalidate when closures are freed |
+| Deterministic mode | Sequential handle allocation for replay/debugging |
 
 Type marshalling is automatic between Omnilisp and native types.
 
