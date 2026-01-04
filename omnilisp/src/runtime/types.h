@@ -13,7 +13,8 @@ typedef enum {
     T_BOX,      // Mutable reference cell
     T_CONT,     // First-class continuation
     T_CHAN,     // CSP channel
-    T_PROCESS   // Green thread / process
+    T_PROCESS,  // Green thread / process
+    T_BOUNCE    // Trampoline thunk (fn + args)
 } Tag;
 
 struct Value;
@@ -97,6 +98,10 @@ typedef struct Value {
             struct Value* park_value;    // Value for park/unpark
             int state;
         } proc;
+        struct {                         // T_BOUNCE - trampoline thunk
+            struct Value* fn;            // Function to call
+            struct Value* args;          // Arguments list
+        } bounce;
     };
 } Value;
 
@@ -114,6 +119,7 @@ Value* mk_box(Value* initial);
 Value* mk_cont(ContFn fn, Value* menv, int tag);
 Value* mk_chan(int capacity);
 Value* mk_process(Value* thunk);
+Value* mk_bounce(Value* fn, Value* args);
 
 // -- Type Predicates --
 int is_box(Value* v);
@@ -121,6 +127,7 @@ int is_cont(Value* v);
 int is_chan(Value* v);
 int is_process(Value* v);
 int is_error(Value* v);
+int is_bounce(Value* v);
 
 // -- Box Operations --
 Value* box_get(Value* box);

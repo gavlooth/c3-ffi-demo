@@ -1406,4 +1406,47 @@ Omnilisp uses ASAP (As Static As Possible) memory management:
 - **Capture tracking** - Lambda-captured variables transfer ownership
 - **Automatic weak back-edges** - Compiler detects and handles cycles
 
-See `CLAUDE.md` for detailed ASAP documentation
+See `CLAUDE.md` for detailed ASAP documentation.
+
+### 21.7 Control Flow Primitives
+
+#### Delimited Continuations: `prompt`/`control`
+
+```lisp
+(prompt body...)           ; Establish delimitation boundary
+(control k body)           ; Capture continuation to k, evaluate body
+```
+
+Example:
+```lisp
+(prompt (+ 1 (control k 42)))  ; → 42 (aborts to prompt)
+(prompt (control k (k 10)))    ; → 10 (invokes continuation)
+```
+
+#### Trampolining: `bounce`/`trampoline`
+
+For mutual recursion without stack overflow:
+
+```lisp
+(bounce fn args...)        ; Create thunk (don't call fn yet)
+(trampoline fn args...)    ; Call fn, loop while result is bounce
+(bounce? v)                ; Check if v is a bounce thunk
+```
+
+Example - mutual recursion:
+```lisp
+(define (even? n)
+  (if (= n 0) true (bounce odd? (- n 1))))
+
+(define (odd? n)
+  (if (= n 0) false (bounce even? (- n 1))))
+
+(trampoline even? 100000)  ; → true (no stack overflow)
+```
+
+| Mechanism | Use Case | Stack Growth |
+|-----------|----------|--------------|
+| Direct recursion | Simple cases | O(n) - may overflow |
+| `bounce`/`trampoline` | Mutual recursion | O(1) - heap allocation |
+| `prompt`/`control` | Advanced control flow | O(1) - setjmp/longjmp |
+| Compiler TCO | Self-tail-recursion | O(1) - loop conversion |

@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <setjmp.h>
 
 // Forward declarations
 static Value* eval_list(Value* exprs, Env* env);
@@ -30,6 +31,23 @@ static Value* eval_array(Value* args, Env* env);
 static Value* eval_dict(Value* args, Env* env);
 static Value* eval_for(Value* args, Env* env);
 static Value* eval_foreach(Value* args, Env* env);
+static Value* eval_prompt(Value* args, Env* env);
+static Value* eval_control(Value* args, Env* env);
+
+// -- Prompt Stack for Delimited Continuations --
+#define MAX_PROMPT_STACK 64
+
+typedef struct PromptFrame {
+    jmp_buf jmp;
+    Value* result;         // Result from control
+    Value* cont_var;       // Variable name bound to continuation in control
+    Value* cont_body;      // Body to execute after capture
+    Env* cont_env;         // Environment for continuation body
+    int captured;          // Was control invoked?
+} PromptFrame;
+
+static PromptFrame prompt_stack[MAX_PROMPT_STACK];
+static int prompt_sp = 0;  // Stack pointer
 
 // Primitive registry
 #define MAX_PRIMITIVES 256
@@ -160,6 +178,7 @@ static int is_special_form(Value* sym) {
         "quote", "set!", "match", "cond", "when", "unless",
         "array", "dict", "type", "for", "foreach", "->",
         "quasiquote", "with-meta", "module", "import", "export",
+        "prompt", "control",  // Delimited continuations
         NULL
     };
     for (int i = 0; forms[i]; i++) {
@@ -332,6 +351,10 @@ static Value* eval_special_form(Value* op, Value* args, Env* env) {
     if (strcmp(name, "quasiquote") == 0) {
         return eval_quasiquote(car(args), env);
     }
+
+    // Delimited continuations
+    if (strcmp(name, "prompt") == 0) return eval_prompt(args, env);
+    if (strcmp(name, "control") == 0) return eval_control(args, env);
 
     char msg[128];
     snprintf(msg, sizeof(msg), "Unknown special form: %s", name);
@@ -966,6 +989,138 @@ static Value* eval_quasiquote(Value* expr, Env* env) {
     return result;
 }
 
+// -- Delimited Continuations: prompt/control --
+
+// Continuation wrapper that resumes from a saved point
+typedef struct {
+    Value* saved_expr;   // Expression that was being evaluated
+    Env* saved_env;      // Environment at capture point
+    int prompt_level;    // Which prompt to resume to
+} CapturedCont;
+
+// eval_prompt: (prompt body...)
+// Establishes a delimitation boundary. If control is invoked inside,
+// we longjmp back here with the captured continuation.
+static Value* eval_prompt(Value* args, Env* env) {
+    if (prompt_sp >= MAX_PROMPT_STACK) {
+        return mk_error("Prompt stack overflow");
+    }
+
+    PromptFrame* frame = &prompt_stack[prompt_sp];
+    frame->captured = 0;
+    frame->result = NULL;
+    frame->cont_var = NULL;
+    frame->cont_body = NULL;
+    frame->cont_env = NULL;
+
+    int jmp_result = setjmp(frame->jmp);
+
+    if (jmp_result == 0) {
+        // Normal execution path
+        prompt_sp++;
+        Value* result = eval_do(args, env);
+        prompt_sp--;
+        return result;
+    } else {
+        // Returned from control via longjmp
+        // frame->cont_var, frame->cont_body, frame->cont_env were set by control
+        // We need to:
+        // 1. Create a continuation function that resumes evaluation
+        // 2. Bind it to cont_var
+        // 3. Evaluate cont_body
+
+        // The continuation is a lambda that, when called with a value,
+        // returns that value as the result of the prompt
+        // For simplicity, we create a lambda that captures the value
+        Value* cont_fn = mk_lambda(
+            mk_cell(mk_sym("__v__"), mk_nil()),  // params: (__v__)
+            mk_sym("__v__"),                      // body: __v__ (identity)
+            env_to_value(env)
+        );
+
+        // Bind continuation to the variable and evaluate body
+        Env* control_env = env_new(frame->cont_env);
+        env_define(control_env, frame->cont_var, cont_fn);
+
+        Value* result = omni_eval(frame->cont_body, control_env);
+        env_free(control_env);
+
+        return result;
+    }
+}
+
+// eval_control: (control k body)
+// Captures the continuation up to the nearest prompt,
+// binds it to k, and evaluates body.
+static Value* eval_control(Value* args, Env* env) {
+    if (prompt_sp <= 0) {
+        return mk_error("control without prompt");
+    }
+
+    Value* k_var = car(args);
+    Value* body = car(cdr(args));
+
+    if (!k_var || k_var->tag != T_SYM) {
+        return mk_error("control: first argument must be a symbol");
+    }
+
+    // Get the current prompt frame
+    PromptFrame* frame = &prompt_stack[prompt_sp - 1];
+    frame->captured = 1;
+    frame->cont_var = k_var;
+    frame->cont_body = body;
+    frame->cont_env = env;
+
+    // Pop the prompt and longjmp back
+    prompt_sp--;
+    longjmp(frame->jmp, 1);
+
+    // Never reached
+    return mk_nil();
+}
+
+// -- Trampoline primitives --
+
+// prim_bounce: (bounce fn arg1 arg2 ...)
+// Creates a bounce thunk for trampolining
+static Value* prim_bounce(Value* args) {
+    Value* fn = car(args);
+    Value* fn_args = cdr(args);
+    return mk_bounce(fn, fn_args);
+}
+
+// prim_trampoline: (trampoline fn arg1 arg2 ...)
+// Calls fn with args, then loops while result is a bounce
+static Value* prim_trampoline(Value* args);
+
+// Helper to apply a function (needs access to omni_apply)
+static Value* trampoline_apply(Value* fn, Value* args) {
+    return omni_apply(fn, args, NULL);
+}
+
+static Value* prim_trampoline(Value* args) {
+    Value* fn = car(args);
+    Value* fn_args = cdr(args);
+
+    // Initial call
+    Value* result = trampoline_apply(fn, fn_args);
+
+    // Loop while we get bounces
+    while (is_bounce(result)) {
+        Value* bounce_fn = result->bounce.fn;
+        Value* bounce_args = result->bounce.args;
+        result = trampoline_apply(bounce_fn, bounce_args);
+    }
+
+    return result;
+}
+
+// prim_bounce_p: (bounce? v) - check if value is a bounce
+static Value* prim_bounce_p(Value* args) {
+    Value* v = car(args);
+    return mk_sym(is_bounce(v) ? "true" : "false");
+}
+
 // Primitive registration
 void register_primitive(const char* name, int arity, PrimitiveFn fn) {
     if (num_primitives >= MAX_PRIMITIVES) return;
@@ -1287,6 +1442,11 @@ Env* omni_env_init(void) {
     register_primitive("not", 1, prim_not);
     register_primitive("and", -1, prim_and);
     register_primitive("or", -1, prim_or);
+
+    // Trampoline primitives
+    register_primitive("bounce", -1, prim_bounce);
+    register_primitive("trampoline", -1, prim_trampoline);
+    register_primitive("bounce?", 1, prim_bounce_p);
 
     // Define primitive functions in environment
     for (int i = 0; i < num_primitives; i++) {

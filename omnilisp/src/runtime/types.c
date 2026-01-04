@@ -262,6 +262,14 @@ Value* mk_process(Value* thunk) {
     return v;
 }
 
+Value* mk_bounce(Value* fn, Value* args) {
+    Value* v = alloc_val(T_BOUNCE);
+    if (!v) return NULL;
+    v->bounce.fn = fn;
+    v->bounce.args = args;
+    return v;
+}
+
 // -- Type Predicates --
 
 int is_box(Value* v) {
@@ -282,6 +290,10 @@ int is_process(Value* v) {
 
 int is_error(Value* v) {
     return v != NULL && v->tag == T_ERROR;
+}
+
+int is_bounce(Value* v) {
+    return v != NULL && v->tag == T_BOUNCE;
 }
 
 // -- Box Operations --
@@ -406,6 +418,8 @@ char* val_to_str(Value* v) {
             ds_printf(ds, "#<process %s>", state);
             return ds_take(ds);
         }
+        case T_BOUNCE:
+            return strdup("#<bounce>");
         default:
             return strdup("?");
     }
