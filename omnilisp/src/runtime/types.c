@@ -264,6 +264,23 @@ Value* mk_process(Value* thunk) {
     v->proc.result = NULL;
     v->proc.park_value = NULL;
     v->proc.state = PROC_READY;
+
+    // Allocate fiber context for ucontext-based coroutines
+    FiberContext* ctx = malloc(sizeof(FiberContext));
+    if (!ctx) {
+        if (!compiler_arena_current) free(v);
+        return NULL;
+    }
+    ctx->stack = malloc(FIBER_STACK_SIZE);
+    if (!ctx->stack) {
+        free(ctx);
+        if (!compiler_arena_current) free(v);
+        return NULL;
+    }
+    ctx->yield_value = NULL;
+    ctx->started = 0;
+    v->proc.fiber_ctx = ctx;
+
     return v;
 }
 

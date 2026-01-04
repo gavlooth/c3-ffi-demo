@@ -1,9 +1,11 @@
 #ifndef OMNILISP_TYPES_H
 #define OMNILISP_TYPES_H
 
+#define _XOPEN_SOURCE 700
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <ucontext.h>
 
 // -- Core Value Types --
 
@@ -13,7 +15,7 @@ typedef enum {
     T_BOX,      // Mutable reference cell
     T_CONT,     // First-class continuation
     T_CHAN,     // CSP channel
-    T_PROCESS,  // Green thread / process
+    T_PROCESS,  // Fiber / lightweight coroutine
     T_BOUNCE    // Trampoline thunk (fn + args)
 } Tag;
 
@@ -33,6 +35,17 @@ typedef struct Value* (*ContFn)(struct Value* val);
 #define PROC_RUNNING 1
 #define PROC_PARKED  2
 #define PROC_DONE    3
+#define PROC_YIELDED 4
+
+// Fiber context for true coroutines (stack-switching via ucontext)
+#define FIBER_STACK_SIZE (256 * 1024)  // 256KB stack per fiber
+
+typedef struct FiberContext {
+    ucontext_t ctx;                    // Execution context
+    char* stack;                       // Fiber's own stack
+    struct Value* yield_value;         // Value passed to/from yield
+    int started;                       // Has fiber been started?
+} FiberContext;
 
 // Channel structure for CSP (cooperative, continuation-based)
 typedef struct Channel {
@@ -90,13 +103,14 @@ typedef struct Value {
             struct Channel* ch;
             int capacity;
         } chan;
-        struct {                         // T_PROCESS - green thread
+        struct {                         // T_PROCESS - fiber/coroutine
             struct Value* thunk;         // Lambda to execute
             struct Value* cont;          // Saved continuation for resuming
             struct Value* menv;          // Saved meta-environment
             struct Value* result;        // Final result when done
-            struct Value* park_value;    // Value for park/unpark
+            struct Value* park_value;    // Value for park/unpark (yield value)
             int state;
+            FiberContext* fiber_ctx;     // ucontext for true coroutines
         } proc;
         struct {                         // T_BOUNCE - trampoline thunk
             struct Value* fn;            // Function to call

@@ -53,6 +53,8 @@ static Value* eval_effect_stack(Value* args, Env* env);
 // Call stack debugging
 static Value* eval_call_stack(Value* args, Env* env);
 static Value* eval_stack_trace(Value* args, Env* env);
+// Fiber scoped construct
+static Value* eval_with_fibers(Value* args, Env* env);
 
 // -- Logical Call Stack for Debugging --
 #define MAX_CALL_STACK 256
@@ -376,6 +378,7 @@ static int is_special_form(Value* sym) {
         "with-restarts", "call-restart",  // CL-style restart compatibility via effects
         "effect-trace", "effect-stack",  // Effect debugging
         "call-stack", "stack-trace",  // Call stack debugging
+        "with-fibers",  // Fiber scoped construct
         NULL
     };
     for (int i = 0; forms[i]; i++) {
@@ -580,6 +583,9 @@ static Value* eval_special_form(Value* op, Value* args, Env* env) {
     // Call stack debugging
     if (strcmp(name, "call-stack") == 0) return eval_call_stack(args, env);
     if (strcmp(name, "stack-trace") == 0) return eval_stack_trace(args, env);
+
+    // Fiber scoped construct
+    if (strcmp(name, "with-fibers") == 0) return eval_with_fibers(args, env);
 
     char msg[128];
     snprintf(msg, sizeof(msg), "Unknown special form: %s", name);
@@ -1747,7 +1753,7 @@ static Value* prim_describe(Value* args) {
             break;
         case T_PROCESS:
             snprintf(buffer, sizeof(buffer),
-                     "process: green thread (state=%d)", v->proc.state);
+                     "fiber (state=%d)", v->proc.state);
             break;
         case T_BOUNCE:
             snprintf(buffer, sizeof(buffer),
@@ -1881,15 +1887,16 @@ static Value* prim_type_q(Value* args) {
 }
 
 /* ============================================================
- * Fiber System Implementation
+ * Fiber System Implementation (ucontext-based true coroutines)
  * ============================================================
  *
- * Cooperative fibers for OmniLisp. Each fiber is a lightweight
- * execution context that can be paused (yield) and resumed.
+ * True cooperative fibers using ucontext for stack switching.
+ * Each fiber has its own stack and can yield at any point.
  *
  * Primitives:
  *   (fiber thunk)  - Create a paused fiber from a thunk
  *   (resume f)     - Step into fiber, run until yield/done
+ *   (resume f val) - Resume with a value (returned by yield)
  *   (yield)        - Yield nothing from current fiber
  *   (yield val)    - Yield value from current fiber
  *   (spawn f)      - Run fiber under scheduler
@@ -1898,13 +1905,42 @@ static Value* prim_type_q(Value* args) {
  *   (fiber-done? f)- Check if fiber is done
  */
 
+#include <ucontext.h>
+
 // Fiber scheduler state
 static Value* fiber_run_queue = NULL;     // List of ready fibers
 static Value* fiber_current = NULL;       // Currently running fiber
 static int fiber_scheduler_running = 0;   // Is scheduler active?
+static ucontext_t fiber_resumer_ctx;      // Context to return to on yield
 
-// Forward declaration for eval
-static Value* fiber_step(Value* fiber, Value* resume_val, Env* env);
+// Forward declarations
+static void fiber_entry(void);
+static Value* fiber_resume_internal(Value* fiber, Value* resume_val);
+
+/*
+ * Entry point for fiber execution.
+ * Called via makecontext when fiber starts.
+ */
+static void fiber_entry(void) {
+    Value* fiber = fiber_current;
+    if (!fiber || fiber->tag != T_PROCESS) {
+        // Shouldn't happen, but guard against it
+        return;
+    }
+
+    FiberContext* ctx = fiber->proc.fiber_ctx;
+
+    // Execute the thunk
+    Value* result = omni_apply(fiber->proc.thunk, mk_nil(), global_env);
+
+    // Fiber completed
+    fiber->proc.state = PROC_DONE;
+    fiber->proc.result = result;
+    ctx->yield_value = result;
+
+    // Switch back to resumer
+    swapcontext(&ctx->ctx, &fiber_resumer_ctx);
+}
 
 /*
  * (fiber thunk)
@@ -1917,6 +1953,58 @@ static Value* prim_fiber(Value* args) {
         return mk_error("fiber: expected a thunk (function)");
     }
     return mk_process(thunk);
+}
+
+/*
+ * Internal resume implementation using ucontext.
+ */
+static Value* fiber_resume_internal(Value* fiber, Value* resume_val) {
+    if (fiber->proc.state == PROC_DONE) {
+        return fiber->proc.result ? fiber->proc.result : mk_nothing();
+    }
+
+    FiberContext* ctx = fiber->proc.fiber_ctx;
+    if (!ctx) {
+        return mk_error("fiber: missing fiber context");
+    }
+
+    // Save current fiber and set this one as current
+    Value* prev_fiber = fiber_current;
+    fiber_current = fiber;
+    fiber->proc.state = PROC_RUNNING;
+
+    // Set the resume value (will be returned by yield in the fiber)
+    ctx->yield_value = resume_val;
+
+    if (!ctx->started) {
+        // First time: initialize the fiber's context
+        ctx->started = 1;
+
+        if (getcontext(&ctx->ctx) == -1) {
+            fiber_current = prev_fiber;
+            return mk_error("fiber: getcontext failed");
+        }
+
+        // Set up the fiber's stack
+        ctx->ctx.uc_stack.ss_sp = ctx->stack;
+        ctx->ctx.uc_stack.ss_size = FIBER_STACK_SIZE;
+        ctx->ctx.uc_link = &fiber_resumer_ctx;  // Return here on completion
+
+        // Set entry point
+        makecontext(&ctx->ctx, fiber_entry, 0);
+    }
+
+    // Save resumer context and switch to fiber
+    if (swapcontext(&fiber_resumer_ctx, &ctx->ctx) == -1) {
+        fiber_current = prev_fiber;
+        return mk_error("fiber: swapcontext failed");
+    }
+
+    // We're back! Either fiber yielded or completed
+    fiber_current = prev_fiber;
+
+    // Return the yield/result value
+    return ctx->yield_value ? ctx->yield_value : mk_nothing();
 }
 
 /*
@@ -1935,65 +2023,14 @@ static Value* prim_resume(Value* args) {
         return mk_error("resume: expected a fiber");
     }
 
-    if (fiber->proc.state == PROC_DONE) {
-        return fiber->proc.result ? fiber->proc.result : mk_nothing();
-    }
-
-    // Use global_env for fiber execution
-    return fiber_step(fiber, resume_val, global_env);
-}
-
-/*
- * Step a fiber - run until yield or completion.
- * This is the core of fiber execution.
- */
-static Value* fiber_step(Value* fiber, Value* resume_val, Env* env) {
-    if (fiber->proc.state == PROC_DONE) {
-        return fiber->proc.result ? fiber->proc.result : mk_nothing();
-    }
-
-    // Save current fiber and set new one
-    Value* prev_fiber = fiber_current;
-    fiber_current = fiber;
-    fiber->proc.state = PROC_RUNNING;
-    fiber->proc.park_value = resume_val;
-
-    Value* result;
-
-    if (fiber->proc.cont) {
-        // Resume from saved continuation
-        // The continuation is a captured T_CONT that expects the resume value
-        Value* cont = fiber->proc.cont;
-        if (cont && cont->tag == T_CONT && cont->cont.fn) {
-            result = cont->cont.fn(resume_val);
-        } else {
-            result = mk_error("fiber: invalid saved continuation");
-        }
-    } else {
-        // First run - call the thunk
-        result = omni_apply(fiber->proc.thunk, mk_nil(), env);
-    }
-
-    // Check if fiber yielded (result will be nothing and state is PARKED)
-    if (fiber->proc.state == PROC_PARKED) {
-        // Fiber yielded - return the yielded value
-        result = fiber->proc.park_value ? fiber->proc.park_value : mk_nothing();
-        fiber->proc.state = PROC_READY;  // Ready to resume
-    } else {
-        // Fiber completed
-        fiber->proc.state = PROC_DONE;
-        fiber->proc.result = result;
-        fiber->proc.cont = NULL;
-    }
-
-    fiber_current = prev_fiber;
-    return result;
+    return fiber_resume_internal(fiber, resume_val);
 }
 
 /*
  * (yield)
  * (yield val)
- * Yield from current fiber, returning val to the resumer.
+ * Yield from current fiber, suspending execution and returning val to resumer.
+ * When resumed, yield returns the value passed to resume.
  */
 static Value* prim_yield(Value* args) {
     if (!fiber_current) {
@@ -2003,12 +2040,22 @@ static Value* prim_yield(Value* args) {
     Value* yield_val = car(args);
     if (!yield_val) yield_val = mk_nothing();
 
-    // Park the fiber with the yield value
-    fiber_current->proc.state = PROC_PARKED;
-    fiber_current->proc.park_value = yield_val;
+    FiberContext* ctx = fiber_current->proc.fiber_ctx;
+    if (!ctx) {
+        return mk_error("yield: fiber context missing");
+    }
 
-    // Return yield value (will be returned by resume)
-    return yield_val;
+    // Set yield value for resumer to receive
+    ctx->yield_value = yield_val;
+    fiber_current->proc.state = PROC_YIELDED;
+
+    // Switch back to resumer context
+    if (swapcontext(&ctx->ctx, &fiber_resumer_ctx) == -1) {
+        return mk_error("yield: swapcontext failed");
+    }
+
+    // We're resumed! Return the value passed to resume
+    return ctx->yield_value ? ctx->yield_value : mk_nothing();
 }
 
 /*
@@ -2037,6 +2084,7 @@ static Value* prim_spawn(Value* args) {
  * (join f)
  * Wait for fiber f to complete and return its result.
  * If fiber is already done, returns result immediately.
+ * If fiber parks (waiting on channel), runs the scheduler to let other fibers progress.
  */
 static Value* prim_join(Value* args) {
     Value* fiber = car(args);
@@ -2049,10 +2097,50 @@ static Value* prim_join(Value* args) {
         return fiber->proc.result ? fiber->proc.result : mk_nothing();
     }
 
-    // Run fiber to completion
+    // Run fiber to completion, handling parked state
     while (fiber->proc.state != PROC_DONE) {
-        Value* result = fiber_step(fiber, mk_nothing(), global_env);
-        if (is_error(result)) return result;
+        // If fiber is parked (waiting on channel), run other fibers
+        if (fiber->proc.state == PROC_PARKED) {
+            // Run one step of another fiber from the queue
+            if (fiber_run_queue && !is_nil(fiber_run_queue)) {
+                Value* other = car(fiber_run_queue);
+                fiber_run_queue = cdr(fiber_run_queue);
+
+                if (other && other->tag == T_PROCESS &&
+                    other->proc.state != PROC_DONE &&
+                    other->proc.state != PROC_PARKED) {
+                    Value* step_result = fiber_resume_internal(other, mk_nothing());
+                    if (is_error(step_result) && other->proc.state != PROC_DONE) {
+                        return step_result;
+                    }
+                    // Re-queue if not done and not parked
+                    if (other->proc.state != PROC_DONE && other->proc.state != PROC_PARKED) {
+                        if (!fiber_run_queue || is_nil(fiber_run_queue)) {
+                            fiber_run_queue = mk_cell(other, mk_nil());
+                        } else {
+                            Value* tail = fiber_run_queue;
+                            while (cdr(tail) && !is_nil(cdr(tail))) tail = cdr(tail);
+                            tail->cell.cdr = mk_cell(other, mk_nil());
+                        }
+                    }
+                }
+            } else {
+                // No other fibers to run - deadlock or channel should have completed
+                // Check if our fiber is still parked
+                if (fiber->proc.state == PROC_PARKED) {
+                    return mk_error("join: deadlock - fiber parked with no other fibers");
+                }
+            }
+            continue;  // Check fiber state again
+        }
+
+        // Resume the fiber
+        if (fiber->proc.state == PROC_READY || fiber->proc.state == PROC_YIELDED) {
+            Value* result = fiber_resume_internal(fiber, mk_nothing());
+            if (is_error(result) && fiber->proc.state != PROC_DONE) {
+                return result;
+            }
+        }
     }
 
     return fiber->proc.result ? fiber->proc.result : mk_nothing();
@@ -2079,16 +2167,17 @@ static Value* prim_run_fibers(Value* args) {
 
         if (!fiber || fiber->tag != T_PROCESS) continue;
         if (fiber->proc.state == PROC_DONE) continue;
+        if (fiber->proc.state == PROC_PARKED) continue;  // Skip parked fibers
 
         // Step the fiber
-        Value* result = fiber_step(fiber, mk_nothing(), global_env);
-        if (is_error(result)) {
+        Value* result = fiber_resume_internal(fiber, mk_nothing());
+        if (is_error(result) && fiber->proc.state != PROC_DONE) {
             fiber_scheduler_running = 0;
             return result;
         }
 
-        // If fiber not done, re-queue it
-        if (fiber->proc.state != PROC_DONE) {
+        // If fiber not done and not parked, re-queue it
+        if (fiber->proc.state != PROC_DONE && fiber->proc.state != PROC_PARKED) {
             // Append to end of queue
             if (!fiber_run_queue || is_nil(fiber_run_queue)) {
                 fiber_run_queue = mk_cell(fiber, mk_nil());
@@ -2126,6 +2215,126 @@ static Value* prim_fiber_done_q(Value* args) {
         return mk_error("fiber-done?: expected a fiber");
     }
     return mk_sym(fiber->proc.state == PROC_DONE ? "true" : "false");
+}
+
+/* ============================================================
+ * with-fibers: Scoped Fiber Execution
+ * ============================================================
+ *
+ * (with-fibers body...)
+ *
+ * Creates a fiber scope where:
+ * 1. Body expressions are evaluated
+ * 2. Any fibers spawned during body execution are tracked
+ * 3. All spawned fibers are run to completion
+ * 4. Fiber resources are cleaned up
+ * 5. Returns the value of the last body expression
+ */
+static void free_fiber_ctx(FiberContext* ctx) {
+    if (!ctx) return;
+    if (ctx->stack) free(ctx->stack);
+    free(ctx);
+}
+
+static Value* eval_with_fibers(Value* args, Env* env) {
+    // Save previous scheduler state
+    Value* saved_run_queue = fiber_run_queue;
+    int saved_scheduler_running = fiber_scheduler_running;
+
+    // Start fresh scope
+    fiber_run_queue = NULL;
+    fiber_scheduler_running = 0;
+
+    // Evaluate body expressions
+    Value* result = mk_nothing();
+    while (args && !is_nil(args)) {
+        result = omni_eval(car(args), env);
+        if (is_error(result)) {
+            // On error, cleanup and restore
+            // Free any remaining fibers in queue
+            Value* q = fiber_run_queue;
+            while (q && !is_nil(q)) {
+                Value* f = car(q);
+                if (f && f->tag == T_PROCESS && f->proc.fiber_ctx) {
+                    free_fiber_ctx(f->proc.fiber_ctx);
+                    f->proc.fiber_ctx = NULL;
+                }
+                q = cdr(q);
+            }
+            fiber_run_queue = saved_run_queue;
+            fiber_scheduler_running = saved_scheduler_running;
+            return result;
+        }
+        args = cdr(args);
+    }
+
+    // Run all spawned fibers to completion
+    fiber_scheduler_running = 1;
+
+    while (fiber_run_queue && !is_nil(fiber_run_queue)) {
+        // Pop first fiber from queue
+        Value* fiber = car(fiber_run_queue);
+        fiber_run_queue = cdr(fiber_run_queue);
+
+        if (!fiber || fiber->tag != T_PROCESS) continue;
+        if (fiber->proc.state == PROC_DONE) {
+            // Cleanup done fiber
+            if (fiber->proc.fiber_ctx) {
+                free_fiber_ctx(fiber->proc.fiber_ctx);
+                fiber->proc.fiber_ctx = NULL;
+            }
+            continue;
+        }
+        if (fiber->proc.state == PROC_PARKED) continue;  // Skip parked fibers
+
+        // Step the fiber
+        Value* step_result = fiber_resume_internal(fiber, mk_nothing());
+        if (is_error(step_result) && fiber->proc.state != PROC_DONE) {
+            // Cleanup on error
+            Value* q = fiber_run_queue;
+            while (q && !is_nil(q)) {
+                Value* f = car(q);
+                if (f && f->tag == T_PROCESS && f->proc.fiber_ctx) {
+                    free_fiber_ctx(f->proc.fiber_ctx);
+                    f->proc.fiber_ctx = NULL;
+                }
+                q = cdr(q);
+            }
+            if (fiber->proc.fiber_ctx) {
+                free_fiber_ctx(fiber->proc.fiber_ctx);
+                fiber->proc.fiber_ctx = NULL;
+            }
+            fiber_run_queue = saved_run_queue;
+            fiber_scheduler_running = saved_scheduler_running;
+            return step_result;
+        }
+
+        // If fiber done, cleanup
+        if (fiber->proc.state == PROC_DONE) {
+            if (fiber->proc.fiber_ctx) {
+                free_fiber_ctx(fiber->proc.fiber_ctx);
+                fiber->proc.fiber_ctx = NULL;
+            }
+        } else if (fiber->proc.state != PROC_PARKED) {
+            // Re-queue if not done and not parked
+            if (!fiber_run_queue || is_nil(fiber_run_queue)) {
+                fiber_run_queue = mk_cell(fiber, mk_nil());
+            } else {
+                // Append to end
+                Value* tail = fiber_run_queue;
+                while (cdr(tail) && !is_nil(cdr(tail))) {
+                    tail = cdr(tail);
+                }
+                tail->cell.cdr = mk_cell(fiber, mk_nil());
+            }
+        }
+    }
+
+    // Restore previous state
+    fiber_run_queue = saved_run_queue;
+    fiber_scheduler_running = saved_scheduler_running;
+
+    return result;
 }
 
 /* ============================================================
@@ -2203,18 +2412,47 @@ static Value* prim_send(Value* args) {
         ch->buffer[ch->tail] = val;
         ch->tail = (ch->tail + 1) % ch->capacity;
         ch->count++;
+
+        // Wake up any waiting receiver
+        if (ch->recv_waiters && !is_nil(ch->recv_waiters)) {
+            Value* waiter = car(ch->recv_waiters);
+            ch->recv_waiters = cdr(ch->recv_waiters);
+
+            if (waiter && waiter->tag == T_PROCESS) {
+                waiter->proc.state = PROC_READY;
+                // Re-queue the receiver
+                if (fiber_run_queue && !is_nil(fiber_run_queue)) {
+                    Value* tail = fiber_run_queue;
+                    while (cdr(tail) && !is_nil(cdr(tail))) tail = cdr(tail);
+                    tail->cell.cdr = mk_cell(waiter, mk_nil());
+                } else {
+                    fiber_run_queue = mk_cell(waiter, mk_nil());
+                }
+            }
+        }
+
         return mk_sym("ok");
     }
 
-    // Must wait - park current fiber
+    // Must wait - park current fiber and yield to scheduler
     if (fiber_current) {
-        fiber_current->proc.state = PROC_PARKED;
-        fiber_current->proc.park_value = val;
+        Value* this_fiber = fiber_current;  // Capture before yield
+        FiberContext* ctx = this_fiber->proc.fiber_ctx;
+        if (!ctx) return mk_error("send: missing fiber context");
+
+        this_fiber->proc.state = PROC_PARKED;
+        this_fiber->proc.park_value = val;
         // Add to send waiters as (fiber . value) pair
-        Value* waiter = mk_cell(fiber_current, val);
+        Value* waiter = mk_cell(this_fiber, val);
         if (!ch->send_waiters) ch->send_waiters = mk_nil();
         ch->send_waiters = mk_cell(waiter, ch->send_waiters);
-        return mk_nothing();  // Will be resumed when receiver arrives
+
+        // Actually yield to scheduler
+        ctx->yield_value = mk_nothing();
+        swapcontext(&ctx->ctx, &fiber_resumer_ctx);
+
+        // Resumed! Return ok
+        return mk_sym("ok");
     }
 
     return mk_error("send: would block (no receiver, not in fiber context)");
@@ -2269,12 +2507,42 @@ static Value* prim_recv(Value* args) {
         return mk_nothing();
     }
 
-    // Must wait - park current fiber
+    // Must wait - park current fiber and yield to scheduler
     if (fiber_current) {
-        fiber_current->proc.state = PROC_PARKED;
+        Value* this_fiber = fiber_current;  // Capture before yield
+        FiberContext* ctx = this_fiber->proc.fiber_ctx;
+        if (!ctx) return mk_error("recv: missing fiber context");
+
+        this_fiber->proc.state = PROC_PARKED;
         if (!ch->recv_waiters) ch->recv_waiters = mk_nil();
-        ch->recv_waiters = mk_cell(fiber_current, ch->recv_waiters);
-        return mk_nothing();  // Will be resumed when sender arrives
+        ch->recv_waiters = mk_cell(this_fiber, ch->recv_waiters);
+
+        // Actually yield to scheduler
+        ctx->yield_value = mk_nothing();
+        swapcontext(&ctx->ctx, &fiber_resumer_ctx);
+
+        // Resumed! Check if we got a direct handoff or need to read from buffer
+        if (this_fiber->proc.park_value) {
+            Value* val = this_fiber->proc.park_value;
+            this_fiber->proc.park_value = NULL;  // Clear after use
+            return val;
+        }
+
+        // No direct handoff, try buffer (sender put value in buffer then woke us)
+        if (ch->capacity > 0 && ch->count > 0) {
+            Value* val = ch->buffer[ch->head];
+            ch->head = (ch->head + 1) % ch->capacity;
+            ch->count--;
+            return val;
+        }
+
+        // Channel was closed while we were waiting
+        if (ch->closed) {
+            return mk_nothing();
+        }
+
+        // Shouldn't reach here in normal operation
+        return mk_nothing();
     }
 
     return mk_error("recv: would block (no sender, not in fiber context)");
@@ -3289,19 +3557,14 @@ static Value* eval_resume(Value* args, Env* env) {
         if (is_error(first)) return first;
 
         if (first && first->tag == T_PROCESS) {
-            // This is a fiber resume
+            // This is a fiber resume - use ucontext-based implementation
             Value* resume_val = mk_nothing();
             if (!is_nil(cdr(args))) {
                 resume_val = omni_eval(car(cdr(args)), env);
                 if (is_error(resume_val)) return resume_val;
             }
 
-            if (first->proc.state == PROC_DONE) {
-                return first->proc.result ? first->proc.result : mk_nothing();
-            }
-
-            // Step the fiber
-            return fiber_step(first, resume_val, env);
+            return fiber_resume_internal(first, resume_val);
         }
     }
 
