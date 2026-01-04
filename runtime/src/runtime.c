@@ -19,6 +19,9 @@
 /* Structured condition system */
 #include "condition.h"
 
+/* Algebraic effects */
+#include "effect.h"
+
 /* ========== Tagged Pointers (Multi-Type Immediates) ========== */
 /*
  * 3-bit tag scheme for immediate values (no heap allocation):
@@ -202,7 +205,10 @@ typedef enum {
     TAG_GENERATOR,      /* Iterator/generator */
     TAG_PROMISE,        /* Async promise */
     TAG_TASK,           /* Green thread task */
-    TAG_CONTINUATION    /* First-class continuation */
+    TAG_CONTINUATION,   /* First-class continuation */
+    /* Algebraic effects */
+    TAG_EFFECT,         /* Effect instance */
+    TAG_RESUMPTION      /* Resumption (captured continuation for effects) */
 } ObjTag;
 
 #define TAG_USER_BASE 1000
@@ -584,6 +590,96 @@ Obj* mk_unbound_error_obj(const char* name) {
 Obj* mk_undefined_fn_error_obj(const char* name) {
     Condition* cond = make_undefined_function(name);
     return mk_condition_obj(cond);
+}
+
+/* ========== Effect/Resumption Objects ========== */
+
+/* Create an Obj wrapping a Resumption* */
+Obj* mk_resumption_obj(Resumption* r) {
+    if (!r) return NULL;
+    Obj* x = malloc(sizeof(Obj));
+    if (!x) return NULL;
+    x->mark = 1;
+    x->scc_id = -1;
+    x->is_pair = 0;
+    x->scan_tag = 0;
+    x->tag = TAG_RESUMPTION;
+    x->generation = _next_generation();
+    x->ptr = r;
+    resumption_inc_ref(r);
+    return x;
+}
+
+/* Extract Resumption* from an Obj */
+Resumption* obj_get_resumption(Obj* obj) {
+    if (!obj || obj->tag != TAG_RESUMPTION) return NULL;
+    return (Resumption*)obj->ptr;
+}
+
+/* Create an Obj wrapping an Effect* */
+Obj* mk_effect_obj(Effect* eff) {
+    if (!eff) return NULL;
+    Obj* x = malloc(sizeof(Obj));
+    if (!x) return NULL;
+    x->mark = 1;
+    x->scc_id = -1;
+    x->is_pair = 0;
+    x->scan_tag = 0;
+    x->tag = TAG_EFFECT;
+    x->generation = _next_generation();
+    x->ptr = eff;
+    return x;
+}
+
+/* Extract Effect* from an Obj */
+Effect* obj_get_effect(Obj* obj) {
+    if (!obj || obj->tag != TAG_EFFECT) return NULL;
+    return (Effect*)obj->ptr;
+}
+
+/* Free resumption Obj */
+void free_resumption_obj(Obj* obj) {
+    if (!obj || obj->tag != TAG_RESUMPTION) return;
+    Resumption* r = (Resumption*)obj->ptr;
+    if (r) resumption_dec_ref(r);
+    free(obj);
+}
+
+/* Free effect Obj */
+void free_effect_obj(Obj* obj) {
+    if (!obj || obj->tag != TAG_EFFECT) return;
+    Effect* eff = (Effect*)obj->ptr;
+    if (eff) effect_free(eff);
+    free(obj);
+}
+
+/* Primitive: resume a resumption with a value */
+Obj* prim_resume(Obj* resume_obj, Obj* value) {
+    if (!resume_obj || resume_obj->tag != TAG_RESUMPTION) {
+        fprintf(stderr, "resume: expected resumption object\n");
+        return NULL;
+    }
+    Resumption* r = (Resumption*)resume_obj->ptr;
+    return resumption_invoke(r, value);
+}
+
+/* Primitive: check if resumption is valid */
+Obj* prim_resumption_valid(Obj* resume_obj) {
+    if (!resume_obj || resume_obj->tag != TAG_RESUMPTION) {
+        return mk_bool(0);
+    }
+    Resumption* r = (Resumption*)resume_obj->ptr;
+    return mk_bool(resumption_is_valid(r));
+}
+
+/* Primitive: perform an effect */
+Obj* prim_perform(Obj* effect_name, Obj* payload) {
+    if (!effect_name || effect_name->tag != TAG_SYM) {
+        fprintf(stderr, "perform: expected symbol for effect name\n");
+        return NULL;
+    }
+    const char* name = (const char*)effect_name->ptr;
+    return effect_perform_named(name, payload);
 }
 
 Obj* mk_int_stack(long i) {

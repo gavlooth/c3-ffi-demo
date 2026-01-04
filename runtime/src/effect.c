@@ -11,6 +11,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <setjmp.h>
+
+/* Forward declarations from runtime.c */
+extern Obj* call_closure(Obj* clos, Obj** args, int arg_count);
+extern Obj* mk_resumption_obj(Resumption* r);
+extern void inc_ref(Obj* x);
+extern void dec_ref(Obj* x);
 
 /* ============================================================
  * Global State
@@ -387,10 +394,11 @@ Obj* effect_perform(EffectType* type, Obj* payload) {
 
     /* Check for abort mode - no continuation capture needed */
     if (type->recovery && type->recovery->mode == RECOVERY_ABORT) {
-        /* Just call the handler without a resumption */
-        /* The handler cannot resume, so we don't capture continuation */
+        /* Call the handler without a resumption (it can't resume) */
+        Obj* args[2] = { payload, NULL };
+        Obj* result = call_closure(clause->handler_fn, args, 2);
         effect_free(eff);
-        return NULL;  /* Handler should handle via non-local exit */
+        return result;
     }
 
     /* Capture continuation up to handler's prompt */
@@ -405,15 +413,21 @@ Obj* effect_perform(EffectType* type, Obj* payload) {
     /* Create resumption */
     Resumption* resume = resumption_create(cont, type, eff);
 
-    /* Create OmniLisp objects for handler call */
+    /* Create Obj wrapper for resumption */
     Obj* resume_obj = mk_resumption_obj(resume);
 
-    /* Call the handler: (handler-fn payload resume) */
-    /* This is a placeholder - actual invocation depends on runtime */
+    /* Release our reference - the Obj now owns it */
+    resumption_dec_ref(resume);
 
-    /* For now, return the payload as a marker */
-    /* Real implementation would invoke clause->handler_fn */
-    return payload;
+    /* Call the handler: (handler-fn payload resume) */
+    Obj* args[2] = { payload, resume_obj };
+    Obj* result = call_closure(clause->handler_fn, args, 2);
+
+    /* The handler either:
+     * 1. Called resume(value) - result is what the original computation returns
+     * 2. Did not resume - result is the handler's return value
+     */
+    return result;
 }
 
 Obj* effect_perform_named(const char* name, Obj* payload) {
@@ -592,15 +606,4 @@ void effect_trace_record(Effect* eff) {
 
 void effect_trace_clear(void) {
     /* TODO: Implement effect trace clearing */
-}
-
-/* ============================================================
- * Obj Wrappers (placeholders - depend on runtime.h)
- * ============================================================ */
-
-Obj* mk_resumption_obj(Resumption* r) {
-    /* TODO: Create proper Obj wrapper for resumption */
-    /* This depends on the runtime's object model */
-    (void)r;
-    return NULL;
 }

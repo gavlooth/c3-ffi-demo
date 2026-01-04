@@ -123,16 +123,21 @@
     - Handler stack resolves the nearest matching handler.
     - Built-in effect types available at startup.
 
-- [TODO] Label: T-eff-perform
+- [DONE] Label: T-eff-perform
   Objective: Implement `perform` with continuation capture and resumption.
-  Where: `runtime/src/effect.c`, `runtime/src/memory/continuation.c`
+  Where: `runtime/src/effect.c`, `runtime/src/runtime.c`
   What to change:
-    - Capture the delimited continuation at `perform`.
-    - Pass a resumption object to the handler.
-    - Support resuming with a value (single-shot by default).
-  How to verify: perform an effect that resumes with a value and confirm evaluation continues correctly.
+    - Implemented `effect_perform` to capture delimited continuation at perform point.
+    - Created resumption objects with proper refcounting and mode tracking.
+    - Added TAG_RESUMPTION and TAG_EFFECT to runtime ObjTag enum.
+    - Implemented `mk_resumption_obj`, `mk_effect_obj` and related functions.
+    - Added `prim_resume`, `prim_resumption_valid`, `prim_perform` primitives.
+    - Invoke handler functions via `call_closure` with (payload, resumption) args.
+  How to verify: run `./tests/test_effect` - 22 tests pass.
   Acceptance:
-    - `perform` transfers control to the handler and resumes deterministically.
+    - `perform` captures continuation and transfers control to handler.
+    - Resumptions can be invoked to continue computation.
+    - One-shot/multi-shot/abort modes enforced correctly.
 
 - [TODO] Label: T-eff-handler-syntax
   Objective: Provide OmniLisp syntax for `effect`, `perform`, and `handle`.

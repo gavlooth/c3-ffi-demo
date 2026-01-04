@@ -221,6 +221,12 @@ void effect_free(Effect* eff);
  * ============================================================ */
 
 /*
+ * Create a resumption from a captured continuation.
+ * Used internally by effect_perform.
+ */
+Resumption* resumption_create(Continuation* cont, EffectType* type, Effect* eff);
+
+/*
  * Resume a suspended computation with a value.
  *
  * For one-shot resumptions, this can only be called once.

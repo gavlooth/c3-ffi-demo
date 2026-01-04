@@ -296,6 +296,94 @@ TEST(handler_stack_print) {
     handler_clauses_free(clauses);
 }
 
+TEST(resumption_create) {
+    effect_init();
+
+    /* Create a dummy continuation (NULL is ok for this test) */
+    Resumption* r = resumption_create(NULL, EFFECT_ASK, NULL);
+    ASSERT(r != NULL);
+    ASSERT(r->effect_type == EFFECT_ASK);
+    ASSERT(r->mode == RECOVERY_ONE_SHOT);
+    ASSERT(r->used == false);
+    ASSERT(r->refcount == 1);
+
+    resumption_dec_ref(r);
+}
+
+TEST(resumption_one_shot_constraint) {
+    effect_init();
+
+    /* Create a one-shot resumption */
+    Resumption* r = resumption_create(NULL, EFFECT_ASK, NULL);
+    ASSERT(r->mode == RECOVERY_ONE_SHOT);
+    ASSERT(r->used == false);
+
+    /* Without a continuation, resumption is not valid for invoking */
+    /* (resumption_is_valid requires r->cont != NULL) */
+    ASSERT(resumption_is_valid(r) == false);  /* No cont means not invocable */
+
+    /* Mark as used */
+    r->used = true;
+
+    /* Still invalid (no cont + used) */
+    ASSERT(resumption_is_valid(r) == false);
+
+    resumption_dec_ref(r);
+}
+
+TEST(resumption_multi_shot_clone) {
+    effect_init();
+
+    /* Create a multi-shot resumption */
+    Resumption* r = resumption_create(NULL, EFFECT_CHOICE, NULL);
+    ASSERT(r->mode == RECOVERY_MULTI_SHOT);
+
+    /* Clone it */
+    Resumption* r2 = resumption_clone(r);
+    ASSERT(r2 != NULL);
+    ASSERT(r2->mode == RECOVERY_MULTI_SHOT);
+    ASSERT(r2->used == false);  /* Clone starts unused */
+
+    resumption_dec_ref(r);
+    resumption_dec_ref(r2);
+}
+
+TEST(resumption_abort_not_resumable) {
+    effect_init();
+
+    /* Create an abort-mode resumption */
+    Resumption* r = resumption_create(NULL, EFFECT_FAIL, NULL);
+    ASSERT(r->mode == RECOVERY_ABORT);
+
+    /* Abort mode is never valid for resuming */
+    ASSERT(resumption_is_valid(r) == false);
+
+    resumption_dec_ref(r);
+}
+
+TEST(effect_perform_unhandled) {
+    effect_init();
+
+    /* Performing without a handler should fail gracefully */
+    Obj* result = effect_perform(EFFECT_ASK, NULL);
+    /* Should print error and return NULL */
+    ASSERT(result == NULL);
+}
+
+TEST(resumption_discard) {
+    effect_init();
+
+    Resumption* r = resumption_create(NULL, EFFECT_ASK, NULL);
+    ASSERT(r->used == false);
+
+    /* Discard marks as used */
+    r->refcount++;  /* Keep alive for test */
+    resumption_discard(r);
+    ASSERT(r->used == true);
+
+    resumption_dec_ref(r);
+}
+
 /* ============================================================
  * Main
  * ============================================================ */
@@ -319,6 +407,12 @@ int main(void) {
     RUN_TEST(effect_trace);
     RUN_TEST(effect_type_print);
     RUN_TEST(handler_stack_print);
+    RUN_TEST(resumption_create);
+    RUN_TEST(resumption_one_shot_constraint);
+    RUN_TEST(resumption_multi_shot_clone);
+    RUN_TEST(resumption_abort_not_resumable);
+    RUN_TEST(effect_perform_unhandled);
+    RUN_TEST(resumption_discard);
 
     printf("\n=== Results ===\n");
     printf("Passed: %d\n", tests_passed);
