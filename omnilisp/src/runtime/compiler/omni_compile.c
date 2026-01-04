@@ -17,19 +17,71 @@ static void emit_indent(CompileCtx* ctx);
 static char* fresh_temp(CompileCtx* ctx);
 static char* fresh_label(CompileCtx* ctx);
 static int compile_expr_to_var(CompileCtx* ctx, Value* expr, char* result_var);
+static int compile_expr_tail(CompileCtx* ctx, Value* expr, char* result_var);
 static int compile_call(CompileCtx* ctx, Value* fn, Value* args, char* result_var);
 static int compile_special(CompileCtx* ctx, const char* form, Value* args, char* result_var);
 
-// Emit helpers
+// Mangle symbol name to valid C identifier
+static char* mangle_name(const char* s) {
+    size_t len = strlen(s);
+    char* out = malloc(len + 1);
+    for (size_t i = 0; i < len; i++) {
+        char c = s[i];
+        if (c == '-') out[i] = '_';
+        else if (c == '?') out[i] = 'p';
+        else if (c == '!') out[i] = 'x';
+        else if (c == '*') out[i] = 's';
+        else if (c == '+') out[i] = 'P';
+        else if (c == '/') out[i] = 'D';
+        else if (c == '<') out[i] = 'L';
+        else if (c == '>') out[i] = 'G';
+        else if (c == '=') out[i] = 'E';
+        else out[i] = c;
+    }
+    out[len] = '\0';
+    return out;
+}
+
+// Check if a function is in our defined functions list
+static int is_defined_function(CompileCtx* ctx, const char* name) {
+    Value* fns = ctx->functions;
+    while (!is_nil(fns)) {
+        Value* fn_name = car(fns);
+        if (fn_name && fn_name->tag == T_SYM && strcmp(fn_name->s, name) == 0) {
+            return 1;
+        }
+        fns = cdr(fns);
+    }
+    return 0;
+}
+
+// Check if this is a self-tail-call (call to current function in tail position)
+static int is_self_tail_call(CompileCtx* ctx, Value* fn) {
+    if (!ctx->current_fn || !ctx->in_tail_position) return 0;
+    if (!fn || fn->tag != T_SYM) return 0;
+    return strcmp(fn->s, ctx->current_fn) == 0;
+}
+
+// Emit helpers - write to appropriate buffer based on compiling_function flag
 static void emit(CompileCtx* ctx, const char* s) {
     size_t len = strlen(s);
-    while (ctx->output_len + len + 1 >= ctx->output_cap) {
-        ctx->output_cap *= 2;
-        ctx->output = realloc(ctx->output, ctx->output_cap);
+    if (ctx->compiling_function) {
+        while (ctx->fn_output_len + len + 1 >= ctx->fn_output_cap) {
+            ctx->fn_output_cap *= 2;
+            ctx->fn_output = realloc(ctx->fn_output, ctx->fn_output_cap);
+        }
+        memcpy(ctx->fn_output + ctx->fn_output_len, s, len);
+        ctx->fn_output_len += len;
+        ctx->fn_output[ctx->fn_output_len] = '\0';
+    } else {
+        while (ctx->output_len + len + 1 >= ctx->output_cap) {
+            ctx->output_cap *= 2;
+            ctx->output = realloc(ctx->output, ctx->output_cap);
+        }
+        memcpy(ctx->output + ctx->output_len, s, len);
+        ctx->output_len += len;
+        ctx->output[ctx->output_len] = '\0';
     }
-    memcpy(ctx->output + ctx->output_len, s, len);
-    ctx->output_len += len;
-    ctx->output[ctx->output_len] = '\0';
 }
 
 static void emit_fmt(CompileCtx* ctx, const char* fmt, ...) {
@@ -67,22 +119,45 @@ CompileCtx* compile_ctx_new(void) {
     ctx->output = malloc(ctx->output_cap);
     ctx->output_len = 0;
     ctx->output[0] = '\0';
+
+    ctx->fn_output_cap = 4096;
+    ctx->fn_output = malloc(ctx->fn_output_cap);
+    ctx->fn_output_len = 0;
+    ctx->fn_output[0] = '\0';
+
     ctx->temp_counter = 0;
     ctx->label_counter = 0;
     ctx->functions = mk_nil();
     ctx->indent = 0;
+    ctx->compiling_function = 0;
+
+    // TCO support
+    ctx->current_fn = NULL;
+    ctx->current_params = NULL;
+    ctx->in_tail_position = 0;
+    ctx->tco_label = NULL;
     return ctx;
 }
 
 void compile_ctx_free(CompileCtx* ctx) {
     if (ctx) {
         free(ctx->output);
+        free(ctx->fn_output);
         free(ctx);
     }
 }
 
 const char* compile_get_output(CompileCtx* ctx) {
     return ctx->output;
+}
+
+// Compile expression in tail position
+static int compile_expr_tail(CompileCtx* ctx, Value* expr, char* result_var) {
+    int old_tail = ctx->in_tail_position;
+    ctx->in_tail_position = 1;
+    int ret = compile_expr_to_var(ctx, expr, result_var);
+    ctx->in_tail_position = old_tail;
+    return ret;
 }
 
 // Compile expression, putting result in result_var
@@ -237,24 +312,38 @@ static int compile_special(CompileCtx* ctx, const char* form, Value* args, char*
         char* else_label = fresh_label(ctx);
         char* end_label = fresh_label(ctx);
 
+        // Test is NOT in tail position
+        int old_tail = ctx->in_tail_position;
+        ctx->in_tail_position = 0;
         compile_expr_to_var(ctx, test, test_var);
+        ctx->in_tail_position = old_tail;
 
         emit_indent(ctx);
         emit_fmt(ctx, "Obj* %s;\n", result_var);
         emit_indent(ctx);
         emit_fmt(ctx, "if (!obj_to_bool(%s)) goto %s;\n", test_var, else_label);
 
+        // Then branch IS in tail position (if we are)
         char* then_var = fresh_temp(ctx);
-        compile_expr_to_var(ctx, then_expr, then_var);
+        if (ctx->in_tail_position) {
+            compile_expr_tail(ctx, then_expr, then_var);
+        } else {
+            compile_expr_to_var(ctx, then_expr, then_var);
+        }
         emit_indent(ctx);
         emit_fmt(ctx, "%s = %s;\n", result_var, then_var);
         emit_indent(ctx);
         emit_fmt(ctx, "goto %s;\n", end_label);
 
         emit_fmt(ctx, "%s:\n", else_label);
+        // Else branch IS in tail position (if we are)
         if (else_expr) {
             char* else_var = fresh_temp(ctx);
-            compile_expr_to_var(ctx, else_expr, else_var);
+            if (ctx->in_tail_position) {
+                compile_expr_tail(ctx, else_expr, else_var);
+            } else {
+                compile_expr_to_var(ctx, else_expr, else_var);
+            }
             emit_indent(ctx);
             emit_fmt(ctx, "%s = %s;\n", result_var, else_var);
             free(else_var);
@@ -305,13 +394,24 @@ static int compile_special(CompileCtx* ctx, const char* form, Value* args, char*
             free(temp_var);
         }
 
-        // Compile body
+        // Compile body (last expression is in tail position if we are)
         char* body_result = NULL;
         while (!is_nil(body)) {
             if (body_result) free(body_result);
             body_result = fresh_temp(ctx);
-            compile_expr_to_var(ctx, car(body), body_result);
-            body = cdr(body);
+
+            Value* next = cdr(body);
+            int is_last = is_nil(next);
+
+            if (is_last && ctx->in_tail_position) {
+                compile_expr_tail(ctx, car(body), body_result);
+            } else {
+                int old_tail = ctx->in_tail_position;
+                ctx->in_tail_position = 0;
+                compile_expr_to_var(ctx, car(body), body_result);
+                ctx->in_tail_position = old_tail;
+            }
+            body = next;
         }
 
         // Assign final result
@@ -335,8 +435,21 @@ static int compile_special(CompileCtx* ctx, const char* form, Value* args, char*
         while (!is_nil(args)) {
             if (last_var) free(last_var);
             last_var = fresh_temp(ctx);
-            compile_expr_to_var(ctx, car(args), last_var);
-            args = cdr(args);
+
+            Value* next = cdr(args);
+            int is_last = is_nil(next);
+
+            // Last expression IS in tail position (if we are)
+            if (is_last && ctx->in_tail_position) {
+                compile_expr_tail(ctx, car(args), last_var);
+            } else {
+                // Non-last expressions are NOT in tail position
+                int old_tail = ctx->in_tail_position;
+                ctx->in_tail_position = 0;
+                compile_expr_to_var(ctx, car(args), last_var);
+                ctx->in_tail_position = old_tail;
+            }
+            args = next;
         }
         emit_indent(ctx);
         if (last_var) {
@@ -376,20 +489,118 @@ static int compile_special(CompileCtx* ctx, const char* form, Value* args, char*
         Value* first = car(args);
 
         if (first && first->tag == T_CELL) {
-            // Function definition
+            // Function definition: (define (name params...) body...)
             Value* name = car(first);
+            Value* params = cdr(first);
+            Value* body = cdr(args);
+
+            if (!name || name->tag != T_SYM) {
+                emit_indent(ctx);
+                emit_fmt(ctx, "Obj* %s = NULL; // invalid define\n", result_var);
+                return 0;
+            }
+
+            // Track function name for direct calls
+            ctx->functions = mk_cell(mk_sym(name->s), ctx->functions);
+
+            // Mangle function name
+            char* mangled_name = mangle_name(name->s);
+
+            // Generate function with TCO support
+            char* tco_label = fresh_label(ctx);
+
+            // Save old context
+            const char* old_fn = ctx->current_fn;
+            Value* old_params = ctx->current_params;
+            const char* old_label = ctx->tco_label;
+            int old_tail = ctx->in_tail_position;
+            int old_indent = ctx->indent;
+            int old_compiling_fn = ctx->compiling_function;
+
+            // Set up context for function compilation
+            ctx->current_fn = name->s;
+            ctx->current_params = params;
+            ctx->tco_label = tco_label;
+            ctx->compiling_function = 1;
+            ctx->indent = 0;
+
+            // Emit function signature to function buffer
+            emit_fmt(ctx, "static Obj* fn_%s(", mangled_name);
+            Value* p = params;
+            int first_param = 1;
+            while (!is_nil(p)) {
+                Value* param = car(p);
+                if (param && param->tag == T_SYM) {
+                    char* mangled_param = mangle_name(param->s);
+                    if (!first_param) emit(ctx, ", ");
+                    emit_fmt(ctx, "Obj* %s", mangled_param);
+                    free(mangled_param);
+                    first_param = 0;
+                }
+                p = cdr(p);
+            }
+            if (first_param) emit(ctx, "void");
+            emit(ctx, ") {\n");
+
+            ctx->indent = 1;
+
+            // Emit TCO label at start
+            emit_fmt(ctx, "%s:;\n", tco_label);
+
+            // Compile body in tail position
+            char* body_result = NULL;
+            while (!is_nil(body)) {
+                if (body_result) free(body_result);
+                body_result = fresh_temp(ctx);
+
+                Value* next = cdr(body);
+                int is_last = is_nil(next);
+
+                if (is_last) {
+                    ctx->in_tail_position = 1;
+                    compile_expr_to_var(ctx, car(body), body_result);
+                } else {
+                    ctx->in_tail_position = 0;
+                    compile_expr_to_var(ctx, car(body), body_result);
+                }
+                body = next;
+            }
+
             emit_indent(ctx);
-            emit_fmt(ctx, "// define function %s (deferred)\n", name->s);
+            if (body_result) {
+                emit_fmt(ctx, "return %s;\n", body_result);
+                free(body_result);
+            } else {
+                emit(ctx, "return NOTHING_VAL;\n");
+            }
+
+            ctx->indent = 0;
+            emit(ctx, "}\n\n");
+
+            // Restore context
+            ctx->current_fn = old_fn;
+            ctx->current_params = old_params;
+            ctx->tco_label = old_label;
+            ctx->in_tail_position = old_tail;
+            ctx->indent = old_indent;
+            ctx->compiling_function = old_compiling_fn;
+
+            free(tco_label);
+            free(mangled_name);
+
+            // Result is nothing (function already compiled, no runtime value needed)
             emit_indent(ctx);
-            emit_fmt(ctx, "Obj* %s = NULL;\n", result_var);
+            emit_fmt(ctx, "Obj* %s = NOTHING_VAL; // define %s\n", result_var, name->s);
         } else {
             // Variable definition
             Value* val = car(cdr(args));
+            char* mangled_var = mangle_name(first->s);
             emit_indent(ctx);
-            emit_fmt(ctx, "Obj* %s;\n", first->s);
-            compile_expr_to_var(ctx, val, first->s);
+            emit_fmt(ctx, "Obj* %s;\n", mangled_var);
+            compile_expr_to_var(ctx, val, mangled_var);
             emit_indent(ctx);
-            emit_fmt(ctx, "Obj* %s = mk_sym(\"%s\");\n", result_var, first->s);
+            emit_fmt(ctx, "Obj* %s = NOTHING_VAL; // define %s\n", result_var, first->s);
+            free(mangled_var);
         }
         return 0;
     }
@@ -410,7 +621,92 @@ static int compile_special(CompileCtx* ctx, const char* form, Value* args, char*
 
 // Compile function call
 static int compile_call(CompileCtx* ctx, Value* fn, Value* args, char* result_var) {
-    // Compile function
+    // Check for self-tail-call (TCO opportunity)
+    if (is_self_tail_call(ctx, fn)) {
+        // TCO: reassign parameters and jump to start
+        emit_indent(ctx);
+        emit(ctx, "// TCO: tail-recursive call\n");
+
+        // Compile new argument values to temps first
+        int argc = 0;
+        Value* arg = args;
+        while (!is_nil(arg)) {
+            argc++;
+            arg = cdr(arg);
+        }
+
+        char** arg_vars = malloc(sizeof(char*) * argc);
+        arg = args;
+        for (int i = 0; i < argc; i++) {
+            arg_vars[i] = fresh_temp(ctx);
+            int old_tail = ctx->in_tail_position;
+            ctx->in_tail_position = 0;  // Args are not in tail position
+            compile_expr_to_var(ctx, car(arg), arg_vars[i]);
+            ctx->in_tail_position = old_tail;
+            arg = cdr(arg);
+        }
+
+        // Now reassign parameters (using mangled names)
+        Value* param = ctx->current_params;
+        for (int i = 0; i < argc && !is_nil(param); i++) {
+            Value* param_name = car(param);
+            if (param_name && param_name->tag == T_SYM) {
+                char* mangled = mangle_name(param_name->s);
+                emit_indent(ctx);
+                emit_fmt(ctx, "%s = %s;\n", mangled, arg_vars[i]);
+                free(mangled);
+            }
+            free(arg_vars[i]);
+            param = cdr(param);
+        }
+        free(arg_vars);
+
+        // Jump to start of function
+        emit_indent(ctx);
+        emit_fmt(ctx, "goto %s;\n", ctx->tco_label);
+
+        // Result variable won't be used but declare it anyway
+        emit_indent(ctx);
+        emit_fmt(ctx, "Obj* %s = NULL; // unreachable after TCO jump\n", result_var);
+        return 0;
+    }
+
+    // Check if calling a defined function (direct call)
+    if (fn && fn->tag == T_SYM && is_defined_function(ctx, fn->s)) {
+        char* mangled_fn = mangle_name(fn->s);
+
+        // Compile arguments
+        int argc = 0;
+        Value* arg = args;
+        while (!is_nil(arg)) {
+            argc++;
+            arg = cdr(arg);
+        }
+
+        char** arg_vars = malloc(sizeof(char*) * argc);
+        arg = args;
+        for (int i = 0; i < argc; i++) {
+            arg_vars[i] = fresh_temp(ctx);
+            compile_expr_to_var(ctx, car(arg), arg_vars[i]);
+            arg = cdr(arg);
+        }
+
+        // Direct function call
+        emit_indent(ctx);
+        emit_fmt(ctx, "Obj* %s = fn_%s(", result_var, mangled_fn);
+        for (int i = 0; i < argc; i++) {
+            if (i > 0) emit(ctx, ", ");
+            emit(ctx, arg_vars[i]);
+            free(arg_vars[i]);
+        }
+        emit(ctx, ");\n");
+        free(arg_vars);
+        free(mangled_fn);
+        return 0;
+    }
+
+    // Regular function call (non-TCO, unknown function)
+    // This case is for dynamically resolved functions
     char* fn_var = fresh_temp(ctx);
     compile_expr_to_var(ctx, fn, fn_var);
 
@@ -430,22 +726,16 @@ static int compile_call(CompileCtx* ctx, Value* fn, Value* args, char* result_va
         arg = cdr(arg);
     }
 
-    // Build argument list
+    // For now, emit a comment since apply_fn isn't available in standalone mode
     emit_indent(ctx);
-    emit_fmt(ctx, "Obj* %s_args = NULL;\n", result_var);
-    for (int i = argc - 1; i >= 0; i--) {
-        emit_indent(ctx);
-        emit_fmt(ctx, "%s_args = mk_pair(%s, %s_args);\n",
-                 result_var, arg_vars[i], result_var);
+    emit_fmt(ctx, "// Dynamic call to %s not supported in AOT mode\n", fn_var);
+    emit_indent(ctx);
+    emit_fmt(ctx, "Obj* %s = NULL; // dynamic call unsupported\n", result_var);
+
+    for (int i = 0; i < argc; i++) {
         free(arg_vars[i]);
     }
     free(arg_vars);
-
-    // Call function
-    emit_indent(ctx);
-    emit_fmt(ctx, "Obj* %s = apply_fn(%s, %s_args);\n",
-             result_var, fn_var, result_var);
-
     free(fn_var);
     return 0;
 }
@@ -672,8 +962,8 @@ int aot_compile_to_file(const char* source_file, const char* output_file) {
 
     // Compile with standalone header (self-contained, no external deps)
     CompileCtx* ctx = compile_ctx_new();
-    emit_header_standalone(ctx);
 
+    // First pass: compile all forms (functions go to fn_output, main code to output)
     emit(ctx, "int main(void) {\n");
     ctx->indent = 1;
     emit_indent(ctx);
@@ -693,12 +983,25 @@ int aot_compile_to_file(const char* source_file, const char* output_file) {
     ctx->indent = 0;
     emit(ctx, "}\n");
 
-    // Write output
+    // Write output: header + functions + main
     f = fopen(output_file, "w");
     if (!f) {
         compile_ctx_free(ctx);
         return -1;
     }
+
+    // Write header (to a temp context to get header text)
+    CompileCtx* header_ctx = compile_ctx_new();
+    emit_header_standalone(header_ctx);
+    fwrite(header_ctx->output, 1, header_ctx->output_len, f);
+    compile_ctx_free(header_ctx);
+
+    // Write function definitions
+    if (ctx->fn_output_len > 0) {
+        fwrite(ctx->fn_output, 1, ctx->fn_output_len, f);
+    }
+
+    // Write main code
     fwrite(ctx->output, 1, ctx->output_len, f);
     fclose(f);
 

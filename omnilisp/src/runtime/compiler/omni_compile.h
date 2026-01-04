@@ -6,13 +6,26 @@
 
 // Compilation context
 typedef struct CompileCtx {
-    char* output;           // Output buffer
+    char* output;           // Output buffer (for main code)
     size_t output_len;
     size_t output_cap;
+
+    char* fn_output;        // Output buffer for function definitions
+    size_t fn_output_len;
+    size_t fn_output_cap;
+
     int temp_counter;       // For generating temp variable names
     int label_counter;      // For generating labels
-    Value* functions;       // List of defined functions
+    Value* functions;       // List of defined function names (for direct calls)
     int indent;             // Current indentation level
+
+    int compiling_function; // 1 if compiling a function, 0 otherwise
+
+    // TCO support
+    const char* current_fn;  // Current function being compiled (NULL if none)
+    Value* current_params;   // Current function's parameter list
+    int in_tail_position;    // Are we compiling in tail position?
+    const char* tco_label;   // Label for TCO jump target
 } CompileCtx;
 
 // Initialize/cleanup compiler context
