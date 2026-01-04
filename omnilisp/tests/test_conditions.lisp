@@ -22,22 +22,22 @@
         (print "  Expected:" expected)
         (print "  Got:" actual))))
 
-(define (test-nil name value)
+(define (test-nothing name value)
   (set! test-count (+ test-count 1))
-  (if (null? value)
+  (if (nothing? value)
       (do
         (set! pass-count (+ pass-count 1))
         (print "PASS:" name))
       (do
         (set! fail-count (+ fail-count 1))
-        (print "FAIL:" name "(expected nil)"))))
+        (print "FAIL:" name "(expected nothing)"))))
 
-(define (test-not-nil name value)
+(define (test-not-nothing name value)
   (set! test-count (+ test-count 1))
-  (if (null? value)
+  (if (nothing? value)
       (do
         (set! fail-count (+ fail-count 1))
-        (print "FAIL:" name "(expected non-nil)"))
+        (print "FAIL:" name "(expected non-nothing)"))
       (do
         (set! pass-count (+ pass-count 1))
         (print "PASS:" name))))
@@ -100,10 +100,10 @@
     (use-value (v) v)))
 
 ;; Test 7: restart-case abort pattern
-(test-nil "restart abort returns nil"
+(test-nothing "restart abort returns nothing"
   (restart-case
     (invoke-restart (quote abort))
-    (abort () ())))
+    (abort () nothing)))
 
 ;; Test 8: restart-case with computed value
 (test-num "restart with computation"
@@ -149,18 +149,18 @@
 (print "")
 (print "=== find-restart Tests ===")
 
-;; Test 12: find-restart for missing restart
-(test-nil "find-restart missing"
+;; Test 12: find-restart for missing restart returns nothing
+(test-nothing "find-restart missing"
   (find-restart (quote nonexistent)))
 
 ;; Test 13: find-restart for present restart
-(test-not-nil "find-restart present"
+(test-not-nothing "find-restart present"
   (restart-case
     (find-restart (quote use-value))
     (use-value (v) v)))
 
 ;; Test 14: find-restart in nested context - inner
-(test-not-nil "find-restart inner"
+(test-not-nothing "find-restart inner"
   (restart-case
     (restart-case
       (find-restart (quote inner))
@@ -168,7 +168,7 @@
     (outer (v) v)))
 
 ;; Test 15: find-restart in nested context - outer
-(test-not-nil "find-restart outer from inner"
+(test-not-nothing "find-restart outer from inner"
   (restart-case
     (restart-case
       (find-restart (quote outer))

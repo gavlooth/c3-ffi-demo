@@ -1279,6 +1279,11 @@ static Value* prim_null(Value* args) {
     return mk_sym(is_nil(v) ? "true" : "false");
 }
 
+static Value* prim_nothing(Value* args) {
+    Value* v = car(args);
+    return mk_sym((v && v->tag == T_NOTHING) ? "true" : "false");
+}
+
 static Value* prim_list(Value* args) {
     return args;
 }
@@ -1458,6 +1463,7 @@ Env* omni_env_init(void) {
     register_primitive("car", 1, prim_car);
     register_primitive("cdr", 1, prim_cdr);
     register_primitive("null?", 1, prim_null);
+    register_primitive("nothing?", 1, prim_nothing);
     register_primitive("list", -1, prim_list);
     register_primitive("print", -1, prim_print);
     register_primitive("println", -1, prim_println);
@@ -1969,7 +1975,7 @@ static Value* eval_find_restart(Value* args, Env* env) {
     if (name_val->tag == T_SYM) {
         name = name_val->s;
     } else {
-        return mk_nil();  // Not a symbol, no restart found
+        return mk_nothing();  // Not a symbol, no restart found
     }
 
     RestartFrame* frame = find_restart_frame(name);
@@ -1977,5 +1983,5 @@ static Value* eval_find_restart(Value* args, Env* env) {
         // Return the restart name as a truthy value
         return name_val;
     }
-    return mk_nil();
+    return mk_nothing();
 }
