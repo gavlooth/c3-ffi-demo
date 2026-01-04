@@ -38,17 +38,19 @@
     - Restart stack supports push/pop/invoke.
     - Invoking a restart resumes control flow deterministically.
 
-- [TODO] Label: T-cond-restart-syntax
+- [DONE] Label: T-cond-restart-syntax
   Objective: Provide OmniLisp syntax for conditions and restarts.
-  Where: `csrc/parser/parser.c`, `csrc/codegen/codegen.c`, `docs/LANGUAGE_REFERENCE.md`
+  Where: `omnilisp/src/runtime/eval/omni_eval.c`, `docs/LANGUAGE_REFERENCE.md`
   What to change:
-    - Add forms like `handler-case`, `handler-bind`, and `restart-case`.
-    - Generate runtime calls that register restarts and handlers.
+    - Add forms: `handler-case`, `handler-bind`, `restart-case`, `signal`, `invoke-restart`, `find-restart`.
+    - Implement condition handler stack with setjmp/longjmp for non-local control.
+    - Implement restart frame stack with named restart invocation.
     - Document syntax and examples.
-  How to verify: run a small OmniLisp program that triggers an error and selects a restart.
+  How to verify: run OmniLisp programs that trigger errors and select restarts.
   Acceptance:
     - `handler-case` captures conditions and executes its handler.
-    - `restart-case` makes restarts visible and invocable.
+    - `handler-bind` allows handlers to invoke restarts without unwinding.
+    - `restart-case` makes restarts visible and invocable via `invoke-restart`.
 
 - [TODO] Label: T-debug-logical-stack
   Objective: Add logical OmniLisp stack tracing for errors and condition reports.

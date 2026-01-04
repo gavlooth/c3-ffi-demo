@@ -523,19 +523,206 @@ use `^:zip` metadata (preferred) with `:zip` as sugar.
 (control k body ...)       ; Capture continuation up to prompt, bind to k
 ```
 
-### 4.7 Condition System (Basic)
-Phase-1 provides minimal error handling:
+### 4.7 Condition System
 
-```lisp
-(error "message")          ; Raise non-resumable error
-(error Type "message")     ; Raise typed error
+OmniLisp provides a Common Lisp-style condition system with structured conditions,
+handlers, and restarts. Unlike exceptions in most languages, conditions support
+**resumable error handling** - handlers can invoke restarts to recover without
+unwinding the stack.
 
-;; Basic restart (single)
-(restart-case expr
-  (restart-name (args) handler-body))
+#### 4.7.1 Condition Types
+
+Built-in condition type hierarchy:
+
+```
+condition
+├── error
+│   ├── type-error        ; Type mismatch errors
+│   ├── arithmetic-error
+│   │   └── division-by-zero
+│   ├── unbound-variable  ; Undefined symbol
+│   ├── undefined-function; Unknown function
+│   └── memory-error
+│       ├── use-after-free
+│       ├── double-free
+│       └── region-mismatch
+├── ffi-error             ; Foreign function errors
+├── io-error              ; I/O errors
+└── warning               ; Non-fatal warnings
 ```
 
-Full CL-style conditions with `signal`, `handler-bind`, and multi-restart negotiation are deferred.
+#### 4.7.2 Signaling Conditions
+
+```lisp
+;; Signal a simple condition
+(signal error "something went wrong")
+
+;; Signal with condition type
+(signal type-error "expected Int, got String")
+
+;; The error form is shorthand for signaling an error condition
+(error "message")  ; Equivalent to (signal error "message")
+```
+
+#### 4.7.3 Handler-Case (Catching Conditions)
+
+`handler-case` establishes handlers that catch conditions and **unwind the stack**
+to the handler's location. Similar to try/catch in other languages.
+
+```lisp
+(handler-case
+  ;; Expression to evaluate
+  (risky-operation)
+
+  ;; Handler clauses: (condition-type (var) body...)
+  (error (e)
+    (print "Caught error:" e)
+    (quote default-value))
+
+  (type-error (e)
+    (print "Type mismatch!")
+    0))
+```
+
+Multiple handlers can be specified. The first matching handler wins.
+
+#### 4.7.4 Handler-Bind (Non-Unwinding Handlers)
+
+`handler-bind` establishes handlers that execute **without unwinding**. The handler
+can invoke restarts to resume execution at the signaling site.
+
+```lisp
+(handler-bind
+  ;; Bindings: ((type handler-fn) ...)
+  ((error (lambda (c)
+            (print "Handling error, invoking restart")
+            (invoke-restart use-value 42))))
+
+  ;; Body to execute
+  (restart-case
+    (if (= x 0)
+        (signal error "division by zero")
+        (/ y x))
+
+    ;; Restarts available for handlers to invoke
+    (use-value (v) v)))
+```
+
+#### 4.7.5 Restart-Case (Establishing Restarts)
+
+`restart-case` establishes named recovery points that handlers can invoke:
+
+```lisp
+(restart-case
+  ;; Expression that might signal
+  (parse-config-file path)
+
+  ;; Restart clauses: (name (params) body...)
+  (use-default ()
+    default-config)
+
+  (retry-with (new-path)
+    (parse-config-file new-path))
+
+  (abort ()
+    nil))
+```
+
+#### 4.7.6 Invoke-Restart
+
+Handlers use `invoke-restart` to select a recovery strategy:
+
+```lisp
+(invoke-restart restart-name)           ; No argument
+(invoke-restart restart-name value)     ; With argument
+```
+
+Example with interactive recovery:
+
+```lisp
+(restart-case
+  (let [x (read-number)]
+    (when (< x 0)
+      (signal error "negative number"))
+    x)
+
+  (use-value (v) v)
+  (use-zero () 0)
+  (retry () (read-number)))
+
+;; A handler could:
+(handler-bind
+  ((error (lambda (c)
+            (print "Got:" c)
+            (invoke-restart use-zero))))
+  body)
+```
+
+#### 4.7.7 Find-Restart
+
+Check if a restart is available:
+
+```lisp
+(if (find-restart use-value)
+    (invoke-restart use-value 42)
+    (invoke-restart abort))
+```
+
+#### 4.7.8 Common Restart Patterns
+
+**Use-Value**: Return a substitute value
+```lisp
+(restart-case
+  (/ x y)
+  (use-value (v) v))
+
+;; Handler:
+(invoke-restart use-value infinity)
+```
+
+**Retry**: Attempt the operation again
+```lisp
+(restart-case
+  (connect-to-server)
+  (retry () (connect-to-server)))
+```
+
+**Abort**: Give up and return nil
+```lisp
+(restart-case
+  (dangerous-operation)
+  (abort () nil))
+```
+
+**Continue**: Proceed despite the condition
+```lisp
+(restart-case
+  (when (check-fails?)
+    (signal warning "check failed"))
+  (continue () nil))
+```
+
+#### 4.7.9 Implementation Notes
+
+The condition system uses:
+- **Thread-local handler stacks** for handler lookup
+- **Thread-local restart stacks** for restart management
+- **setjmp/longjmp** for non-local control flow
+- **Structured condition objects** with typed slots
+
+The C runtime provides:
+- `condition_create()`, `condition_set_slot_*()` for condition construction
+- `restart_push()`, `restart_invoke()` for restart management
+- `RESTART_CASE_BEGIN/END` macros for C code
+
+#### 4.7.10 Differences from Common Lisp
+
+| Feature | Common Lisp | OmniLisp |
+|---------|-------------|----------|
+| Condition classes | CLOS classes | Simpler type registry |
+| `define-condition` | Macro with slots | Not yet implemented |
+| Interactive debugger | Built-in | Planned (T-debug-*) |
+| Restarts interactivity | Full | Programmatic only |
 
 ---
 

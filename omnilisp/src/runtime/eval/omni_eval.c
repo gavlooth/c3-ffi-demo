@@ -33,6 +33,12 @@ static Value* eval_for(Value* args, Env* env);
 static Value* eval_foreach(Value* args, Env* env);
 static Value* eval_prompt(Value* args, Env* env);
 static Value* eval_control(Value* args, Env* env);
+static Value* eval_handler_case(Value* args, Env* env);
+static Value* eval_handler_bind(Value* args, Env* env);
+static Value* eval_restart_case(Value* args, Env* env);
+static Value* eval_signal(Value* args, Env* env);
+static Value* eval_invoke_restart(Value* args, Env* env);
+static Value* eval_find_restart(Value* args, Env* env);
 
 // -- Prompt Stack for Delimited Continuations --
 #define MAX_PROMPT_STACK 64
@@ -179,6 +185,8 @@ static int is_special_form(Value* sym) {
         "array", "dict", "type", "for", "foreach", "->",
         "quasiquote", "with-meta", "module", "import", "export",
         "prompt", "control",  // Delimited continuations
+        "handler-case", "handler-bind", "restart-case", "signal",  // Condition system
+        "invoke-restart", "find-restart",  // Restart invocation
         NULL
     };
     for (int i = 0; forms[i]; i++) {
@@ -356,6 +364,14 @@ static Value* eval_special_form(Value* op, Value* args, Env* env) {
     // Delimited continuations
     if (strcmp(name, "prompt") == 0) return eval_prompt(args, env);
     if (strcmp(name, "control") == 0) return eval_control(args, env);
+
+    // Condition system
+    if (strcmp(name, "handler-case") == 0) return eval_handler_case(args, env);
+    if (strcmp(name, "handler-bind") == 0) return eval_handler_bind(args, env);
+    if (strcmp(name, "restart-case") == 0) return eval_restart_case(args, env);
+    if (strcmp(name, "signal") == 0) return eval_signal(args, env);
+    if (strcmp(name, "invoke-restart") == 0) return eval_invoke_restart(args, env);
+    if (strcmp(name, "find-restart") == 0) return eval_find_restart(args, env);
 
     char msg[128];
     snprintf(msg, sizeof(msg), "Unknown special form: %s", name);
@@ -1543,4 +1559,423 @@ Value* omni_eval_file(const char* filename) {
     }
 
     return result;
+}
+
+/* ============================================================
+ * Condition System Implementation
+ * ============================================================
+ *
+ * Syntax:
+ *   (handler-case expr
+ *     (:error (e) handler-body)
+ *     (:type-error (e) handler-body))
+ *
+ *   (handler-bind ((:error handler-fn))
+ *     body)
+ *
+ *   (restart-case expr
+ *     (use-value (v) v)
+ *     (abort () nil))
+ *
+ *   (signal condition)
+ *   (invoke-restart name &optional value)
+ *   (find-restart name)
+ */
+
+// Handler stack for condition handling
+#define MAX_HANDLER_STACK 64
+
+typedef struct HandlerFrame {
+    jmp_buf jmp;
+    Value* handlers;       // List of (type . handler-fn) pairs
+    Value* result;         // Result from handler
+    int handled;           // Was condition handled?
+    struct HandlerFrame* parent;
+} HandlerFrame;
+
+static HandlerFrame* handler_stack = NULL;
+
+// Restart stack for restart-case
+typedef struct RestartFrame {
+    jmp_buf jmp;
+    Value* restarts;       // List of (name params . body) entries
+    Value* result;         // Result from restart
+    int invoked;           // Was restart invoked?
+    Env* env;              // Environment for restart bodies
+    struct RestartFrame* parent;
+} RestartFrame;
+
+static RestartFrame* restart_stack = NULL;
+
+// Push a handler frame
+static HandlerFrame* push_handler_frame(Value* handlers) {
+    HandlerFrame* frame = malloc(sizeof(HandlerFrame));
+    if (!frame) return NULL;
+    frame->handlers = handlers;
+    frame->result = NULL;
+    frame->handled = 0;
+    frame->parent = handler_stack;
+    handler_stack = frame;
+    return frame;
+}
+
+// Pop a handler frame
+static void pop_handler_frame(void) {
+    if (handler_stack) {
+        HandlerFrame* old = handler_stack;
+        handler_stack = handler_stack->parent;
+        free(old);
+    }
+}
+
+// Push a restart frame
+static RestartFrame* push_restart_frame(Value* restarts, Env* env) {
+    RestartFrame* frame = malloc(sizeof(RestartFrame));
+    if (!frame) return NULL;
+    frame->restarts = restarts;
+    frame->result = NULL;
+    frame->invoked = 0;
+    frame->env = env;
+    frame->parent = restart_stack;
+    restart_stack = frame;
+    return frame;
+}
+
+// Pop a restart frame
+static void pop_restart_frame(void) {
+    if (restart_stack) {
+        RestartFrame* old = restart_stack;
+        restart_stack = restart_stack->parent;
+        free(old);
+    }
+}
+
+// Find a handler for a condition type
+static Value* find_handler(const char* condition_type) {
+    HandlerFrame* frame = handler_stack;
+    while (frame) {
+        Value* handlers = frame->handlers;
+        while (!is_nil(handlers)) {
+            Value* handler = car(handlers);
+            if (handler && handler->tag == T_CELL) {
+                Value* type = car(handler);
+                if (type && type->tag == T_SYM) {
+                    // Check for exact match or :error catching all errors
+                    if (strcmp(type->s, condition_type) == 0) {
+                        return cdr(handler);  // Return handler function
+                    }
+                    // :error catches all error subtypes
+                    if (strcmp(type->s, ":error") == 0 &&
+                        strstr(condition_type, "error") != NULL) {
+                        return cdr(handler);
+                    }
+                }
+            }
+            handlers = cdr(handlers);
+        }
+        frame = frame->parent;
+    }
+    return NULL;
+}
+
+// Find a restart by name
+static RestartFrame* find_restart_frame(const char* name) {
+    RestartFrame* frame = restart_stack;
+    while (frame) {
+        Value* restarts = frame->restarts;
+        while (!is_nil(restarts)) {
+            Value* restart = car(restarts);
+            if (restart && restart->tag == T_CELL) {
+                Value* rname = car(restart);
+                if (rname && rname->tag == T_SYM &&
+                    strcmp(rname->s, name) == 0) {
+                    return frame;
+                }
+            }
+            restarts = cdr(restarts);
+        }
+        frame = frame->parent;
+    }
+    return NULL;
+}
+
+// Get restart definition by name from a frame
+static Value* get_restart_def(RestartFrame* frame, const char* name) {
+    Value* restarts = frame->restarts;
+    while (!is_nil(restarts)) {
+        Value* restart = car(restarts);
+        if (restart && restart->tag == T_CELL) {
+            Value* rname = car(restart);
+            if (rname && rname->tag == T_SYM &&
+                strcmp(rname->s, name) == 0) {
+                return restart;
+            }
+        }
+        restarts = cdr(restarts);
+    }
+    return NULL;
+}
+
+/*
+ * (handler-case expr
+ *   (:error (e) (print e))
+ *   (:type-error (e) (print "type error")))
+ */
+static Value* eval_handler_case(Value* args, Env* env) {
+    if (is_nil(args)) return mk_error("handler-case: missing expression");
+
+    Value* expr = car(args);
+    Value* clauses = cdr(args);
+
+    // Build handler list from clauses
+    Value* handlers = mk_nil();
+    Value* clause = clauses;
+    while (!is_nil(clause)) {
+        Value* c = car(clause);
+        if (c && c->tag == T_CELL) {
+            Value* type = car(c);
+            Value* rest = cdr(c);
+            // rest is ((var) body...)
+            if (!is_nil(rest)) {
+                Value* params = car(rest);
+                Value* body = cdr(rest);
+                // Create a lambda for the handler
+                Value* handler_lambda = mk_lambda(params, mk_cell(mk_sym("do"), body), env_to_value(env));
+                // Add (type . handler) pair
+                handlers = mk_cell(mk_cell(type, handler_lambda), handlers);
+            }
+        }
+        clause = cdr(clause);
+    }
+
+    // Push handler frame
+    HandlerFrame* frame = push_handler_frame(handlers);
+    if (!frame) return mk_error("handler-case: out of memory");
+
+    if (setjmp(frame->jmp) == 0) {
+        // Normal execution
+        Value* result = omni_eval(expr, env);
+        pop_handler_frame();
+
+        // Check if result is an error that should be handled
+        if (result && result->tag == T_ERROR) {
+            const char* error_type = ":error";
+            Value* handler = find_handler(error_type);
+            if (handler) {
+                // Apply handler to the error
+                Value* handler_args = mk_cell(result, mk_nil());
+                return omni_apply(handler, handler_args, env);
+            }
+        }
+        return result;
+    } else {
+        // Condition was signaled and we jumped here
+        Value* result = frame->result;
+        pop_handler_frame();
+        return result;
+    }
+}
+
+/*
+ * (handler-bind ((:error (lambda (e) (invoke-restart 'use-value 42))))
+ *   body)
+ *
+ * handler-bind allows handlers to invoke restarts without unwinding
+ */
+static Value* eval_handler_bind(Value* args, Env* env) {
+    if (is_nil(args)) return mk_error("handler-bind: missing bindings");
+
+    Value* bindings = car(args);
+    Value* body = cdr(args);
+
+    // Build handler list from bindings
+    Value* handlers = mk_nil();
+    while (!is_nil(bindings)) {
+        Value* binding = car(bindings);
+        if (binding && binding->tag == T_CELL) {
+            Value* type = car(binding);
+            Value* handler_expr = car(cdr(binding));
+            Value* handler = omni_eval(handler_expr, env);
+            if (is_error(handler)) return handler;
+            handlers = mk_cell(mk_cell(type, handler), handlers);
+        }
+        bindings = cdr(bindings);
+    }
+
+    // Push handler frame
+    HandlerFrame* frame = push_handler_frame(handlers);
+    if (!frame) return mk_error("handler-bind: out of memory");
+
+    if (setjmp(frame->jmp) == 0) {
+        // Execute body
+        Value* result = eval_do(body, env);
+        pop_handler_frame();
+        return result;
+    } else {
+        // Jumped from signal
+        Value* result = frame->result;
+        pop_handler_frame();
+        return result;
+    }
+}
+
+/*
+ * (restart-case expr
+ *   (use-value (v) v)
+ *   (abort () nil))
+ */
+static Value* eval_restart_case(Value* args, Env* env) {
+    if (is_nil(args)) return mk_error("restart-case: missing expression");
+
+    Value* expr = car(args);
+    Value* restarts = cdr(args);
+
+    // Push restart frame
+    RestartFrame* frame = push_restart_frame(restarts, env);
+    if (!frame) return mk_error("restart-case: out of memory");
+
+    if (setjmp(frame->jmp) == 0) {
+        // Normal execution
+        Value* result = omni_eval(expr, env);
+        pop_restart_frame();
+        return result;
+    } else {
+        // Restart was invoked
+        Value* result = frame->result;
+        pop_restart_frame();
+        return result;
+    }
+}
+
+/*
+ * (signal condition)
+ * Signal a condition, looking for handlers
+ */
+static Value* eval_signal(Value* args, Env* env) {
+    if (is_nil(args)) return mk_error("signal: missing condition");
+
+    Value* condition = omni_eval(car(args), env);
+    if (is_error(condition)) return condition;
+
+    // Determine condition type
+    const char* cond_type = ":error";
+    if (condition->tag == T_SYM) {
+        cond_type = condition->s;
+    } else if (condition->tag == T_CELL) {
+        Value* type = car(condition);
+        if (type && type->tag == T_SYM) {
+            cond_type = type->s;
+        }
+    }
+
+    // Find a handler
+    Value* handler = find_handler(cond_type);
+    if (handler) {
+        // Call the handler with the condition
+        Value* handler_args = mk_cell(condition, mk_nil());
+        Value* result = omni_apply(handler, handler_args, env);
+
+        // If we have a handler frame, set the result and jump
+        if (handler_stack) {
+            handler_stack->result = result;
+            handler_stack->handled = 1;
+            longjmp(handler_stack->jmp, 1);
+        }
+        return result;
+    }
+
+    // No handler found - return the condition as an error
+    if (condition->tag == T_ERROR) {
+        return condition;
+    }
+    char msg[256];
+    snprintf(msg, sizeof(msg), "Unhandled condition: %s", cond_type);
+    return mk_error(msg);
+}
+
+/*
+ * (invoke-restart name &optional value)
+ */
+static Value* eval_invoke_restart(Value* args, Env* env) {
+    if (is_nil(args)) return mk_error("invoke-restart: missing restart name");
+
+    Value* name_val = omni_eval(car(args), env);
+    if (is_error(name_val)) return name_val;
+
+    const char* name = NULL;
+    if (name_val->tag == T_SYM) {
+        name = name_val->s;
+    } else {
+        return mk_error("invoke-restart: name must be a symbol");
+    }
+
+    // Get optional value argument
+    Value* value = mk_nil();
+    if (!is_nil(cdr(args))) {
+        value = omni_eval(car(cdr(args)), env);
+        if (is_error(value)) return value;
+    }
+
+    // Find restart
+    RestartFrame* frame = find_restart_frame(name);
+    if (!frame) {
+        char msg[128];
+        snprintf(msg, sizeof(msg), "No restart named '%s' is available", name);
+        return mk_error(msg);
+    }
+
+    // Get restart definition
+    Value* restart_def = get_restart_def(frame, name);
+    if (!restart_def) {
+        return mk_error("invoke-restart: restart not found");
+    }
+
+    // restart_def is (name (params...) body...)
+    Value* params = car(cdr(restart_def));
+    Value* body = cdr(cdr(restart_def));
+
+    // Create environment with params bound to value
+    Env* restart_env = env_new(frame->env);
+    if (!is_nil(params)) {
+        Value* param = car(params);
+        if (param && param->tag == T_SYM) {
+            env_define(restart_env, param, value);
+        }
+    }
+
+    // Evaluate body
+    Value* result = eval_do(body, restart_env);
+    env_free(restart_env);
+
+    // Set result and jump back to restart-case
+    frame->result = result;
+    frame->invoked = 1;
+    longjmp(frame->jmp, 1);
+
+    // Never reached
+    return result;
+}
+
+/*
+ * (find-restart name) -> restart or nil
+ */
+static Value* eval_find_restart(Value* args, Env* env) {
+    if (is_nil(args)) return mk_error("find-restart: missing name");
+
+    Value* name_val = omni_eval(car(args), env);
+    if (is_error(name_val)) return name_val;
+
+    const char* name = NULL;
+    if (name_val->tag == T_SYM) {
+        name = name_val->s;
+    } else {
+        return mk_nil();  // Not a symbol, no restart found
+    }
+
+    RestartFrame* frame = find_restart_frame(name);
+    if (frame) {
+        // Return the restart name as a truthy value
+        return name_val;
+    }
+    return mk_nil();
 }
