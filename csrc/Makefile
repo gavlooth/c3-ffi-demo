@@ -16,7 +16,7 @@ UBSAN_FLAGS = -fsanitize=undefined
 # Source files
 AST_SRCS = ast/ast.c
 PARSER_SRCS = parser/parser.c parser/pika_core.c
-ANALYSIS_SRCS = analysis/analysis.c analysis/dominator.c analysis/scc.c analysis/static_sym.c analysis/component.c
+ANALYSIS_SRCS = analysis/analysis.c analysis/dominator.c analysis/scc.c analysis/static_sym.c analysis/component.c analysis/tether_elision.c
 CODEGEN_SRCS = codegen/codegen.c
 COMPILER_SRCS = compiler/compiler.c
 CLI_SRCS = cli/main.c
@@ -121,6 +121,7 @@ analysis/dominator.o: analysis/dominator.c analysis/analysis.h
 analysis/scc.o: analysis/scc.c analysis/analysis.h
 analysis/static_sym.o: analysis/static_sym.c analysis/analysis.h
 analysis/component.o: analysis/component.c analysis/analysis.h
+analysis/tether_elision.o: analysis/tether_elision.c analysis/analysis.h
 codegen/codegen.o: codegen/codegen.c codegen/codegen.h ast/ast.h analysis/analysis.h
 compiler/compiler.o: compiler/compiler.c compiler/compiler.h parser/parser.h analysis/analysis.h codegen/codegen.h
 cli/main.o: cli/main.c compiler/compiler.h

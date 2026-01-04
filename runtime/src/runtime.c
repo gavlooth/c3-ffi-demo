@@ -206,7 +206,7 @@ typedef enum {
     TAG_GREEN_CHANNEL,  /* Continuation-based channel */
     TAG_GENERATOR,      /* Iterator/generator */
     TAG_PROMISE,        /* Async promise */
-    TAG_TASK,           /* Green thread task */
+    TAG_FIBER,           /* Green thread task */
     TAG_CONTINUATION,   /* First-class continuation */
     /* Algebraic effects */
     TAG_EFFECT,         /* Effect instance */
@@ -922,130 +922,7 @@ void deferred_release(Obj* x) {
 /* For cyclic data that doesn't escape function scope */
 /* Enhanced with external pointer tracking */
 
-#define ARENA_BLOCK_SIZE 4096
-
-typedef struct ArenaBlock {
-    char* memory;
-    size_t size;
-    size_t used;
-    struct ArenaBlock* next;
-} ArenaBlock;
-
-/* External pointer tracking - for pointers that escape the arena */
-typedef struct ArenaExternal {
-    void* ptr;
-    void (*cleanup)(void*);
-    struct ArenaExternal* next;
-} ArenaExternal;
-
-typedef struct Arena {
-    ArenaBlock* current;
-    ArenaBlock* blocks;
-    size_t block_size;
-    ArenaExternal* externals;
-} Arena;
-
-Arena* arena_create(void) {
-    Arena* a = malloc(sizeof(Arena));
-    if (!a) return NULL;
-    a->current = NULL;
-    a->blocks = NULL;
-    a->block_size = ARENA_BLOCK_SIZE;
-    a->externals = NULL;
-    return a;
-}
-
-static void* arena_alloc(Arena* a, size_t size) {
-    if (!a) return NULL;
-
-    /* Align to 8 bytes */
-    size = (size + 7) & ~(size_t)7;
-
-    if (!a->current || a->current->used + size > a->current->size) {
-        /* Need new block */
-        size_t block_size = a->block_size;
-        if (size > block_size) block_size = size;
-
-        ArenaBlock* b = malloc(sizeof(ArenaBlock));
-        if (!b) return NULL;
-        b->memory = malloc(block_size);
-        if (!b->memory) {
-            free(b);
-            return NULL;
-        }
-        b->size = block_size;
-        b->used = 0;
-        b->next = a->blocks;
-        a->blocks = b;
-        a->current = b;
-    }
-
-    void* ptr = a->current->memory + a->current->used;
-    a->current->used += size;
-    return ptr;
-}
-
-/* Register an external pointer that must be cleaned up when arena is destroyed */
-void arena_register_external(Arena* a, void* ptr, void (*cleanup)(void*)) {
-    if (!a || !ptr) return;
-    ArenaExternal* e = malloc(sizeof(ArenaExternal));
-    if (!e) return;
-    e->ptr = ptr;
-    e->cleanup = cleanup;
-    e->next = a->externals;
-    a->externals = e;
-}
-
-void arena_destroy(Arena* a) {
-    if (!a) return;
-
-    /* Clean up external pointers first */
-    ArenaExternal* e = a->externals;
-    while (e) {
-        ArenaExternal* next = e->next;
-        if (e->cleanup) {
-            e->cleanup(e->ptr);
-        }
-        free(e);
-        e = next;
-    }
-
-    /* Free all blocks */
-    ArenaBlock* b = a->blocks;
-    while (b) {
-        ArenaBlock* next = b->next;
-        free(b->memory);
-        free(b);
-        b = next;
-    }
-
-    free(a);
-}
-
-/* Reset arena for reuse without destroying */
-void arena_reset(Arena* a) {
-    if (!a) return;
-
-    /* Clean up externals */
-    ArenaExternal* e = a->externals;
-    while (e) {
-        ArenaExternal* next = e->next;
-        if (e->cleanup) {
-            e->cleanup(e->ptr);
-        }
-        free(e);
-        e = next;
-    }
-    a->externals = NULL;
-
-    /* Reset all blocks */
-    ArenaBlock* b = a->blocks;
-    while (b) {
-        b->used = 0;
-        b = b->next;
-    }
-    a->current = a->blocks;
-}
+#include "memory/arena.h"
 
 Obj* arena_mk_int(Arena* a, long i) {
     Obj* x = arena_alloc(a, sizeof(Obj));
@@ -1697,7 +1574,7 @@ struct GenObj {
     void* data;
     void (*destructor)(void*);
     int freed;
-    pthread_rwlock_t rwlock;
+    pthread_mutex_t rwlock;
 };
 
 /* BorrowRef is defined in forward declarations section above */
@@ -1758,7 +1635,7 @@ static GenObj* legacy_alloc(LegacyGenContext* ctx, void* data, void (*destructor
     obj->data = data;
     obj->destructor = destructor;
     obj->freed = 0;
-    pthread_rwlock_init(&obj->rwlock, NULL);
+    pthread_mutex_init(&obj->rwlock, NULL);
 
     if (ctx) {
         pthread_mutex_lock(&ctx->mutex);
@@ -1780,9 +1657,9 @@ static GenObj* legacy_alloc(LegacyGenContext* ctx, void* data, void (*destructor
 
 void legacy_free(GenObj* obj) {
     if (!obj) return;
-    pthread_rwlock_wrlock(&obj->rwlock);
+    pthread_mutex_lock(&obj->rwlock);
     if (obj->freed) {
-        pthread_rwlock_unlock(&obj->rwlock);
+        pthread_mutex_unlock(&obj->rwlock);
         return;
     }
     obj->generation = 0;  /* Invalidate ALL references instantly */
@@ -1791,8 +1668,8 @@ void legacy_free(GenObj* obj) {
         obj->destructor(obj->data);
     }
     obj->data = NULL;
-    pthread_rwlock_unlock(&obj->rwlock);
-    pthread_rwlock_destroy(&obj->rwlock);
+    pthread_mutex_unlock(&obj->rwlock);
+    pthread_mutex_destroy(&obj->rwlock);
 }
 
 void borrow_release(BorrowRef* ref) {
@@ -1801,20 +1678,20 @@ void borrow_release(BorrowRef* ref) {
 
 BorrowRef* legacy_create(GenObj* obj, const char* source_desc) {
     if (!obj) return NULL;
-    pthread_rwlock_rdlock(&obj->rwlock);
+    pthread_mutex_lock(&obj->rwlock);
     if (obj->freed || obj->generation == 0) {
-        pthread_rwlock_unlock(&obj->rwlock);
+        pthread_mutex_unlock(&obj->rwlock);
         return NULL;
     }
     BorrowRef* ref = calloc(1, sizeof(BorrowRef));
     if (!ref) {
-        pthread_rwlock_unlock(&obj->rwlock);
+        pthread_mutex_unlock(&obj->rwlock);
         return NULL;
     }
     ref->target = obj;
     ref->remembered_gen = obj->generation;
     ref->source_desc = source_desc;
-    pthread_rwlock_unlock(&obj->rwlock);
+    pthread_mutex_unlock(&obj->rwlock);
     return ref;
 }
 
@@ -1839,10 +1716,10 @@ int borrow_is_valid(BorrowRef* ref) {
 
     /* Legacy GenObj mode */
     if (!ref->target) return 0;
-    pthread_rwlock_rdlock(&ref->target->rwlock);
+    pthread_mutex_lock(&ref->target->rwlock);
     int valid = ref->remembered_gen == ref->target->generation &&
                 ref->target->generation != 0;
-    pthread_rwlock_unlock(&ref->target->rwlock);
+    pthread_mutex_unlock(&ref->target->rwlock);
     return valid;
 }
 
@@ -1851,15 +1728,15 @@ static void* borrow_deref(BorrowRef* ref) {
         fprintf(stderr, "borrow: null reference\n");
         return NULL;
     }
-    pthread_rwlock_rdlock(&ref->target->rwlock);
+    pthread_mutex_lock(&ref->target->rwlock);
     if (ref->remembered_gen != ref->target->generation) {
-        pthread_rwlock_unlock(&ref->target->rwlock);
+        pthread_mutex_unlock(&ref->target->rwlock);
         fprintf(stderr, "borrow: use-after-free detected [created at: %s]\n",
                 ref->source_desc ? ref->source_desc : "unknown");
         return NULL;
     }
     void* data = ref->target->data;
-    pthread_rwlock_unlock(&ref->target->rwlock);
+    pthread_mutex_unlock(&ref->target->rwlock);
     return data;
 }
 
@@ -3653,19 +3530,19 @@ Obj* exception_get_value(void) {
  *
  * Two-tier model:
  * - Tier 1 (pthreads): make_channel, channel_send/recv, spawn_goroutine
- * - Tier 2 (continuations): make_green_channel, green_send/recv, spawn_green_task
+ * - Tier 2 (continuations): make_fiber_channel, fiber_send/recv, fiber_spawn_task
  */
 
 /* ========== Green Channel Wrappers ========== */
 
 /* Create a green (continuation-based) channel */
-Obj* make_green_chan(int capacity) {
-    GreenChannel* ch = green_channel_create(capacity);
+Obj* make_fiber_chan(int capacity) {
+    FiberChannel* ch = fiber_channel_create(capacity);
     if (!ch) return NULL;
 
     Obj* obj = malloc(sizeof(Obj));
     if (!obj) {
-        green_channel_release(ch);
+        fiber_channel_release(ch);
         return NULL;
     }
 
@@ -3680,51 +3557,51 @@ Obj* make_green_chan(int capacity) {
 }
 
 /* Send on green channel (parks if needed) */
-void green_send(Obj* ch_obj, Obj* value) {
+void fiber_send(Obj* ch_obj, Obj* value) {
     if (!ch_obj || ch_obj->tag != TAG_GREEN_CHANNEL) return;
-    GreenChannel* ch = (GreenChannel*)ch_obj->ptr;
-    green_channel_send(ch, value);
+    FiberChannel* ch = (FiberChannel*)ch_obj->ptr;
+    fiber_channel_send(ch, value);
 }
 
 /* Receive from green channel (parks if needed) */
-Obj* green_recv(Obj* ch_obj) {
+Obj* fiber_recv(Obj* ch_obj) {
     if (!ch_obj || ch_obj->tag != TAG_GREEN_CHANNEL) return NULL;
-    GreenChannel* ch = (GreenChannel*)ch_obj->ptr;
-    return green_channel_recv(ch);
+    FiberChannel* ch = (FiberChannel*)ch_obj->ptr;
+    return fiber_channel_recv(ch);
 }
 
 /* Try send (non-blocking) */
-int green_try_send(Obj* ch_obj, Obj* value) {
+int fiber_try_send(Obj* ch_obj, Obj* value) {
     if (!ch_obj || ch_obj->tag != TAG_GREEN_CHANNEL) return 0;
-    GreenChannel* ch = (GreenChannel*)ch_obj->ptr;
-    return green_channel_try_send(ch, value) ? 1 : 0;
+    FiberChannel* ch = (FiberChannel*)ch_obj->ptr;
+    return fiber_channel_try_send(ch, value) ? 1 : 0;
 }
 
 /* Try receive (non-blocking) */
-Obj* green_try_recv(Obj* ch_obj, int* ok) {
+Obj* fiber_try_recv(Obj* ch_obj, int* ok) {
     if (!ch_obj || ch_obj->tag != TAG_GREEN_CHANNEL) {
         *ok = 0;
         return NULL;
     }
-    GreenChannel* ch = (GreenChannel*)ch_obj->ptr;
+    FiberChannel* ch = (FiberChannel*)ch_obj->ptr;
     bool success;
-    Obj* result = green_channel_try_recv(ch, &success);
+    Obj* result = fiber_channel_try_recv(ch, &success);
     *ok = success ? 1 : 0;
     return result;
 }
 
 /* Close green channel */
-void green_chan_close(Obj* ch_obj) {
+void fiber_chan_close(Obj* ch_obj) {
     if (!ch_obj || ch_obj->tag != TAG_GREEN_CHANNEL) return;
-    GreenChannel* ch = (GreenChannel*)ch_obj->ptr;
-    green_channel_close(ch);
+    FiberChannel* ch = (FiberChannel*)ch_obj->ptr;
+    fiber_channel_close(ch);
 }
 
 /* Free green channel object */
-void free_green_channel_obj(Obj* ch_obj) {
+void free_fiber_channel_obj(Obj* ch_obj) {
     if (!ch_obj || ch_obj->tag != TAG_GREEN_CHANNEL) return;
-    GreenChannel* ch = (GreenChannel*)ch_obj->ptr;
-    green_channel_release(ch);
+    FiberChannel* ch = (FiberChannel*)ch_obj->ptr;
+    fiber_channel_release(ch);
     free(ch_obj);
 }
 
@@ -3842,15 +3719,15 @@ void free_promise_val(Obj* promise_obj) {
 /* ========== Green Task Wrappers ========== */
 
 /* Spawn a green thread (continuation-based) */
-Obj* spawn_green_task(Obj* thunk) {
-    Task* t = spawn_green(thunk);
+Obj* fiber_spawn_task(Obj* thunk) {
+    Fiber* t = fiber_spawn(thunk);
     if (!t) return NULL;
 
     Obj* obj = malloc(sizeof(Obj));
     if (!obj) return NULL;
 
     obj->mark = 1;
-    obj->tag = TAG_TASK;
+    obj->tag = TAG_FIBER;
     obj->is_pair = 0;
     obj->scc_id = -1;
     obj->generation = ipge_evolve(0);
@@ -3861,7 +3738,7 @@ Obj* spawn_green_task(Obj* thunk) {
 
 /* Spawn green thread and get completion promise */
 Obj* spawn_async_task(Obj* thunk) {
-    Promise* p = spawn_async(thunk);
+    Promise* p = fiber_spawn_async(thunk);
     if (!p) return NULL;
 
     Obj* obj = malloc(sizeof(Obj));
@@ -3881,31 +3758,31 @@ Obj* spawn_async_task(Obj* thunk) {
 }
 
 /* Yield current green task */
-void green_yield(void) {
-    yield_green();
+void fiber_yield_wrapper(void) {
+    fiber_yield();
 }
 
 /* Initialize green scheduler (call once per OS thread) */
-void green_scheduler_init(void) {
+void fiber_scheduler_init(void) {
     scheduler_init();
 }
 
 /* Run green scheduler until all tasks complete */
-void green_scheduler_run(void) {
+void fiber_scheduler_run(void) {
     scheduler_run();
 }
 
 /* Step green scheduler once */
-int green_scheduler_step(void) {
+int fiber_scheduler_step(void) {
     return scheduler_step() ? 1 : 0;
 }
 
 /* Check if green scheduler is idle */
-int green_scheduler_idle(void) {
+int fiber_scheduler_idle(void) {
     return scheduler_is_idle() ? 1 : 0;
 }
 
 /* Shutdown green scheduler */
-void green_scheduler_shutdown(void) {
+void fiber_scheduler_shutdown(void) {
     scheduler_shutdown();
 }

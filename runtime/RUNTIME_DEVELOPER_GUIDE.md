@@ -11,7 +11,7 @@ A comprehensive guide for developers working with the OmniLisp C runtime. This d
 5. [Region Infrastructure](#region-infrastructure)
 6. [Borrowed References and Handles](#borrowed-references-and-handles)
 7. [Concurrency Primitives](#concurrency-primitives) (Tier 1: OS Threads)
-8. [Green Thread Concurrency](#green-thread-concurrency-tier-2) (Tier 2: Continuations)
+8. [Fiber Concurrency](#green-thread-concurrency-tier-2) (Tier 2: Continuations)
 9. [FFI and External Handles](#ffi-and-external-handles)
 10. [Best Practices](#best-practices)
 11. [API Reference](#api-reference)
@@ -716,11 +716,11 @@ int closure_validate(Closure* c);
 
 ---
 
-## Green Thread Concurrency (Tier 2)
+## Fiber Concurrency (Tier 2)
 
 The runtime provides two tiers of concurrency:
 - **Tier 1 (above)**: OS threads via pthreads - for blocking FFI, CPU-bound work
-- **Tier 2 (this section)**: Green threads via continuations - for massive concurrency
+- **Tier 2 (this section)**: Fibers via continuations - for massive concurrency
 
 ### Two-Tier Architecture
 
@@ -735,18 +735,18 @@ The runtime provides two tiers of concurrency:
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Tier 2: Green Threads (continuations)                      │
-│  - make_green_chan, green_send/recv                         │
+│  Tier 2: Fibers (continuations)                      │
+│  - make_fiber_chan, fiber_send/recv                         │
 │  - make_gen, gen_next, generator_yield                      │
 │  - make_promise_val, promise_await_val                      │
-│  - spawn_green_task, spawn_async_task                       │
+│  - fiber_spawn_task, spawn_async_task                       │
 │  Use for: 1M+ tasks, async I/O, generators                  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ### Performance Comparison
 
-| Metric | OS Thread | Green Thread |
+| Metric | OS Thread | Fiber |
 |--------|-----------|--------------|
 | Task creation | ~10μs | ~100ns |
 | Context switch | ~1μs | ~50ns |
@@ -760,19 +760,19 @@ Initialize once per OS thread:
 
 ```c
 /* Initialize scheduler (call once per OS thread) */
-void green_scheduler_init(void);
+void fiber_scheduler_init(void);
 
 /* Run until all tasks complete */
-void green_scheduler_run(void);
+void fiber_scheduler_run(void);
 
 /* Step one task (for event loop integration) */
-int green_scheduler_step(void);
+int fiber_scheduler_step(void);
 
 /* Check if scheduler has pending tasks */
-int green_scheduler_idle(void);
+int fiber_scheduler_idle(void);
 
 /* Cleanup */
-void green_scheduler_shutdown(void);
+void fiber_scheduler_shutdown(void);
 ```
 
 ### Green Channels
@@ -781,20 +781,20 @@ Lightweight channels without pthread overhead:
 
 ```c
 /* Create green channel */
-Obj* make_green_chan(int capacity);  /* 0 = rendezvous */
+Obj* make_fiber_chan(int capacity);  /* 0 = rendezvous */
 
 /* Send (parks task if no receiver) */
-void green_send(Obj* ch, Obj* value);
+void fiber_send(Obj* ch, Obj* value);
 
 /* Receive (parks task if no sender) */
-Obj* green_recv(Obj* ch);
+Obj* fiber_recv(Obj* ch);
 
 /* Non-blocking variants */
-int green_try_send(Obj* ch, Obj* value);  /* Returns 1 on success */
-Obj* green_try_recv(Obj* ch, int* ok);
+int fiber_try_send(Obj* ch, Obj* value);  /* Returns 1 on success */
+Obj* fiber_try_recv(Obj* ch, int* ok);
 
 /* Close channel */
-void green_chan_close(Obj* ch);
+void fiber_chan_close(Obj* ch);
 ```
 
 ### Green Tasks
@@ -802,14 +802,14 @@ void green_chan_close(Obj* ch);
 Spawn lightweight cooperative tasks:
 
 ```c
-/* Spawn green thread, returns task handle */
-Obj* spawn_green_task(Obj* thunk);
+/* Spawn fiber, returns task handle */
+Obj* fiber_spawn_task(Obj* thunk);
 
 /* Spawn and get completion promise */
 Obj* spawn_async_task(Obj* thunk);
 
 /* Cooperative yield (return to scheduler) */
-void green_yield(void);
+void fiber_yield(void);
 ```
 
 ### Generators (Iterators)
@@ -846,7 +846,7 @@ Obj* squares_producer(Obj** args, int argc) {
 }
 
 void example(void) {
-    green_scheduler_init();
+    fiber_scheduler_init();
 
     Obj* producer = mk_closure(squares_producer, NULL, NULL, 0, 0);
     Obj* gen = make_gen(producer);
@@ -857,7 +857,7 @@ void example(void) {
     }
 
     free_generator_obj(gen);
-    green_scheduler_shutdown();
+    fiber_scheduler_shutdown();
 }
 ```
 
@@ -889,13 +889,13 @@ Example async/await:
 Obj* async_fetch(Obj** args, int argc) {
     /* Simulate async work */
     for (int i = 0; i < 5; i++) {
-        green_yield();
+        fiber_yield();
     }
     return mk_int_unboxed(42);
 }
 
 void example(void) {
-    green_scheduler_init();
+    fiber_scheduler_init();
 
     /* Spawn async task, get promise */
     Obj* thunk = mk_closure(async_fetch, NULL, NULL, 0, 0);
@@ -903,7 +903,7 @@ void example(void) {
 
     /* Run scheduler until promise resolves */
     while (!promise_settled(promise)) {
-        green_scheduler_step();
+        fiber_scheduler_step();
     }
 
     /* Get result */
@@ -911,11 +911,11 @@ void example(void) {
     printf("Result: %ld\n", obj_to_int(p->value));
 
     free_promise_val(promise);
-    green_scheduler_shutdown();
+    fiber_scheduler_shutdown();
 }
 ```
 
-### Hybrid: OS Threads + Green Threads
+### Hybrid: OS Threads + Fibers
 
 Run green schedulers on multiple OS threads:
 
@@ -924,15 +924,15 @@ void* worker(void* arg) {
     int id = *(int*)arg;
 
     /* Each OS thread has its own green scheduler */
-    green_scheduler_init();
+    fiber_scheduler_init();
 
-    /* Spawn many green tasks */
+    /* Spawn many fibers */
     for (int i = 0; i < 10000; i++) {
-        spawn_green_task(my_task);
+        fiber_spawn_task(my_task);
     }
 
-    green_scheduler_run();
-    green_scheduler_shutdown();
+    fiber_scheduler_run();
+    fiber_scheduler_shutdown();
     return NULL;
 }
 

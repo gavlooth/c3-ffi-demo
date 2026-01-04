@@ -1428,6 +1428,11 @@ void omni_codegen_emit_tethers(CodeGenContext* ctx, int position) {
     
     for (size_t i = 0; i < tether_count; i++) {
         TetherPoint* tp = tethers[i];
+        if (tp->elided) {
+            /* Still emit comment for debugging */
+            omni_codegen_emit(ctx, "/* Tether %s elided (handle dominant) */\n", tp->tethered_var);
+            continue;
+        }
         const char* c_name = lookup_symbol(ctx, tp->tethered_var);
         if (c_name) {
             if (tp->is_entry) {
@@ -1571,6 +1576,9 @@ void omni_codegen_with_cfg(CodeGenContext* ctx, OmniValue* expr) {
 
     /* Group SCCs into components */
     omni_analyze_components(ctx->analysis, cfg);
+
+    /* Optimize tethers (Tether Elision) */
+    omni_optimize_tethers(ctx->analysis, cfg);
 
     /* Compute free points */
     CFGFreePoint* free_points = omni_compute_cfg_free_points(cfg, ctx->analysis);

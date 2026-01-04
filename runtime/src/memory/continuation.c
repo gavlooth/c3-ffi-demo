@@ -1,11 +1,11 @@
 /*
- * Continuation-Based Concurrency Implementation
+ * Fiber-Based Concurrency Implementation
  *
  * This implements:
  * - CEK-style continuation frames
  * - Delimited continuations (prompt/control)
- * - Green thread scheduler
- * - Continuation-based channels
+ * - Fiber scheduler (lightweight cooperative tasks)
+ * - Fiber-based channels
  * - Generators/iterators
  * - Promises (async/await)
  */
@@ -373,7 +373,7 @@ void scheduler_init(void) {
     if (!tl_scheduler) return;
 
     memset(tl_scheduler, 0, sizeof(Scheduler));
-    tl_scheduler->next_task_id = 1;
+    tl_scheduler->next_fiber_id = 1;
 
     /* Pre-allocate frame pool */
     for (int i = 0; i < FRAME_POOL_INITIAL_SIZE; i++) {
@@ -390,9 +390,9 @@ void scheduler_shutdown(void) {
     if (!tl_scheduler) return;
 
     /* Free remaining tasks */
-    Task* t = tl_scheduler->ready_head;
+    Fiber* t = tl_scheduler->ready_head;
     while (t) {
-        Task* next = t->next;
+        Fiber* next = t->next;
         frame_dec_ref(t->cont);
         if (t->value) dec_ref(t->value);
         if (t->result) dec_ref(t->result);
@@ -416,11 +416,11 @@ Scheduler* scheduler_current(void) {
     return tl_scheduler;
 }
 
-static void scheduler_enqueue(Task* task) {
+static void scheduler_enqueue(Fiber* task) {
     Scheduler* sched = tl_scheduler;
     if (!sched) return;
 
-    task->state = TASK_READY;
+    task->state = FIBER_READY;
     task->next = NULL;
     task->prev = sched->ready_tail;
 
@@ -432,11 +432,11 @@ static void scheduler_enqueue(Task* task) {
     sched->ready_tail = task;
 }
 
-static Task* scheduler_dequeue(void) {
+static Fiber* scheduler_dequeue(void) {
     Scheduler* sched = tl_scheduler;
     if (!sched || !sched->ready_head) return NULL;
 
-    Task* task = sched->ready_head;
+    Fiber* task = sched->ready_head;
     sched->ready_head = task->next;
     if (sched->ready_head) {
         sched->ready_head->prev = NULL;
@@ -446,11 +446,11 @@ static Task* scheduler_dequeue(void) {
 
     task->next = NULL;
     task->prev = NULL;
-    task->state = TASK_RUNNING;
+    task->state = FIBER_RUNNING;
     return task;
 }
 
-static void scheduler_remove(Task* task) {
+static void scheduler_remove(Fiber* task) {
     Scheduler* sched = tl_scheduler;
     if (!sched) return;
 
@@ -483,7 +483,7 @@ bool scheduler_step(void) {
     Scheduler* sched = tl_scheduler;
     if (!sched) return false;
 
-    Task* task = scheduler_dequeue();
+    Fiber* task = scheduler_dequeue();
     if (!task) return false;
 
     sched->current = task;
@@ -505,7 +505,7 @@ bool scheduler_step(void) {
      */
 
     /* For now, mark task as done */
-    task->state = TASK_DONE;
+    task->state = FIBER_DONE;
     task->result = result;
 
     /* Restore previous state */
@@ -518,8 +518,8 @@ bool scheduler_step(void) {
         promise_resolve(task->completion, result);
     }
 
-    sched->tasks_completed++;
-    sched->task_count--;
+    sched->fibers_completed++;
+    sched->fiber_count--;
 
     /* Free task */
     frame_dec_ref(task->cont);
@@ -535,7 +535,7 @@ bool scheduler_is_idle(void) {
 
 /* ========== Green Threads ========== */
 
-Task* spawn_green(Obj* thunk) {
+Fiber* fiber_spawn(Obj* thunk) {
     Scheduler* sched = tl_scheduler;
     if (!sched) {
         scheduler_init();
@@ -543,27 +543,27 @@ Task* spawn_green(Obj* thunk) {
     }
     if (!sched || !thunk) return NULL;
 
-    Task* task = malloc(sizeof(Task));
+    Fiber* task = malloc(sizeof(Fiber));
     if (!task) return NULL;
 
-    memset(task, 0, sizeof(Task));
-    task->id = sched->next_task_id++;
-    task->state = TASK_READY;
+    memset(task, 0, sizeof(Fiber));
+    task->id = sched->next_fiber_id++;
+    task->state = FIBER_READY;
     task->expr = thunk;
     if (thunk) inc_ref(thunk);
 
-    sched->tasks_created++;
-    sched->task_count++;
+    sched->fibers_created++;
+    sched->fiber_count++;
 
     scheduler_enqueue(task);
     return task;
 }
 
-Promise* spawn_async(Obj* thunk) {
+Promise* fiber_spawn_async(Obj* thunk) {
     Promise* p = promise_create();
     if (!p) return NULL;
 
-    Task* task = spawn_green(thunk);
+    Fiber* task = fiber_spawn(thunk);
     if (!task) {
         promise_release(p);
         return NULL;
@@ -574,11 +574,11 @@ Promise* spawn_async(Obj* thunk) {
     return p;
 }
 
-void yield_green(void) {
+void fiber_yield(void) {
     Scheduler* sched = tl_scheduler;
     if (!sched || !sched->current) return;
 
-    Task* current = sched->current;
+    Fiber* current = sched->current;
 
     /* Save current state */
     current->cont = tl_current_frame;
@@ -593,16 +593,16 @@ void yield_green(void) {
     /* Context switch happens in scheduler_step return */
 }
 
-Task* task_current(void) {
+Fiber* fiber_current(void) {
     Scheduler* sched = tl_scheduler;
     return sched ? sched->current : NULL;
 }
 
-void task_park(void* reason, Obj* value) {
+void fiber_park(void* reason, Obj* value) {
     Scheduler* sched = tl_scheduler;
     if (!sched || !sched->current) return;
 
-    Task* current = sched->current;
+    Fiber* current = sched->current;
 
     /* Save state */
     current->cont = tl_current_frame;
@@ -610,7 +610,7 @@ void task_park(void* reason, Obj* value) {
     current->env = tl_current_env;
     if (tl_current_env) inc_ref(tl_current_env);
 
-    current->state = TASK_PARKED;
+    current->state = FIBER_PARKED;
     current->park_reason = reason;
     current->park_value = value;
     if (value) inc_ref(value);
@@ -618,8 +618,8 @@ void task_park(void* reason, Obj* value) {
     sched->current = NULL;
 }
 
-void task_unpark(Task* t, Obj* value) {
-    if (!t || t->state != TASK_PARKED) return;
+void fiber_unpark(Fiber* t, Obj* value) {
+    if (!t || t->state != FIBER_PARKED) return;
 
     t->value = value;
     if (value) inc_ref(value);
@@ -634,11 +634,11 @@ void task_unpark(Task* t, Obj* value) {
 
 /* ========== Green Channels ========== */
 
-GreenChannel* green_channel_create(int capacity) {
-    GreenChannel* ch = malloc(sizeof(GreenChannel));
+FiberChannel* fiber_channel_create(int capacity) {
+    FiberChannel* ch = malloc(sizeof(FiberChannel));
     if (!ch) return NULL;
 
-    memset(ch, 0, sizeof(GreenChannel));
+    memset(ch, 0, sizeof(FiberChannel));
     ch->capacity = capacity;
     ch->refcount = 1;
 
@@ -653,12 +653,12 @@ GreenChannel* green_channel_create(int capacity) {
     return ch;
 }
 
-void green_channel_send(GreenChannel* ch, Obj* value) {
+void fiber_channel_send(FiberChannel* ch, Obj* value) {
     if (!ch || ch->closed) return;
 
     /* Check for waiting receiver */
     if (ch->recv_waiters) {
-        Task* receiver = ch->recv_waiters;
+        Fiber* receiver = ch->recv_waiters;
         ch->recv_waiters = receiver->next;
         if (ch->recv_waiters) {
             ch->recv_waiters->prev = NULL;
@@ -666,7 +666,7 @@ void green_channel_send(GreenChannel* ch, Obj* value) {
         receiver->next = NULL;
 
         /* Hand off value directly */
-        task_unpark(receiver, value);
+        fiber_unpark(receiver, value);
         return;
     }
 
@@ -680,7 +680,7 @@ void green_channel_send(GreenChannel* ch, Obj* value) {
     }
 
     /* Must wait - park sender */
-    Task* current = task_current();
+    Fiber* current = fiber_current();
     if (!current) return;  /* Not in scheduler context */
 
     /* Add to send waiters */
@@ -690,10 +690,10 @@ void green_channel_send(GreenChannel* ch, Obj* value) {
     }
     ch->send_waiters = current;
 
-    task_park(ch, value);
+    fiber_park(ch, value);
 }
 
-Obj* green_channel_recv(GreenChannel* ch) {
+Obj* fiber_channel_recv(FiberChannel* ch) {
     if (!ch) return NULL;
 
     /* Check buffer first */
@@ -705,7 +705,7 @@ Obj* green_channel_recv(GreenChannel* ch) {
 
         /* Wake a waiting sender if any */
         if (ch->send_waiters) {
-            Task* sender = ch->send_waiters;
+            Fiber* sender = ch->send_waiters;
             ch->send_waiters = sender->next;
             if (ch->send_waiters) {
                 ch->send_waiters->prev = NULL;
@@ -720,7 +720,7 @@ Obj* green_channel_recv(GreenChannel* ch) {
             ch->tail = (ch->tail + 1) % ch->capacity;
             ch->count++;
 
-            task_unpark(sender, NULL);
+            fiber_unpark(sender, NULL);
         }
 
         return value;
@@ -728,7 +728,7 @@ Obj* green_channel_recv(GreenChannel* ch) {
 
     /* Check for waiting sender (unbuffered or after buffer empty) */
     if (ch->send_waiters) {
-        Task* sender = ch->send_waiters;
+        Fiber* sender = ch->send_waiters;
         ch->send_waiters = sender->next;
         if (ch->send_waiters) {
             ch->send_waiters->prev = NULL;
@@ -738,7 +738,7 @@ Obj* green_channel_recv(GreenChannel* ch) {
         Obj* value = sender->park_value;
         sender->park_value = NULL;
 
-        task_unpark(sender, NULL);
+        fiber_unpark(sender, NULL);
         return value;
     }
 
@@ -748,7 +748,7 @@ Obj* green_channel_recv(GreenChannel* ch) {
     }
 
     /* Must wait - park receiver */
-    Task* current = task_current();
+    Fiber* current = fiber_current();
     if (!current) return NULL;
 
     current->next = ch->recv_waiters;
@@ -757,20 +757,20 @@ Obj* green_channel_recv(GreenChannel* ch) {
     }
     ch->recv_waiters = current;
 
-    task_park(ch, NULL);
+    fiber_park(ch, NULL);
     return NULL;  /* Value will be set when unparked */
 }
 
-bool green_channel_try_send(GreenChannel* ch, Obj* value) {
+bool fiber_channel_try_send(FiberChannel* ch, Obj* value) {
     if (!ch || ch->closed) return false;
 
     /* Receiver waiting? */
     if (ch->recv_waiters) {
-        Task* receiver = ch->recv_waiters;
+        Fiber* receiver = ch->recv_waiters;
         ch->recv_waiters = receiver->next;
         if (ch->recv_waiters) ch->recv_waiters->prev = NULL;
         receiver->next = NULL;
-        task_unpark(receiver, value);
+        fiber_unpark(receiver, value);
         return true;
     }
 
@@ -786,7 +786,7 @@ bool green_channel_try_send(GreenChannel* ch, Obj* value) {
     return false;
 }
 
-Obj* green_channel_try_recv(GreenChannel* ch, bool* ok) {
+Obj* fiber_channel_try_recv(FiberChannel* ch, bool* ok) {
     *ok = false;
     if (!ch) return NULL;
 
@@ -800,7 +800,7 @@ Obj* green_channel_try_recv(GreenChannel* ch, bool* ok) {
 
         /* Wake sender if waiting */
         if (ch->send_waiters) {
-            Task* sender = ch->send_waiters;
+            Fiber* sender = ch->send_waiters;
             ch->send_waiters = sender->next;
             if (ch->send_waiters) ch->send_waiters->prev = NULL;
             sender->next = NULL;
@@ -812,7 +812,7 @@ Obj* green_channel_try_recv(GreenChannel* ch, bool* ok) {
             ch->tail = (ch->tail + 1) % ch->capacity;
             ch->count++;
 
-            task_unpark(sender, NULL);
+            fiber_unpark(sender, NULL);
         }
 
         return value;
@@ -820,14 +820,14 @@ Obj* green_channel_try_recv(GreenChannel* ch, bool* ok) {
 
     /* Sender waiting? */
     if (ch->send_waiters) {
-        Task* sender = ch->send_waiters;
+        Fiber* sender = ch->send_waiters;
         ch->send_waiters = sender->next;
         if (ch->send_waiters) ch->send_waiters->prev = NULL;
         sender->next = NULL;
 
         Obj* value = sender->park_value;
         sender->park_value = NULL;
-        task_unpark(sender, NULL);
+        fiber_unpark(sender, NULL);
         *ok = true;
         return value;
     }
@@ -835,15 +835,15 @@ Obj* green_channel_try_recv(GreenChannel* ch, bool* ok) {
     return NULL;
 }
 
-void green_channel_close(GreenChannel* ch) {
+void fiber_channel_close(FiberChannel* ch) {
     if (!ch || ch->closed) return;
     ch->closed = true;
 
     /* Wake all waiting receivers with NULL */
-    Task* t = ch->recv_waiters;
+    Fiber* t = ch->recv_waiters;
     while (t) {
-        Task* next = t->next;
-        task_unpark(t, NULL);
+        Fiber* next = t->next;
+        fiber_unpark(t, NULL);
         t = next;
     }
     ch->recv_waiters = NULL;
@@ -851,26 +851,26 @@ void green_channel_close(GreenChannel* ch) {
     /* Wake all waiting senders (they'll see closed) */
     t = ch->send_waiters;
     while (t) {
-        Task* next = t->next;
+        Fiber* next = t->next;
         if (t->park_value) {
             dec_ref(t->park_value);
             t->park_value = NULL;
         }
-        task_unpark(t, NULL);
+        fiber_unpark(t, NULL);
         t = next;
     }
     ch->send_waiters = NULL;
 }
 
-bool green_channel_is_closed(GreenChannel* ch) {
+bool fiber_channel_is_closed(FiberChannel* ch) {
     return ch ? ch->closed : true;
 }
 
-void green_channel_release(GreenChannel* ch) {
+void fiber_channel_release(FiberChannel* ch) {
     if (!ch) return;
     if (--ch->refcount > 0) return;
 
-    green_channel_close(ch);
+    fiber_channel_close(ch);
 
     /* Free buffered values */
     while (ch->count > 0) {
@@ -1042,10 +1042,10 @@ void promise_resolve(Promise* p, Obj* value) {
     if (value) inc_ref(value);
 
     /* Wake all waiting tasks */
-    Task* t = p->waiters;
+    Fiber* t = p->waiters;
     while (t) {
-        Task* next = t->next;
-        task_unpark(t, value);
+        Fiber* next = t->next;
+        fiber_unpark(t, value);
         t = next;
     }
     p->waiters = NULL;
@@ -1062,10 +1062,10 @@ void promise_reject(Promise* p, Obj* error) {
     if (error) inc_ref(error);
 
     /* Wake all waiting tasks with error */
-    Task* t = p->waiters;
+    Fiber* t = p->waiters;
     while (t) {
-        Task* next = t->next;
-        task_unpark(t, error);  /* TODO: Distinguish error from value */
+        Fiber* next = t->next;
+        fiber_unpark(t, error);  /* TODO: Distinguish error from value */
         t = next;
     }
     p->waiters = NULL;
@@ -1086,14 +1086,14 @@ Obj* promise_await(Promise* p) {
     }
 
     /* Must wait */
-    Task* current = task_current();
+    Fiber* current = fiber_current();
     if (!current) return NULL;
 
     current->next = p->waiters;
     if (p->waiters) p->waiters->prev = current;
     p->waiters = current;
 
-    task_park(p, NULL);
+    fiber_park(p, NULL);
     return NULL;  /* Value set when unparked */
 }
 
@@ -1134,10 +1134,10 @@ void promise_release(Promise* p) {
     if (p->on_reject) dec_ref(p->on_reject);
 
     /* Cancel waiting tasks */
-    Task* t = p->waiters;
+    Fiber* t = p->waiters;
     while (t) {
-        Task* next = t->next;
-        t->state = TASK_DONE;  /* TODO: Better cancellation */
+        Fiber* next = t->next;
+        t->state = FIBER_DONE;  /* TODO: Better cancellation */
         t = next;
     }
 
@@ -1146,7 +1146,7 @@ void promise_release(Promise* p) {
 
 /* ========== Select (Multi-Wait) ========== */
 
-int green_select(SelectCase* cases, int count) {
+int fiber_select(SelectCase* cases, int count) {
     if (!cases || count <= 0) return -1;
 
     /* First pass: check for immediately ready case */
@@ -1159,13 +1159,13 @@ int green_select(SelectCase* cases, int count) {
 
         if (c->op == SELECT_RECV) {
             bool ok;
-            Obj* val = green_channel_try_recv(c->channel, &ok);
+            Obj* val = fiber_channel_try_recv(c->channel, &ok);
             if (ok) {
                 if (c->result) *c->result = val;
                 return i;
             }
         } else if (c->op == SELECT_SEND) {
-            if (green_channel_try_send(c->channel, c->value)) {
+            if (fiber_channel_try_send(c->channel, c->value)) {
                 return i;
             }
         }
@@ -1179,7 +1179,7 @@ int green_select(SelectCase* cases, int count) {
     }
 
     /* Must block - register on all channels */
-    Task* current = task_current();
+    Fiber* current = fiber_current();
     if (!current) return -1;
 
     /* TODO: Register on all channels and wait */

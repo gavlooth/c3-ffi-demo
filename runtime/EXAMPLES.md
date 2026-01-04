@@ -442,11 +442,11 @@ void atom_example(void) {
 }
 ```
 
-## Green Thread Concurrency (Tier 2)
+## Fiber Concurrency (Tier 2)
 
-Green threads use continuation-based scheduling - no pthreads, ~100 bytes per task.
+Fibers use continuation-based scheduling - no pthreads, ~100 bytes per task.
 
-### Basic Green Threads
+### Basic Fibers
 
 ```c
 // Simple producer task
@@ -456,12 +456,12 @@ Obj* producer_task(Obj** args, int argc) {
 
     for (int i = 0; i < 10; i++) {
         Obj* msg = mk_int_unboxed(i);
-        green_send(ch, msg);
+        fiber_send(ch, msg);
         printf("Green sent: %d\n", i);
-        green_yield();  // Cooperative yield
+        fiber_yield();  // Cooperative yield
     }
 
-    green_chan_close(ch);
+    fiber_chan_close(ch);
     return NULL;
 }
 
@@ -472,12 +472,12 @@ Obj* consumer_task(Obj** args, int argc) {
 
     while (1) {
         int ok;
-        Obj* msg = green_try_recv(ch, &ok);
+        Obj* msg = fiber_try_recv(ch, &ok);
         if (!ok) {
-            green_yield();
+            fiber_yield();
             continue;
         }
-        if (!msg && green_channel_is_closed((GreenChannel*)ch->ptr)) break;
+        if (!msg && fiber_channel_is_closed((FiberChannel*)ch->ptr)) break;
 
         printf("Green received: %ld\n", obj_to_int(msg));
     }
@@ -486,9 +486,9 @@ Obj* consumer_task(Obj** args, int argc) {
 }
 
 void green_channel_example(void) {
-    green_scheduler_init();
+    fiber_scheduler_init();
 
-    Obj* ch = make_green_chan(5);  // Buffered green channel
+    Obj* ch = make_fiber_chan(5);  // Buffered green channel
 
     // Create closures for tasks
     Obj* prod_args[1] = { ch };
@@ -497,15 +497,15 @@ void green_channel_example(void) {
     Obj* prod_thunk = mk_closure(producer_task, prod_args, NULL, 1, 0);
     Obj* cons_thunk = mk_closure(consumer_task, cons_args, NULL, 1, 0);
 
-    // Spawn green threads (very lightweight!)
-    spawn_green_task(prod_thunk);
-    spawn_green_task(cons_thunk);
+    // Spawn fibers (very lightweight!)
+    fiber_spawn_task(prod_thunk);
+    fiber_spawn_task(cons_thunk);
 
     // Run scheduler until all tasks complete
-    green_scheduler_run();
+    fiber_scheduler_run();
 
-    free_green_channel_obj(ch);
-    green_scheduler_shutdown();
+    free_fiber_channel_obj(ch);
+    fiber_scheduler_shutdown();
 }
 ```
 
@@ -524,7 +524,7 @@ Obj* squares_producer(Obj** args, int argc) {
 }
 
 void generator_example(void) {
-    green_scheduler_init();
+    fiber_scheduler_init();
 
     Obj* producer = mk_closure(squares_producer, NULL, NULL, 0, 0);
     Obj* gen = make_gen(producer);
@@ -540,7 +540,7 @@ void generator_example(void) {
 
     free_generator_obj(gen);
     dec_ref(producer);
-    green_scheduler_shutdown();
+    fiber_scheduler_shutdown();
 }
 ```
 
@@ -581,7 +581,7 @@ Obj* make_range(long start, long end) {
 }
 
 void range_example(void) {
-    green_scheduler_init();
+    fiber_scheduler_init();
 
     Obj* range = make_range(5, 15);
 
@@ -593,7 +593,7 @@ void range_example(void) {
     printf("\n");  // Output: Range 5..15: 5 6 7 8 9 10 11 12 13 14
 
     free_generator_obj(range);
-    green_scheduler_shutdown();
+    fiber_scheduler_shutdown();
 }
 ```
 
@@ -607,14 +607,14 @@ Obj* async_compute(Obj** args, int argc) {
 
     // Simulate async work with yields
     for (int i = 0; i < 3; i++) {
-        green_yield();
+        fiber_yield();
     }
 
     return mk_int_unboxed(input * input);
 }
 
 void promise_example(void) {
-    green_scheduler_init();
+    fiber_scheduler_init();
 
     // Create async task that returns a promise
     Obj* input = mk_int_unboxed(7);
@@ -627,7 +627,7 @@ void promise_example(void) {
 
     // Run until promise resolves
     while (!promise_settled(promise)) {
-        green_scheduler_step();
+        fiber_scheduler_step();
     }
 
     // Get result
@@ -636,7 +636,7 @@ void promise_example(void) {
 
     free_promise_val(promise);
     dec_ref(thunk);
-    green_scheduler_shutdown();
+    fiber_scheduler_shutdown();
 }
 ```
 
@@ -647,21 +647,21 @@ void promise_example(void) {
 
 Obj* trivial_task(Obj** args, int argc) {
     (void)args; (void)argc;
-    green_yield();
+    fiber_yield();
     return mk_int_unboxed(1);
 }
 
 void million_tasks_example(void) {
-    green_scheduler_init();
+    fiber_scheduler_init();
 
-    printf("Spawning %d green tasks...\n", NUM_TASKS);
+    printf("Spawning %d fibers...\n", NUM_TASKS);
 
     Obj* thunk = mk_closure(trivial_task, NULL, NULL, 0, 0);
 
     clock_t start = clock();
 
     for (int i = 0; i < NUM_TASKS; i++) {
-        spawn_green_task(thunk);
+        fiber_spawn_task(thunk);
     }
 
     double spawn_time = (double)(clock() - start) / CLOCKS_PER_SEC;
@@ -669,17 +669,17 @@ void million_tasks_example(void) {
            spawn_time, NUM_TASKS / spawn_time);
 
     start = clock();
-    green_scheduler_run();
+    fiber_scheduler_run();
 
     double run_time = (double)(clock() - start) / CLOCKS_PER_SEC;
     printf("Run time: %.3f seconds\n", run_time);
 
     dec_ref(thunk);
-    green_scheduler_shutdown();
+    fiber_scheduler_shutdown();
 }
 ```
 
-### Combining OS Threads with Green Threads
+### Combining OS Threads with Fibers
 
 ```c
 // Run green scheduler on multiple OS threads
@@ -687,19 +687,19 @@ void* worker_thread(void* arg) {
     int worker_id = *(int*)arg;
 
     // Each OS thread gets its own green scheduler
-    green_scheduler_init();
+    fiber_scheduler_init();
 
-    printf("Worker %d starting green threads\n", worker_id);
+    printf("Worker %d starting fibers\n", worker_id);
 
-    // Spawn some green tasks on this OS thread
+    // Spawn some fibers on this OS thread
     for (int i = 0; i < 100; i++) {
         Obj* thunk = mk_closure(trivial_task, NULL, NULL, 0, 0);
-        spawn_green_task(thunk);
+        fiber_spawn_task(thunk);
         dec_ref(thunk);
     }
 
-    green_scheduler_run();
-    green_scheduler_shutdown();
+    fiber_scheduler_run();
+    fiber_scheduler_shutdown();
 
     printf("Worker %d done\n", worker_id);
     return NULL;

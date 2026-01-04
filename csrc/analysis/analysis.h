@@ -264,6 +264,7 @@ typedef struct TetherPoint {
     int position;            /* Program position */
     char* tethered_var;      /* Variable being kept alive */
     bool is_entry;           /* true = tether start, false = tether end */
+    bool elided;             /* True if static handle makes tether redundant */
     struct TetherPoint* next;
 } TetherPoint;
 
@@ -353,6 +354,11 @@ typedef struct AnalysisContext {
 
     /* Tether points */
     TetherPoint* tethers;
+
+    /* Handle tracking for tether elision */
+    char** active_handles;
+    size_t handle_count;
+    size_t handle_capacity;
 
     /* Function summaries */
     FunctionSummary* function_summaries;
@@ -667,6 +673,9 @@ void omni_analyze_static_symmetric(AnalysisContext* ctx, CFG* cfg);
 
 /* Component analysis */
 void omni_analyze_components(AnalysisContext* ctx, CFG* cfg);
+
+/* Tether elision optimization */
+void omni_optimize_tethers(AnalysisContext* ctx, CFG* cfg);
 
 /* Compute liveness using backward dataflow */
 void omni_compute_liveness(CFG* cfg, AnalysisContext* ctx);

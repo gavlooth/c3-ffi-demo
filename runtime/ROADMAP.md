@@ -8,7 +8,7 @@ The OmniLisp runtime is a mature C99 + POSIX runtime with:
 - **Multiple memory strategies**: ASAP, RC, SCC, Arena, Component Tethering
 - [x] Component-Level Tethering for unbroken cycles (island units)
 - **Region-based memory**: IRegion interface with 5 allocator types
-- **Two-tier concurrency**: OS threads (pthreads) + Green threads (continuations)
+- **Two-tier concurrency**: OS threads (pthreads) + Fibers (continuations)
 - **Generators/Iterators**: Lazy sequences via continuations
 - **Promises/Async**: Async/await pattern support
 - **FFI**: External handles, weak references, borrowed refs
@@ -53,10 +53,10 @@ The OmniLisp runtime is a mature C99 + POSIX runtime with:
 - [x] Atoms (thread-safe state)
 - [x] spawn_goroutine for OS threads
 
-### Phase 6: Green Thread Concurrency (Complete - NEW)
+### Phase 6: Fiber Concurrency (Complete - NEW)
 - [x] CEK-style continuation frames
 - [x] Delimited continuations (prompt/control)
-- [x] Green thread scheduler
+- [x] Fiber scheduler
 - [x] Continuation-based channels
 - [x] Generators/iterators via continuations
 - [x] Promises with async/await
@@ -112,7 +112,7 @@ The OmniLisp runtime is a mature C99 + POSIX runtime with:
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Tier 2: Green Threads (continuations)                      │
+│  Tier 2: Fibers (continuations)                      │
 │                                                             │
 │  When to use:                                               │
 │  - 1000s+ concurrent tasks                                  │
@@ -120,7 +120,7 @@ The OmniLisp runtime is a mature C99 + POSIX runtime with:
 │  - Lazy sequences (generators)                              │
 │  - Cooperative scheduling                                   │
 │                                                             │
-│  API: spawn_green_task, make_green_chan, make_gen           │
+│  API: fiber_spawn_task, make_fiber_chan, make_gen           │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -146,7 +146,7 @@ runtime/
 │       ├── slot_pool.c/h      # Sound handle allocation
 │       ├── handle.c/h         # Handle system
 │       ├── region.c/h         # IRegion infrastructure
-│       └── continuation.c/h   # Green threads, generators, promises
+│       └── continuation.c/h   # Fibers, generators, promises
 ├── include/
 │   └── omnilisp.h               # Public API
 ├── tests/

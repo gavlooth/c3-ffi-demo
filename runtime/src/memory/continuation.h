@@ -1,10 +1,10 @@
 /*
- * Continuation-Based Concurrency for OmniLisp Runtime
+ * Fiber-Based Concurrency for OmniLisp Runtime
  *
  * This module provides:
  * - Delimited continuations (prompt/control)
- * - Green thread scheduler
- * - Continuation-based channels
+ * - Fiber scheduler (lightweight cooperative tasks)
+ * - Fiber-based channels
  * - Generators/iterators
  * - Async/await (promises)
  *
@@ -27,9 +27,9 @@ typedef struct Obj Obj;
 #endif
 typedef struct Frame Frame;
 typedef struct Continuation Continuation;
-typedef struct Task Task;
+typedef struct Fiber Fiber;
 typedef struct Scheduler Scheduler;
-typedef struct GreenChannel GreenChannel;
+typedef struct FiberChannel FiberChannel;
 typedef struct Generator Generator;
 typedef struct Promise Promise;
 
@@ -118,18 +118,18 @@ struct Continuation {
     bool invoked;           /* Has been invoked? (for one-shot) */
 };
 
-/* ========== Task (Green Thread) ========== */
+/* ========== Fiber (Lightweight Cooperative Task) ========== */
 
 typedef enum {
-    TASK_READY,             /* In run queue, ready to execute */
-    TASK_RUNNING,           /* Currently executing */
-    TASK_PARKED,            /* Waiting on channel/promise */
-    TASK_DONE,              /* Completed */
-} TaskState;
+    FIBER_READY,            /* In run queue, ready to execute */
+    FIBER_RUNNING,          /* Currently executing */
+    FIBER_PARKED,           /* Waiting on channel/promise */
+    FIBER_DONE,             /* Completed */
+} FiberState;
 
-struct Task {
-    uint64_t id;            /* Unique task ID */
-    TaskState state;
+struct Fiber {
+    uint64_t id;            /* Unique fiber ID */
+    FiberState state;
 
     /* Saved execution state */
     Obj* expr;              /* Current expression (C in CEK) */
@@ -138,15 +138,15 @@ struct Task {
     Obj* value;             /* Value to resume with */
 
     /* Scheduling */
-    Task* next;             /* Next in queue */
-    Task* prev;             /* Previous in queue (for removal) */
+    Fiber* next;            /* Next in queue */
+    Fiber* prev;            /* Previous in queue (for removal) */
 
     /* Parking info */
     void* park_reason;      /* Channel/promise we're waiting on */
     Obj* park_value;        /* Value to send (for channel send) */
 
     /* Result */
-    Obj* result;            /* Final result when TASK_DONE */
+    Obj* result;            /* Final result when FIBER_DONE */
     Promise* completion;    /* Promise fulfilled when done */
 };
 
@@ -154,36 +154,36 @@ struct Task {
 
 struct Scheduler {
     /* Run queue (doubly-linked for O(1) removal) */
-    Task* ready_head;
-    Task* ready_tail;
+    Fiber* ready_head;
+    Fiber* ready_tail;
 
-    /* Current task */
-    Task* current;
+    /* Current fiber */
+    Fiber* current;
 
-    /* Task management */
-    uint64_t next_task_id;
-    uint64_t task_count;
+    /* Fiber management */
+    uint64_t next_fiber_id;
+    uint64_t fiber_count;
 
     /* Frame pool (avoid malloc in hot path) */
     Frame* frame_freelist;
     size_t frame_pool_size;
 
-    /* Prompt stack for current task */
+    /* Prompt stack for current fiber */
     Frame* prompt_stack;
 
     /* Statistics */
-    uint64_t tasks_created;
-    uint64_t tasks_completed;
+    uint64_t fibers_created;
+    uint64_t fibers_completed;
     uint64_t context_switches;
 };
 
-/* ========== Green Channel ========== */
+/* ========== Fiber Channel ========== */
 
 /*
- * Continuation-based channel. No pthread primitives.
- * Blocking operations park the task and yield to scheduler.
+ * Fiber-based channel. No pthread primitives.
+ * Blocking operations park the fiber and yield to scheduler.
  */
-struct GreenChannel {
+struct FiberChannel {
     /* Buffer (for buffered channels) */
     Obj** buffer;
     int capacity;           /* 0 = unbuffered (rendezvous) */
@@ -191,9 +191,9 @@ struct GreenChannel {
     int head;
     int tail;
 
-    /* Wait queues (parked tasks) */
-    Task* send_waiters;     /* Tasks waiting to send */
-    Task* recv_waiters;     /* Tasks waiting to receive */
+    /* Wait queues (parked fibers) */
+    Fiber* send_waiters;    /* Fibers waiting to send */
+    Fiber* recv_waiters;    /* Fibers waiting to receive */
 
     /* State */
     bool closed;
@@ -240,10 +240,10 @@ struct Promise {
     Obj* value;
     Obj* error;
 
-    /* Waiters (tasks awaiting this promise) */
-    Task* waiters;
+    /* Waiters (fibers awaiting this promise) */
+    Fiber* waiters;
 
-    /* Callbacks (for non-task contexts) */
+    /* Callbacks (for non-fiber contexts) */
     Obj* on_fulfill;        /* List of (callback . env) */
     Obj* on_reject;         /* List of (callback . env) */
 
@@ -299,51 +299,51 @@ bool scheduler_step(void);
 /* Is scheduler idle? */
 bool scheduler_is_idle(void);
 
-/* ========== API: Green Threads ========== */
+/* ========== API: Fibers ========== */
 
-/* Spawn a new green thread */
-Task* spawn_green(Obj* thunk);
+/* Spawn a new fiber */
+Fiber* fiber_spawn(Obj* thunk);
 
 /* Spawn and get completion promise */
-Promise* spawn_async(Obj* thunk);
+Promise* fiber_spawn_async(Obj* thunk);
 
 /* Yield to scheduler (cooperative) */
-void yield_green(void);
+void fiber_yield(void);
 
-/* Get current task */
-Task* task_current(void);
+/* Get current fiber */
+Fiber* fiber_current(void);
 
-/* Park current task (internal) */
-void task_park(void* reason, Obj* value);
+/* Park current fiber (internal) */
+void fiber_park(void* reason, Obj* value);
 
-/* Unpark a task (internal) */
-void task_unpark(Task* t, Obj* value);
+/* Unpark a fiber (internal) */
+void fiber_unpark(Fiber* f, Obj* value);
 
-/* ========== API: Green Channels ========== */
+/* ========== API: Fiber Channels ========== */
 
 /* Create channel */
-GreenChannel* green_channel_create(int capacity);
+FiberChannel* fiber_channel_create(int capacity);
 
 /* Send value (may park) */
-void green_channel_send(GreenChannel* ch, Obj* value);
+void fiber_channel_send(FiberChannel* ch, Obj* value);
 
 /* Receive value (may park) */
-Obj* green_channel_recv(GreenChannel* ch);
+Obj* fiber_channel_recv(FiberChannel* ch);
 
 /* Try send (non-blocking) */
-bool green_channel_try_send(GreenChannel* ch, Obj* value);
+bool fiber_channel_try_send(FiberChannel* ch, Obj* value);
 
 /* Try receive (non-blocking) */
-Obj* green_channel_try_recv(GreenChannel* ch, bool* ok);
+Obj* fiber_channel_try_recv(FiberChannel* ch, bool* ok);
 
 /* Close channel */
-void green_channel_close(GreenChannel* ch);
+void fiber_channel_close(FiberChannel* ch);
 
 /* Is channel closed? */
-bool green_channel_is_closed(GreenChannel* ch);
+bool fiber_channel_is_closed(FiberChannel* ch);
 
 /* Release channel */
-void green_channel_release(GreenChannel* ch);
+void fiber_channel_release(FiberChannel* ch);
 
 /* ========== API: Generators (Iterators) ========== */
 
@@ -401,13 +401,13 @@ Obj* mk_promise_obj(Promise* p);
 
 typedef struct SelectCase {
     enum { SELECT_RECV, SELECT_SEND, SELECT_DEFAULT } op;
-    GreenChannel* channel;
+    FiberChannel* channel;
     Obj* value;             /* For send */
     Obj** result;           /* For recv */
 } SelectCase;
 
 /* Select from multiple channel operations */
-int green_select(SelectCase* cases, int count);
+int fiber_select(SelectCase* cases, int count);
 
 /* ========== API: Timeout ========== */
 

@@ -63,6 +63,8 @@ void arena_destroy(Arena* a) {
 void arena_reset(Arena* a) {
     if (!a) return;
 
+    arena_release_externals(a);
+
     ArenaBlock* b = a->blocks;
     while (b) {
         b->used = 0;

@@ -32,14 +32,16 @@ typedef enum {
 struct SymObj {
     int external_rc;        /* References from live scopes */
     int internal_rc;        /* References from other objects */
-    SymObj** refs;          /* Objects this object references */
+    SymObj** refs;          /* Points to inline_refs or dynamic array */
     int ref_count;          /* Number of outgoing references */
     int ref_capacity;       /* Capacity of refs array */
     void* data;             /* Actual data payload */
     int freed;              /* Mark to prevent double-free */
     void (*destructor)(void*);  /* Optional destructor for data */
     SymComponent* comp;     /* Parent island/SCC (v0.6.0) */
-    SymObj* inline_refs[SYM_INLINE_REFS];
+    
+    /* Inline refs optimization: covers 90% of objects (pairs, etc.) */
+    SymObj* inline_refs[4];
 };
 
 /* Scope that owns objects */

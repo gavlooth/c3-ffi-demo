@@ -173,6 +173,16 @@ static void free_components(ComponentInfo* c) {
     }
 }
 
+static void free_active_handles(AnalysisContext* ctx) {
+    if (!ctx->active_handles) return;
+    for (size_t i = 0; i < ctx->handle_count; i++) {
+        free(ctx->active_handles[i]);
+    }
+    free(ctx->active_handles);
+    ctx->active_handles = NULL;
+    ctx->handle_count = 0;
+}
+
 void omni_analysis_free(AnalysisContext* ctx) {
     if (!ctx) return;
     free_var_usages(ctx->var_usages);
@@ -180,6 +190,7 @@ void omni_analysis_free(AnalysisContext* ctx) {
     free_owner_info(ctx->owner_info);
     free_shape_info(ctx->shape_info);
     free_components(ctx->components);
+    free_active_handles(ctx);
     free_reuse_candidates(ctx->reuse_candidates);
     free_regions(ctx->regions);
     free_rc_elision(ctx->rc_elision);
@@ -2209,12 +2220,13 @@ BorrowInfo* omni_get_borrow_info(AnalysisContext* ctx, const char* var_name) {
 }
 
 void omni_add_tether(AnalysisContext* ctx, const char* var_name, bool is_entry) {
-    TetherPoint* t = malloc(sizeof(TetherPoint));
-    t->position = ctx->position;
-    t->tethered_var = strdup(var_name);
-    t->is_entry = is_entry;
-    t->next = ctx->tethers;
-    ctx->tethers = t;
+    TetherPoint* tp = malloc(sizeof(TetherPoint));
+    tp->position = ctx->position;
+    tp->tethered_var = strdup(var_name);
+    tp->is_entry = is_entry;
+    tp->elided = false;
+    tp->next = ctx->tethers;
+    ctx->tethers = tp;
 }
 
 TetherPoint** omni_get_tethers_at(AnalysisContext* ctx, int position, size_t* count) {

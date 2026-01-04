@@ -9,6 +9,7 @@
 
 #define _POSIX_C_SOURCE 200809L
 #include "symmetric.h"
+#include "component.h"
 #include <string.h>
 #include <limits.h>
 
@@ -314,6 +315,12 @@ SymObj* sym_ctx_alloc(SymContext* ctx, void* data, void (*destructor)(void*)) {
 
 void sym_ctx_link(SymContext* ctx, SymObj* from, SymObj* to) {
     if (!ctx || !from || !to) return;
+    
+    /* Dynamic Merging (Phase 1) */
+    if (from->comp && to->comp && from->comp != to->comp) {
+        sym_component_union(from->comp, to->comp);
+    }
+    
     sym_inc_internal(from, to);
 }
 

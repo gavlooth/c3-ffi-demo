@@ -508,9 +508,10 @@ Obj* call_closure(Obj* clos, Obj** args, int argc);
 
 int is_truthy(Obj* x);
 
-/* ========== Arena Allocator ========== */
-
-Arena* arena_create(void);
+/* Arena Allocator */
+Arena* arena_create(size_t block_size);
+void* arena_alloc(Arena* a, size_t size);
+void arena_register_external(Arena* a, void* ptr, void (*cleanup)(void*));
 void arena_destroy(Arena* a);
 void arena_reset(Arena* a);
 Obj* arena_mk_int(Arena* a, long i);

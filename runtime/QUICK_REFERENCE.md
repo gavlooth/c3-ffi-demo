@@ -9,8 +9,8 @@ TAG_INT TAG_FLOAT TAG_CHAR TAG_PAIR TAG_SYM TAG_BOX TAG_CLOSURE TAG_ERROR
 // OS Thread concurrency (Tier 1 - pthreads)
 TAG_CHANNEL TAG_ATOM TAG_THREAD
 
-// Green Thread concurrency (Tier 2 - continuations)
-TAG_GREEN_CHANNEL TAG_GENERATOR TAG_PROMISE TAG_TASK TAG_CONTINUATION
+// Fiber concurrency (Tier 2 - continuations)
+TAG_FIBER_CHANNEL TAG_GENERATOR TAG_PROMISE TAG_FIBER TAG_CONTINUATION
 ```
 
 ## Constructors
@@ -194,28 +194,28 @@ atom_swap(Obj*, Obj*(*fn)(Obj*))   // Apply function
 spawn_goroutine(Obj* closure, Obj** captured, int count)
 ```
 
-## Tier 2: Green Thread Concurrency (continuations)
+## Tier 2: Fiber Concurrency (continuations)
 
 ```c
 // Scheduler (call once per OS thread)
-green_scheduler_init()             // Initialize scheduler
-green_scheduler_run()              // Run until all tasks complete
-green_scheduler_step()             // Step one task (for event loops)
-green_scheduler_idle()             // Check if no tasks pending
-green_scheduler_shutdown()         // Cleanup
+fiber_scheduler_init()             // Initialize scheduler
+fiber_scheduler_run()              // Run until all fibers complete
+fiber_scheduler_step()             // Step one fiber (for event loops)
+fiber_scheduler_idle()             // Check if no fibers pending
+fiber_scheduler_shutdown()         // Cleanup
 
-// Green Channels - lightweight, no pthread overhead
-make_green_chan(int capacity)      // 0 = unbuffered (rendezvous)
-green_send(Obj* ch, Obj* val)      // Parks task if needed
-green_recv(Obj* ch)                // Parks task if needed
-green_try_send(Obj* ch, Obj* val)  // Non-blocking, returns success
-green_try_recv(Obj* ch, int* ok)   // Non-blocking
-green_chan_close(Obj* ch)
+// Fiber Channels - lightweight, no pthread overhead
+make_fiber_chan(int capacity)      // 0 = unbuffered (rendezvous)
+fiber_send(Obj* ch, Obj* val)      // Parks fiber if needed
+fiber_recv(Obj* ch)                // Parks fiber if needed
+fiber_try_send(Obj* ch, Obj* val)  // Non-blocking, returns success
+fiber_try_recv(Obj* ch, int* ok)   // Non-blocking
+fiber_chan_close(Obj* ch)
 
-// Green Tasks - 1M+ concurrent tasks
-spawn_green_task(Obj* thunk)       // Spawn, returns task handle
+// Fibers - 1M+ concurrent fibers
+fiber_spawn_task(Obj* thunk)       // Spawn, returns fiber handle
 spawn_async_task(Obj* thunk)       // Spawn, returns promise
-green_yield()                      // Cooperative yield
+fiber_yield_wrapper()              // Cooperative yield
 
 // Generators (Iterators) - lazy sequences
 make_gen(Obj* producer)            // Create from closure
@@ -344,19 +344,19 @@ gcc -std=c99 -pthread -DCONSTRAINT_DEBUG=1 -o prog prog.c -lomnilisp
 
 | Use Case | Tier | API |
 |----------|------|-----|
-| 1000s of concurrent tasks | Green | `spawn_green_task` |
+| 1000s of concurrent tasks | Fiber | `fiber_spawn_task` |
 | Blocking C library call | OS | `spawn_goroutine` |
 | CPU-bound computation | OS | `spawn_goroutine` |
-| Async I/O multiplexing | Green | `green_send/recv` |
-| Lazy sequences | Green | `make_gen` |
+| Async I/O multiplexing | Fiber | `fiber_send/recv` |
+| Lazy sequences | Fiber | `make_gen` |
 | Cross-thread shared state | OS | `make_atom` |
 
 ## Performance: Tier 1 vs Tier 2
 
-| Metric | OS Thread (Tier 1) | Green Thread (Tier 2) |
+| Metric | OS Thread (Tier 1) | Fiber (Tier 2) |
 |--------|-------------------|----------------------|
 | Creation | ~10μs | ~100ns |
 | Context switch | ~1μs | ~50ns |
-| Memory/task | ~8KB min | ~100 bytes |
-| Max tasks | ~10K | ~1M+ |
+| Memory/fiber | ~8KB min | ~100 bytes |
+| Max fibers | ~10K | ~1M+ |
 | Blocking FFI | Native | Needs wrapper |

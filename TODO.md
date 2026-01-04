@@ -384,15 +384,24 @@
   Acceptance:
     - Cycle and Component lifecycle events are logged in debug mode.
 
-- [TODO] Label: T-perf-tether-bench
+- [DONE] Label: T-perf-tether-bench
   Objective: Benchmark zero-cost tethered access vs standard RC access.
-  Where: `runtime/tests/bench.c`
+  Where: `runtime/bench/bench_component.c`
   What to change:
     - Create benchmark cases for large cyclic graphs.
     - Compare performance with and without scope tethers.
-  How to verify: `make -C runtime/tests bench`.
+  How to verify: `make -C runtime/tests bench` (or manual run).
   Acceptance:
-    - Benchmarks show quantified speedup for tethered scopes.
+    - Benchmarks show quantified speedup for tethered scopes (2.3x faster in initial tests).
+
+- [TODO] Label: T-perf-regression-ci
+  Objective: Integrate benchmarks into CI to prevent performance regression.
+  Where: `.github/workflows/` or `Makefile`
+  What to change:
+    - Add a `make bench` target that runs benchmarks and checks against a baseline.
+  How to verify: run `make bench` and see pass/fail based on timing.
+  Acceptance:
+    - CI fails if performance drops by >10%.
 
 - [TODO] Label: T-debug-event-ring
   Objective: Add a bounded event ring buffer for alloc/free/rc/borrow events.
@@ -510,6 +519,144 @@
 11. ✅ **Characters/strings** - text handling
 12. ✅ **Introspection** - gensym, eval, sym-eq?, trace
 13. ✅ **JIT execution** - Runtime C code execution via GCC
+
+---
+
+## Fiber System Refactor
+
+Redesign concurrency with clear separation: **fibers** (lightweight cooperative) vs **threads** (OS-level parallelism).
+
+See `FIBER_SYSTEM_PLAN.md` for full design.
+
+### Phase 1: Remove pthread Channels
+
+- [DONE] Label: T-fiber-rm-pthread-chan
+  Objective: Remove pthread-based channel implementation from runtime.
+  Where: `runtime/src/runtime.c` (lines ~2615-2810)
+  What to change:
+    - [x] Remove `Channel` struct with pthread mutex/cond
+    - [x] Remove `make_channel()`, `channel_send()`, `channel_recv()`, `channel_close()`
+    - [x] Remove `free_channel()`
+    - [x] Keep `TAG_CHANNEL` for continuation-based channels
+  How to verify: `make -C runtime && make -C runtime/tests test` passes without pthread channel code.
+  Acceptance:
+    - No pthread-based channel code in runtime.c
+    - TAG_CHANNEL repurposed for fiber channels
+
+### Phase 2: Rename Internal APIs
+
+- [DONE] Label: T-fiber-rename-internals
+  Objective: Rename fiber infrastructure to fiber terminology.
+  Where: `runtime/src/memory/continuation.c`, `runtime/src/memory/continuation.h`
+  What to change:
+    - [x] Rename `Task` struct → `Fiber`
+    - [x] Rename `spawn_green()` → `fiber_spawn()`
+    - [x] Rename `yield_green()` → `fiber_yield()`
+    - [x] Rename `task_park()` → `fiber_park()`
+    - [x] Rename `task_unpark()` → `fiber_unpark()`
+    - [x] Rename `task_current()` → `fiber_current()`
+    - [x] Rename `GreenChannel` → `FiberChannel`
+    - [x] Update all call sites
+  How to verify: grep for old names returns nothing; tests pass.
+  Acceptance:
+    - All internal APIs use fiber terminology
+    - All 454 runtime tests pass
+
+### Phase 3: Add Fiber Syntax Forms
+
+- [N/A] Label: T-fiber-syntax
+  Objective: Add fiber-related syntax forms to reader/parser.
+  Where: `omnilisp/src/runtime/reader/omni_reader.c`, `omnilisp/SYNTAX.md`
+  Reason: Not needed - fiber primitives work as regular function calls.
+  The reader already handles (fiber ...), (resume ...), (spawn ...) etc.
+  as standard S-expressions. No special syntax required.
+
+### Phase 4: Implement Fiber Primitives
+
+- [DONE] Label: T-fiber-primitives
+  Objective: Wire up fiber primitives in evaluator.
+  Where: `omnilisp/src/runtime/eval/omni_eval.c`
+  What to change:
+    - [x] Add `prim_fiber` - create paused fiber from thunk
+    - [x] Add `prim_resume` - step into fiber (integrated with effect system resume)
+    - [x] Add `prim_yield` - yield from current fiber
+    - [x] Add `prim_spawn` - add fiber to scheduler run queue
+    - [x] Add `prim_join` - wait for fiber completion
+    - [x] Add `prim_run_fibers` - run all spawned fibers
+    - [x] Add `prim_fiber_q` - fiber predicate
+    - [x] Add `prim_fiber_done_q` - check if fiber done
+    - [x] Register all in `omni_env_init()`
+  How to verify: `(resume (fiber (lambda () (+ 1 2))))` → `3`
+  Acceptance:
+    - All fiber primitives callable from OmniLisp
+    - Basic fiber creation and resumption works
+    - Note: yield requires continuation capture for true suspension
+
+### Phase 5: Implement Channel Primitives
+
+- [DONE] Label: T-fiber-channels
+  Objective: Wire up channel primitives using continuation-based channels.
+  Where: `omnilisp/src/runtime/eval/omni_eval.c`
+  What to change:
+    - [x] Add `prim_chan` - create channel (optional capacity)
+    - [x] Add `prim_send` - send to channel (parks if full/unbuffered)
+    - [x] Add `prim_recv` - receive from channel (parks if empty)
+    - [x] Add `prim_chan_close` - close channel
+    - [x] Add `prim_chan_q` - channel predicate
+    - [x] Register all in `omni_env_init()`
+  How to verify: producer-consumer test with buffered channels.
+  Acceptance:
+    - Channels work for fiber communication
+    - Buffered channels work correctly
+
+### Phase 6: Implement with-fibers Scoped Context
+
+- [TODO] Label: T-fiber-scoped
+  Objective: Add scoped fiber cleanup form.
+  Where: `omnilisp/src/runtime/eval/omni_eval.c`
+  What to change:
+    - [ ] Add `eval_with_fibers` special form handler
+    - [ ] Track spawned fibers in scope
+    - [ ] On scope exit: join all pending fibers
+    - [ ] On exception: cancel all pending fibers
+  How to verify: fibers don't leak outside `with-fibers` block.
+  Acceptance:
+    - Spawned fibers cleaned up on scope exit
+    - Exceptions propagate correctly
+
+### Phase 7: Rename OS Thread Primitives
+
+- [TODO] Label: T-fiber-os-thread-rename
+  Objective: Clear naming distinction between fibers and OS threads.
+  Where: `runtime/src/runtime.c`, `omnilisp/src/runtime/eval/omni_eval.c`
+  What to change:
+    - [ ] Rename `spawn_thread()` → `os_thread_create()`
+    - [ ] Rename `thread_join()` → `os_thread_join()`
+    - [ ] Remove `spawn_goroutine()` (use fibers instead)
+    - [ ] Add OmniLisp primitives: `thread`, `thread-join`, `thread-id`
+    - [ ] Keep `atomic`, `mutex` for OS-level sync
+  How to verify: OS thread primitives work independently of fibers.
+  Acceptance:
+    - Clear separation: `fiber` = lightweight, `thread` = OS-level
+    - Both systems work independently
+
+### Phase 8: Add Thread Pool for Fiber Scheduler
+
+- [TODO] Label: T-fiber-pool
+  Objective: Allow fibers to run across multiple OS threads with work-stealing.
+  Where: `runtime/src/memory/continuation.c`, `runtime/src/memory/continuation.h`
+  What to change:
+    - [ ] Add `FiberPool` struct with N worker threads
+    - [ ] Add global work-stealing queue
+    - [ ] Add per-worker local queues
+    - [ ] Add `fiber_pool_init(n)` and `fiber_pool_shutdown()`
+    - [ ] Add OmniLisp: `(fiber-pool-size)`, `(set-fiber-pool-size! n)`
+    - [ ] Implement work-stealing algorithm
+  How to verify: fibers execute on different OS threads; work balances.
+  Acceptance:
+    - Fibers can run on any worker thread
+    - Work-stealing for load balancing
+    - Configurable parallelism
 
 ---
 

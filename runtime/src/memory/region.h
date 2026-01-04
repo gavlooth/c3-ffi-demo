@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include "component.h"
 
 /* Region ID type */
 typedef uint64_t RegionID;
@@ -43,6 +44,12 @@ struct Region {
     RegionObj** objects;
     int object_count;
     int object_capacity;
+    
+    /* Component Tracking (Unified Region-Based Memory) */
+    SymComponent** components;
+    int component_count;
+    int component_capacity;
+    
     bool closed;
 };
 
@@ -91,7 +98,12 @@ bool region_is_closed(Region* r);
 
 /* Object operations */
 RegionObj* region_alloc(RegionContext* ctx, void* data, void (*destructor)(void*));
+SymComponent* region_alloc_component(Region* r);
 RegionError region_create_ref(RegionContext* ctx, RegionObj* source, RegionObj* target, RegionRef** out_ref);
+
+/* Region-RC Fusion Operations */
+void region_inc_ref(Region* r, void* obj);
+void region_dec_ref(Region* r, void* obj);
 
 /* Reference operations */
 void* region_ref_deref(RegionRef* ref, RegionError* err);
@@ -277,12 +289,7 @@ void iregion_stats(IRegion* r, size_t* alloc_count, size_t* bytes_used, size_t* 
  * Perfect for cyclic structures where individual frees are impossible.
  */
 
-typedef struct ArenaBlock {
-    void* data;
-    size_t size;
-    size_t used;
-    struct ArenaBlock* next;
-} ArenaBlock;
+#include "arena.h"
 
 typedef struct ArenaRegion {
     ArenaBlock* head;        /* First block */

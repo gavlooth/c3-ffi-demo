@@ -14,8 +14,9 @@ typedef struct CompPool {
 static __thread struct {
     CompPool* pools;
     SymComponent* freelist;
+    SymComponent* dismantle_queue; /* Linked list of components to free */
     uint32_t next_id;
-} COMP_CTX = {NULL, NULL, 1};
+} COMP_CTX = {NULL, NULL, NULL, 1};
 
 SymComponent* sym_component_new(void) {
     if (!COMP_CTX.freelist) {
@@ -37,6 +38,7 @@ SymComponent* sym_component_new(void) {
     c->id = COMP_CTX.next_id++;
     c->member_capacity = 8;
     c->members = malloc(c->member_capacity * sizeof(SymObj*));
+    c->parent = NULL;
     
     return c;
 }
@@ -46,7 +48,82 @@ static void sym_component_pool_free(SymComponent* c) {
     COMP_CTX.freelist = c;
 }
 
+/* Find root component with path compression */
+SymComponent* sym_component_find(SymComponent* c) {
+    if (!c) return NULL;
+    if (c->parent == NULL) return c;
+    
+    /* Path compression */
+    SymComponent* root = c;
+    while (root->parent) {
+        root = root->parent;
+    }
+    
+    /* Second pass to compress */
+    SymComponent* curr = c;
+    while (curr->parent) {
+        SymComponent* next = curr->parent;
+        curr->parent = root;
+        curr = next;
+    }
+    
+    return root;
+}
+
+/* Merge two components */
+void sym_component_union(SymComponent* a, SymComponent* b) {
+    SymComponent* rootA = sym_component_find(a);
+    SymComponent* rootB = sym_component_find(b);
+    
+    if (rootA == rootB) return;
+    
+    /* Merge B into A (arbitrary direction for now) */
+    rootB->parent = rootA;
+    
+    /* Transfer counts */
+    rootA->handle_count += rootB->handle_count;
+    rootA->tether_count += rootB->tether_count;
+    
+    /* Transfer members */
+    /* Ensure capacity */
+    if (rootA->member_count + rootB->member_count > rootA->member_capacity) {
+        int new_cap = rootA->member_capacity * 2;
+        while (new_cap < rootA->member_count + rootB->member_count) {
+            new_cap *= 2;
+        }
+        rootA->members = realloc(rootA->members, new_cap * sizeof(SymObj*));
+        rootA->member_capacity = new_cap;
+    }
+    
+    /* Copy members and update their component pointer */
+    for (int i = 0; i < rootB->member_count; i++) {
+        SymObj* obj = rootB->members[i];
+        if (obj) {
+            obj->comp = rootA;
+            rootA->members[rootA->member_count++] = obj;
+        }
+    }
+    
+    /* Release B's member list memory and pool slot */
+    if (rootB->members) {
+        free(rootB->members);
+        rootB->members = NULL;
+    }
+    /* We don't free rootB itself yet because 'parent' link is used for find() */
+    /* Wait, if we use path compression, can we free B? 
+     * No, internal objects might still point to B. 
+     * BUT we updated obj->comp = rootA. 
+     * However, there might be other SymComponent pointers (e.g. tether tokens) pointing to B.
+     * So B must remain valid as a forwarding node until it's "dismantled".
+     * Since B is now part of A, it will effectively be dismantled when A is.
+     * We can't return B to the pool yet.
+     */
+}
+
 void sym_component_cleanup(void) {
+    /* Process remaining items in queue */
+    sym_process_dismantle(0);
+    
     CompPool* p = COMP_CTX.pools;
     while (p) {
         CompPool* next = p->next;
@@ -61,44 +138,66 @@ void sym_component_cleanup(void) {
 }
 
 void sym_component_add_member(SymComponent* c, SymObj* obj) {
-    if (!c || !obj) return;
+    SymComponent* root = sym_component_find(c);
+    if (!root || !obj) return;
     
-    if (c->member_count >= c->member_capacity) {
-        c->member_capacity *= 2;
-        c->members = realloc(c->members, c->member_capacity * sizeof(SymObj*));
+    if (root->member_count >= root->member_capacity) {
+        root->member_capacity *= 2;
+        root->members = realloc(root->members, root->member_capacity * sizeof(SymObj*));
     }
     
-    obj->comp = c;
-    c->members[c->member_count++] = obj;
+    obj->comp = root;
+    root->members[root->member_count++] = obj;
 }
 
 void sym_acquire_handle(SymComponent* c) {
-    if (!c) return;
-    c->handle_count++;
+    SymComponent* root = sym_component_find(c);
+    if (!root) return;
+    root->handle_count++;
 }
 
 static void maybe_dismantle(SymComponent* c) {
-    if (c->handle_count == 0 && c->tether_count == 0 && !c->dismantle_scheduled) {
-        c->dismantle_scheduled = true;
+    SymComponent* root = sym_component_find(c);
+    if (!root) return;
+    if (root->state == 0 && !root->dismantle_scheduled) {
+        root->dismantle_scheduled = true;
+        /* Lazy: Add to queue instead of direct call */
+        *((SymComponent**) root) = COMP_CTX.dismantle_queue;
+        COMP_CTX.dismantle_queue = root;
+    }
+}
+
+void sym_process_dismantle(int batch_size) {
+    int count = 0;
+    while (COMP_CTX.dismantle_queue && (batch_size <= 0 || count < batch_size)) {
+        SymComponent* c = COMP_CTX.dismantle_queue;
+        COMP_CTX.dismantle_queue = *((SymComponent**) c);
+        
         sym_dismantle_component(c);
+        count++;
     }
 }
 
 void sym_release_handle(SymComponent* c) {
-    if (!c) return;
-    c->handle_count--;
-    maybe_dismantle(c);
+    SymComponent* root = sym_component_find(c);
+    if (!root) return;
+    assert(root->handle_count > 0);
+    root->handle_count--;
+    maybe_dismantle(root);
 }
 
 SymTetherToken sym_tether_begin(SymComponent* c) {
-    if (c) c->tether_count++;
-    return (SymTetherToken){ .comp = c };
+    SymComponent* root = sym_component_find(c);
+    if (root) root->tether_count++;
+    return (SymTetherToken){ .comp = root };
 }
 
 void sym_tether_end(SymTetherToken token) {
-    if (token.comp) {
-        token.comp->tether_count--;
-        maybe_dismantle(token.comp);
+    SymComponent* root = sym_component_find(token.comp);
+    if (root) {
+        assert(root->tether_count > 0);
+        root->tether_count--;
+        maybe_dismantle(root);
     }
 }
 

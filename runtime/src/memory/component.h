@@ -21,12 +21,25 @@ typedef struct SymComponent SymComponent;
  */
 struct SymComponent {
     uint32_t id;
-    int handle_count;       /* External owning references (ASAP managed) */
-    int tether_count;       /* Active scope tethers (Zero-cost locks) */
+    
+    /* 
+     * Pack counts for O(1) atomics
+     * Bits 0-31: handle_count (boundary refs)
+     * Bits 32-63: tether_count (scoped tethers)
+     */
+    union {
+        uint64_t state;
+        struct {
+            uint32_t handle_count;
+            uint32_t tether_count;
+        };
+    };
     
     struct SymObj** members; /* All objects in this island */
     int member_count;
     int member_capacity;
+    
+    struct SymComponent* parent; /* Union-Find parent (NULL if root) */
     
     bool dismantle_scheduled;
 };
@@ -35,6 +48,10 @@ struct SymComponent {
 SymComponent* sym_component_new(void);
 void sym_component_add_member(SymComponent* c, SymObj* obj);
 void sym_component_cleanup(void);
+
+/* Union-Find Operations (Dynamic Merging) */
+SymComponent* sym_component_find(SymComponent* c);
+void sym_component_union(SymComponent* a, SymComponent* b);
 
 /* Boundary Operations (ASAP called) */
 void sym_acquire_handle(SymComponent* c);
@@ -50,5 +67,6 @@ void sym_tether_end(SymTetherToken token);
 
 /* Dismantling */
 void sym_dismantle_component(SymComponent* c);
+void sym_process_dismantle(int batch_size);
 
 #endif /* OMNI_COMPONENT_H */
