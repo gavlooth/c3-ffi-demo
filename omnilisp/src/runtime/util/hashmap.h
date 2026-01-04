@@ -1,5 +1,5 @@
-#ifndef PURPLE_HASHMAP_H
-#define PURPLE_HASHMAP_H
+#ifndef OMNILISP_HASHMAP_H
+#define OMNILISP_HASHMAP_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -42,4 +42,4 @@ size_t hashmap_size(HashMap* map);
 void hashmap_clear(HashMap* map);
 int hashmap_had_alloc_failure(HashMap* map);
 
-#endif // PURPLE_HASHMAP_H
+#endif // OMNILISP_HASHMAP_H

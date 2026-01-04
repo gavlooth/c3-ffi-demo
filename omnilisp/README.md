@@ -26,4 +26,4 @@ The repo currently ships a small C compiler/runtime subset. The rest of the lang
 
 *   [DESIGN.md](./DESIGN.md) - Full technical specification.
 *   [SUMMARY.md](./SUMMARY.md) - High-level feature overview.
-*   [ROADMAP.md](./ROADMAP.md) - Implementation plan for `purple_go`.
+*   [ROADMAP.md](./ROADMAP.md) - Implementation plan for OmniLisp.

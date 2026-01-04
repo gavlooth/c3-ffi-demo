@@ -1,5 +1,5 @@
-#ifndef PURPLE_PIKA_H
-#define PURPLE_PIKA_H
+#ifndef OMNILISP_PIKA_H
+#define OMNILISP_PIKA_H
 
 #include "../types.h"
 #include <stddef.h>
@@ -68,4 +68,4 @@ Value* pika_run(PikaState* state, int root_rule_id);
 // Helper for accessing matches (useful for semantic actions)
 PikaMatch* pika_get_match(PikaState* state, size_t pos, int rule_id);
 
-#endif // PURPLE_PIKA_H
+#endif // OMNILISP_PIKA_H

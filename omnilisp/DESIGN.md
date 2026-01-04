@@ -1301,3 +1301,109 @@ Tower semantics work with hygienic macros:
 - Strings, floats, chars, dicts, tuples, type literals
 - Pattern matching, macros, modules, multiple dispatch
 - Concurrency/FFI surface syntax and tower semantics
+
+---
+
+## 21. System Architecture
+
+Omnilisp provides three execution paths: interpreter, JIT, and AOT compilation.
+
+### 21.1 Core Components
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         Omnilisp CLI                             │
+│  ./omni <expr>     - Interpret expression                       │
+│  ./omni <file>     - Run file                                   │
+│  ./omni --jit      - JIT compile and run                        │
+│  ./omni --compile  - AOT compile to C                           │
+│  ./omni --build    - AOT compile to executable                  │
+└───────────────┬─────────────────┬─────────────────┬─────────────┘
+                │                 │                 │
+        ┌───────▼───────┐ ┌───────▼───────┐ ┌───────▼───────┐
+        │   Reader      │ │   Reader      │ │   Reader      │
+        │ (pika parser) │ │ (pika parser) │ │ (pika parser) │
+        └───────┬───────┘ └───────┬───────┘ └───────┬───────┘
+                │                 │                 │
+        ┌───────▼───────┐ ┌───────▼───────┐ ┌───────▼───────┐
+        │  Evaluator    │ │  Compiler     │ │  Compiler     │
+        │ (tree-walk)   │ │ (emit C)      │ │ (emit C)      │
+        └───────┬───────┘ └───────┬───────┘ └───────┬───────┘
+                │                 │                 │
+                ▼                 ▼                 ▼
+           Result           gcc → .so           gcc → exe
+                           dlopen/call          standalone
+```
+
+### 21.2 Tagged Pointer Representation
+
+All runtime values use tagged pointers with a 3-bit tag in the low bits:
+
+| Tag | Value Type | Representation |
+|-----|------------|----------------|
+| `0x0` | Heap pointer | Aligned pointer to `Obj` |
+| `0x1` | Immediate int | `(n << 3) \| 0x1` |
+| `0x2` | Character | `(c << 3) \| 0x2` |
+| `0x3` | Boolean | `(b << 3) \| 0x3` |
+| `0x4` | Symbol ID | `(id << 3) \| 0x4` |
+| `0x5` | Reserved | — |
+| `0x6` | Reserved | — |
+| `0x7` | Special | nil, nothing, eof |
+
+Immediate integers fit in 61 bits (signed), avoiding heap allocation for common small values.
+
+### 21.3 Object Layout
+
+Heap-allocated objects share a common header:
+
+```c
+typedef struct Obj {
+    uint16_t generation;  // For generational refs
+    int mark;             // Reference count / GC mark
+    int tag;              // TAG_INT, TAG_FLOAT, TAG_SYM, etc.
+    int is_pair;          // 1 if cons pair
+    int scc_id;           // SCC identifier for cycle handling
+    unsigned int scan_tag;
+    union {
+        long i;                        // Integer
+        double f;                      // Float
+        struct { struct Obj *a, *b; }; // Pair (car, cdr)
+        void* ptr;                     // Symbol string, etc.
+    };
+} Obj;
+```
+
+### 21.4 JIT Compilation
+
+JIT compilation emits self-contained C code with an embedded mini-runtime:
+
+1. Generate C source with tagged pointer macros and primitive functions
+2. Compile to shared library: `gcc -shared -fPIC -O2 -o /tmp/jit.so /tmp/jit.c`
+3. Load with `dlopen()` and call the entry point via `dlsym()`
+4. Return tagged pointer result
+
+The standalone header includes:
+- `MAKE_INT_IMM(n)` - Create immediate integer
+- `prim_add`, `prim_sub`, `prim_mul`, `prim_div`, `prim_mod` - Arithmetic
+- `prim_lt`, `prim_gt`, `prim_le`, `prim_ge`, `prim_eq` - Comparisons
+
+### 21.5 AOT Compilation
+
+AOT compilation produces standalone executables:
+
+1. `--compile src.lisp out.c` - Generate C source file
+2. `--build src.lisp out` - Generate C and compile to executable
+
+AOT executables include the full standalone runtime and require no external libraries.
+
+### 21.6 Memory Management (ASAP)
+
+Omnilisp uses ASAP (As Static As Possible) memory management:
+
+- **No garbage collector** - All `free()` calls inserted at compile time
+- **Liveness analysis** - Free at last use, not scope exit
+- **Escape analysis** - Stack-allocate non-escaping values
+- **Capture tracking** - Lambda-captured variables transfer ownership
+- **Automatic weak back-edges** - Compiler detects and handles cycles
+
+See `CLAUDE.md` for detailed ASAP documentation

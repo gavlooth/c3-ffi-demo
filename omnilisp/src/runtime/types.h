@@ -1,5 +1,5 @@
-#ifndef PURPLE_TYPES_H
-#define PURPLE_TYPES_H
+#ifndef OMNILISP_TYPES_H
+#define OMNILISP_TYPES_H
 
 #include <stdlib.h>
 #include <string.h>
@@ -149,4 +149,4 @@ void compiler_arena_register_string(char* s);
 #define LIST2(a,b) mk_cell(a, mk_cell(b, NIL))
 #define LIST3(a,b,c) mk_cell(a, mk_cell(b, mk_cell(c, NIL)))
 
-#endif // PURPLE_TYPES_H
+#endif // OMNILISP_TYPES_H

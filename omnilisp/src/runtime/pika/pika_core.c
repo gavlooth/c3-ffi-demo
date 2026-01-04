@@ -166,38 +166,6 @@ static PikaMatch evaluate_rule(PikaState* state, size_t pos, int rule_id) {
             break;
         }
     }
-        case PIKA_OPT: {
-            PikaMatch* sub = get_match(state, pos, rule->data.children.subrules[0]);
-            if (sub && sub->matched) {
-                m = *sub;
-            } else {
-                m.matched = true;
-                m.len = 0;
-            }
-            break;
-        }
-        case PIKA_NOT: {
-            PikaMatch* sub = get_match(state, pos, rule->data.children.subrules[0]);
-            if (!sub || !sub->matched) {
-                m.matched = true;
-                m.len = 0;
-            }
-            break;
-        }
-        case PIKA_AND: {
-            PikaMatch* sub = get_match(state, pos, rule->data.children.subrules[0]);
-            if (sub && sub->matched) {
-                m.matched = true;
-                m.len = 0;
-            }
-            break;
-        }
-        case PIKA_REF: {
-            PikaMatch* sub = get_match(state, pos, rule->data.ref.subrule);
-            if (sub) m = *sub;
-            break;
-        }
-    }
     return m;
 }
 

@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document details the complete implementation plan for replacing Purple with OmniLisp.
+This document details the complete implementation plan for OmniLisp.
 The C runtime remains unchanged. The Go compiler frontend is rewritten 100%.
 
 ---
@@ -640,7 +640,7 @@ switch (get_type(value)) {
 - [x] Keyword/Nothing code generation
 - [x] Type literal code generation
 
-### Phase 10: Tower Semantics ✅ COMPLETE (inherited from Purple)
+### Phase 10: Tower Semantics ✅ COMPLETE
 - [x] `lift` - value to code
 - [x] `run` - execute code at base
 - [x] `EM` - escape to meta

@@ -1,6 +1,6 @@
 # Omnilisp Implementation Roadmap
 
-This roadmap outlines the steps to build the Omnilisp Go compiler that emits ANSI C99 + POSIX code and links against `omniruntime`. Prefer Go libraries (parser/CLI/collections) over bespoke implementations, and use the existing `~/code/purple_c_scratch` behavior as the parity baseline.
+This roadmap outlines the steps to build the Omnilisp Go compiler that emits ANSI C99 + POSIX code and links against `omniruntime`. Prefer Go libraries (parser/CLI/collections) over bespoke implementations.
 
 ## Phase 0: Compiler + Runtime Core (Go + C99 target)
 **Goal:** Establish the object model, ABI, and ASAP memory management.

@@ -1,5 +1,5 @@
-#ifndef PURPLE_DSTRING_H
-#define PURPLE_DSTRING_H
+#ifndef OMNILISP_DSTRING_H
+#define OMNILISP_DSTRING_H
 
 #include <stddef.h>
 
@@ -34,4 +34,4 @@ void ds_printf(DString* ds, const char* fmt, ...);
 size_t ds_len(DString* ds);
 int ds_ensure_capacity(DString* ds, size_t cap);  // Returns 1 on success, 0 on failure
 
-#endif // PURPLE_DSTRING_H
+#endif // OMNILISP_DSTRING_H

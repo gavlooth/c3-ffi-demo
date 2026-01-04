@@ -2,41 +2,49 @@
 
 Omnilisp is a modern Lisp dialect that synthesizes the best features of Scheme, Common Lisp, Julia, and Clojure. This repo currently ships a small C compiler/runtime subset; the rest is the target design.
 
+See also:
+- `DESIGN.md` for the full specification.
+- `SYNTAX.md` for exhaustive examples.
+- `DESIGN_DECISIONS.md` for the decision log.
+
 ## Implemented (C Compiler)
 *   **Core syntax:** lists `(...)`, quote `'x`, comments `; ...`
 *   **Special forms:** `define`, `lambda`/`fn`, `let`, `let*`, `if`, `do`/`begin`
 *   **Bindings:** list-style `(let ((x 1) (y 2)) ...)` and array-style `(let [x 1 y 2] ...)`
 *   **Primitives:** `+ - * / %`, `< > <= >= =`, `cons car cdr null?`, `display print newline`
-*   **Truthiness:** empty list and numeric zero are false; everything else is truthy
+*   **Truthiness (current runtime):** empty list and numeric zero are false; everything else is truthy
 
 ## Planned Design (Not Yet Implemented)
 ### Syntax & Aesthetics (planned)
-*   **Pure S-Expressions:** Uses `()` for forms, `[]` for bindings/arrays, `{}` for types, and `#{}` for dicts.
-*   **Dot Access:** `obj.field.subfield` reader macro for clean, nested property access.
-*   **No Redundancy:** Only Symbols (no separate Keyword type). `:key` is sugar for `'key`.
+*   **Bracket roles:** `()` forms, `[]` bindings/arrays/patterns, `{}` types, `#{}` dicts; quote preserves bracketed literals.
+*   **Access:** `obj.field.subfield` reader macro with UFCS-style calls.
+*   **Symbols only:** no keyword type; `:key` is sugar for `'key`.
+*   **Reader macros:** `#(...)` lambda shorthand, `#?` conditionals, `#r/#raw/#b` strings, `#_` discard, `#| |#` block comments, `#!` shebang, `#uuid/#path` typed literals.
+*   **Lambdas:** `->` shorthand for explicit-arg lambdas; `|>` for pipelines.
+*   **No `nil`:** `nothing` is unit/void, empty collections are distinct values.
 
 ### Type System (planned, Julia-inspired)
-*   **Multiple Dispatch:** Functions are generic by default. Methods are dispatched on all arguments.
-*   **Specificity Rules:** Julia-style method specificity with explicit ambiguity errors.
-*   **Hierarchy:** Abstract types for organization, Concrete structs for data.
-*   **Parametricity:** `{Vector Int}` for clear, typed containers.
-*   **Immutability:** Structs are immutable by default; `{mutable ...}` for imperative needs.
-*   **Named Args:** Passed as immutable named tuples; `&` separates positional from named `:key value` pairs and supports defaults.
-*   **Default Params:** Positional defaults supported via `[name default]` or `[name Type default]`.
+*   **Multiple dispatch:** generic functions dispatched on all arguments with Julia-style specificity.
+*   **Hierarchy:** abstract types, structs, and enums; parent type via `^:parent {Type}` metadata before `{struct ...}`.
+*   **Mutability:** structs immutable by default; per-field `^:mutable` (`:mutable` sugar) with `{mutable ...}` sugar.
+*   **Ownership hints:** `^:borrowed`, `^:consumes`, `^:noescape`; plus `^:tailrec`, `^:unchecked`, `^:deprecated`.
+*   **Named args:** `&` separates positional from named args (positional before `&`); constructors use the same rules.
+*   **Enums:** variants unqualified when unique, otherwise `Type.Variant`.
+*   **Defaults:** `[name default]` or `[name Type default]` for parameters.
 
 ### Control & Error Handling (planned)
-*   **Delimited Continuations:** Native `prompt` and `control` primitives.
-*   **Condition System:** Resumable errors (restarts) built on continuations. No stack-unwinding `try/catch`.
-*   **TCO:** Fully supported via trampolining.
-*   **Green Threads:** Cooperative processes and channels built on continuations.
+*   **Truthiness:** only `false` and `nothing` are falsy.
+*   **Let modifiers:** `^:seq`/`^:rec` metadata.
+*   **Continuations:** native `prompt`/`control` plus TCO via trampolining.
+*   **Errors:** `error` + single `restart-case` in phase 1; full condition system deferred.
+*   **Concurrency:** cooperative green threads and channels.
 
 ### Power Tools (planned)
-*   **Hygienic Macros:** Racket-style `syntax-case` for safe, powerful code generation.
-*   **Pattern Matching:** Optima-style, extensible, and compiled for performance.
-*   **Iterators & Loops:** Explicit `iterate(iter, state)` protocol with `for`/`foreach` macros.
-*   **Arrays & Sequences:** Arrays are the primary mutable sequence; vectors are immutable by default. Tuples/lists are planned first, with other collections later. Sequence ops work on any iterator and `collect` builds vectors (`iter->list`/`iter->vector` conversions).
-*   **Piping:** `|>` operator for readable data flows.
+*   **Hygienic macros:** Racket-style `syntax-case`.
+*   **Pattern matching:** guards, `satisfies` predicates, and constructor patterns.
+*   **Iterators & loops:** `iterate` protocol with `for`/`foreach` (multiple bindings are nested).
+*   **Sequences:** arrays are the primary mutable sequence; sequence ops work on any iterator.
 
 ### Module System (planned)
-*   **Explicit:** One-file-per-module. No implicit `include`.
+*   **Explicit:** one-file-per-module, no implicit `include`.
 *   **Controlled:** `(import [Mod :as M :refer (f)])` for namespace sanity.

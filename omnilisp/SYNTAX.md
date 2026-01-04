@@ -2,6 +2,11 @@
 
 This document provides a comprehensive set of examples for all Omnilisp features.
 
+See also:
+- `DESIGN.md` for the language specification.
+- `SUMMARY.md` for the high-level overview.
+- `DESIGN_DECISIONS.md` for the decision log.
+
 ---
 
 ## Implemented Syntax (C Compiler)
@@ -21,6 +26,9 @@ foo              ; Symbol
 (+ 1 2)           ; Function application (prefix)
 (cons 1 (cons 2 ()))  ; List construction
 'x               ; Quote -> (quote x)
+; Quote preserves bracketed literal structure
+'[1 2 3]         ; Quote array literal
+'#{:a 1}         ; Quote dict literal
 ```
 
 ### Special Forms
@@ -45,7 +53,8 @@ foo              ; Symbol
 
 ### Truthiness
 ```lisp
-; empty list and numeric zero are falsey, everything else is truthy
+; current C runtime: empty list and numeric zero are falsy
+; design target: only false/nothing are falsy (0 and empty collections are truthy)
 (if 0 1 2)   ; -> 2
 (if () 1 2)  ; -> 2
 ```
@@ -184,15 +193,15 @@ Bindings are in `[]` as an even number of forms (name-value pairs):
   (+ x y))  ; -> 3
 
 ;; Sequential let (each sees previous)
-(let :seq [x 1
-           y (+ x 1)
-           z (+ y 1)]
-  z)  ; -> 3
+(let ^:seq [x 1
+            y (+ x 1)
+            z (+ y 1)]
+  z)
 
 ;; Recursive let (for mutual recursion)
-(let :rec [even? (lambda (n) (if (= n 0) true (odd? (- n 1))))
-           odd?  (lambda (n) (if (= n 0) false (even? (- n 1))))]
-  (even? 10))  ; -> true
+(let ^:rec [even? (lambda (n) (if (= n 0) true (odd? (- n 1))))
+            odd?  (lambda (n) (if (= n 0) false (even? (- n 1))))]
+  (even? 10))
 
 ;; Named let (loop form)
 (let loop [i 0
@@ -212,8 +221,8 @@ Bindings are in `[]` as an even number of forms (name-value pairs):
 (let [[x y] [10 20]]
   (+ x y))  ; -> 30
 
-(let :seq [[a .. bs] [1 2 3 4]
-           sum (reduce + 0 bs)]
+(let ^:seq [[a .. bs] [1 2 3 4]
+            sum (reduce + 0 bs)]
   sum)  ; -> 9
 ```
 
@@ -235,6 +244,10 @@ Bindings are in `[]` as an even number of forms (name-value pairs):
 ```lisp
 (-> x (+ x 1))         ; Single-arg lambda
 (-> (x y) (* x y))     ; Multi-arg lambda
+
+#(+ % 1)               ; Reader macro shorthand
+#(* %1 %2)
+#(list %1 %2 %&)       ; %& = rest args
 ```
 
 ### 3.2 Multi-Arity (via Overloads)
@@ -310,16 +323,31 @@ Bindings are in `[]` as an even number of forms (name-value pairs):
   [y {Float}])
 
 (define p (Point 10.0 20.0))
+(define p2 (Point 10.0 & :y 20.0))
+(define p3 (Point 10.0 & :x 10.0 :y 20.0))
 p.x  ; -> 10.0
+```
+
+Positional arguments must come before `&`. Named fields follow `&`; unknown or duplicate
+field names are errors.
+
+Parent types use metadata before the header:
+
+```lisp
+(define ^:parent {Shape} {struct Circle}
+  [center {Point}]
+  [radius {Float}])
 ```
 
 ### 4.3 Mutable Structs
 ```lisp
 (define {struct Player}
-  [hp :mutable {Int}]
+  [^:mutable hp {Int}]
   [name {String}])
 
-;; Sugar: (define {mutable Player} ...) marks all fields mutable.
+;; Sugar: [hp :mutable {Int}] is equivalent to [^:mutable hp {Int}].
+;; Sugar: (define ^:mutable {struct Player} ...) marks all fields mutable.
+;; (define {mutable Player} ...) remains as legacy sugar.
 
 (define hero (Player 100 "Arthur"))
 (set! hero.hp 95)
@@ -332,6 +360,14 @@ p.x  ; -> 10.0
   [second {T}])
 
 (define {struct [Entry K V]}
+  [key {K}]
+  [value {V}])
+```
+
+Parent defaults to `Any`; specify `^:parent {Type}` before the `{}` header:
+
+```lisp
+(define ^:parent {Any} {struct [Entry K V]}
   [key {K}]
   [value {V}])
 ```
@@ -352,6 +388,9 @@ p.x  ; -> 10.0
   [Green "go"]
   [Blue "wait"])
 ```
+
+Enum variants may be used unqualified when unique in scope. If ambiguous, use
+`Type.Variant` (for example, `Color.Red`).
 
 ### 5.2 Enums with Data
 ```lisp
@@ -455,6 +494,14 @@ p.x  ; -> 10.0
   [(or 1 2 3) "small"]
   [(and n (satisfies even?)) "even number"]
   [(not 0) "non-zero"])
+```
+
+`satisfies` accepts any expression that evaluates to a predicate:
+
+```lisp
+(match x
+  [(satisfies (lambda (n) (> n 10))) "big"]
+  [_ "small"])
 ```
 
 ### 7.3 Array Patterns
@@ -663,7 +710,14 @@ obj.[indices]     ; Multi-access / slice
       y (range 1 10)
       :when (< x y)]
   (tuple x y))
+
+;; Planned zip form via metadata
+(for ^:zip [x xs y ys]
+  (tuple x y))
 ```
+
+Multiple bindings are nested by default (cartesian product). If zip mode is added,
+`^:zip` metadata is preferred (`:zip` may remain as sugar).
 
 ### 10.3 Piping
 ```lisp
@@ -696,9 +750,12 @@ obj.[indices]     ; Multi-access / slice
 (define ch (channel))     ; Unbuffered
 (define ch (channel 10))  ; Buffered
 
-(send ch value)           ; Blocks if full
+(send ch value)           ; Blocks if full, returns false if closed
 (recv ch)                 ; Blocks if empty
 (close ch)
+
+;; Receive from closed channel returns nothing
+;; Send returns true on success, false if closed
 ```
 
 ### 11.3 Coordination
@@ -769,10 +826,29 @@ obj.[indices]     ; Multi-access / slice
 
 ### 14.2 Prefixes
 ```lisp
-r"regex\d+"           ; Regex
-raw"C:\path\file"     ; Raw (no escapes)
-b"binary\x00data"     ; Byte array
+#r"regex\d+"          ; Regex
+#raw"C:\path\file"    ; Raw (no escapes)
+#b"binary\x00data"    ; Byte array
 ```
+
+`r"..."`, `raw"..."`, and `b"..."` are reserved in favor of `#`-prefixed forms.
+
+### 14.3 Reader Macros (Planned)
+```lisp
+#? (:posix (use-posix)
+    :windows (use-win)
+    :else (use-generic))
+
+#_ (expensive-debug-print x) ; discard next form
+#| block comment |#
+
+#!/usr/bin/env omnilisp
+
+#uuid"f81d4fae-7dec-11d0-a765-00a0c91e6bf6"
+#path"/usr/local/bin"
+```
+
+`#?` selects the first matching feature key; `:else` is the fallback.
 
 ---
 
@@ -791,8 +867,36 @@ b"binary\x00data"     ; Byte array
 ```lisp
 ^:private            ; Keyword metadata
 ^:hot                ; Compiler hint
+^:mutable            ; Mutability hint (fields/bindings)
+^:tailrec            ; Must compile to tail call
+^:borrowed           ; Non-owning parameter
+^:consumes           ; Transfers ownership
+^:noescape           ; Value does not escape scope
+^:unchecked          ; Skip safety checks
+^:deprecated         ; Deprecation marker
 ^"Docstring"         ; Documentation
 
 (define ^:private ^"Internal helper"
   (helper x) ...)
+
+(let [^:mutable counter 0]
+  (set! counter (+ counter 1)))
+
+;; Form modifiers via metadata
+(let ^:seq [x 1 y (+ x 1)]
+  y)
+
+;; Tail recursion enforcement
+(define ^:tailrec (sum [i {Int}] [acc {Int}])
+  (if (= i 0) acc (sum (- i 1) (+ acc i))))
+
+;; Ownership hints on parameters
+(define (copy [^:borrowed src {Bytes}] [^:consumes dst {Bytes}])
+  ...)
+
+;; Unchecked access
+^:unchecked arr.(i)
 ```
+
+Ownership/lifetime hints are advisory in the core language and mainly enforced at
+FFI/unsafe boundaries.

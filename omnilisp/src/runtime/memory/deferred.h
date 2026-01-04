@@ -1,5 +1,5 @@
-#ifndef PURPLE_DEFERRED_H
-#define PURPLE_DEFERRED_H
+#ifndef OMNILISP_DEFERRED_H
+#define OMNILISP_DEFERRED_H
 
 #include "../types.h"
 #include "../util/hashmap.h"
@@ -41,4 +41,4 @@ int should_process_deferred(DeferredContext* ctx);
 void gen_deferred_runtime(void);
 void gen_safe_point(const char* location);
 
-#endif // PURPLE_DEFERRED_H
+#endif // OMNILISP_DEFERRED_H
