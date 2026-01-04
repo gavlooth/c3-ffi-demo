@@ -288,22 +288,34 @@ static Value* eval_special_form(Value* op, Value* args, Env* env) {
         return mk_lambda(params, body, env_to_value(env));
     }
 
-    // when/unless
+    // when/unless - expand to match semantics
     if (strcmp(name, "when") == 0) {
         Value* test = omni_eval(car(args), env);
         if (is_error(test)) return test;
-        if (is_truthy(test)) {
-            return eval_do(cdr(args), env);
+        Value* bool_val = mk_sym(is_truthy(test) ? "true" : "false");
+        // Match against true - if matches, run body
+        Env* match_env = env_new(env);
+        if (match_pattern(mk_sym("true"), bool_val, match_env)) {
+            Value* result = eval_do(cdr(args), match_env);
+            env_free(match_env);
+            return result;
         }
+        env_free(match_env);
         return mk_nil();
     }
 
     if (strcmp(name, "unless") == 0) {
         Value* test = omni_eval(car(args), env);
         if (is_error(test)) return test;
-        if (!is_truthy(test)) {
-            return eval_do(cdr(args), env);
+        Value* bool_val = mk_sym(is_truthy(test) ? "true" : "false");
+        // Match against false - if matches, run body
+        Env* match_env = env_new(env);
+        if (match_pattern(mk_sym("false"), bool_val, match_env)) {
+            Value* result = eval_do(cdr(args), match_env);
+            env_free(match_env);
+            return result;
         }
+        env_free(match_env);
         return mk_nil();
     }
 
@@ -334,19 +346,28 @@ static int is_truthy(Value* v) {
 }
 
 // Special form implementations
+// if expands to match: (if cond then else) → (match bool [true then] [_ else])
 static Value* eval_if(Value* args, Env* env) {
-    Value* test = omni_eval(car(args), env);
-    if (is_error(test)) return test;
+    // Evaluate condition and normalize to true/false for pattern matching
+    Value* cond = omni_eval(car(args), env);
+    if (is_error(cond)) return cond;
+    Value* bool_val = mk_sym(is_truthy(cond) ? "true" : "false");
 
-    if (is_truthy(test)) {
-        return omni_eval(car(cdr(args)), env);
-    } else {
-        Value* else_branch = cdr(cdr(args));
-        if (!is_nil(else_branch)) {
-            return omni_eval(car(else_branch), env);
-        }
-        return mk_nil();
+    Value* then_branch = car(cdr(args));
+    Value* else_args = cdr(cdr(args));
+    Value* else_branch = is_nil(else_args) ? mk_nil() : car(else_args);
+
+    // Use match_pattern to check against true
+    Env* match_env = env_new(env);
+    if (match_pattern(mk_sym("true"), bool_val, match_env)) {
+        Value* result = omni_eval(then_branch, match_env);
+        env_free(match_env);
+        return result;
     }
+    env_free(match_env);
+
+    // Fall through to else (matches _ pattern)
+    return omni_eval(else_branch, env);
 }
 
 static Value* eval_let(Value* args, Env* env) {
@@ -623,7 +644,17 @@ static int match_pattern(Value* pattern, Value* subject, Env* env) {
         return 1;
     }
 
-    // Variable binding
+    // Literal true - matches only the symbol true
+    if (pattern->tag == T_SYM && strcmp(pattern->s, "true") == 0) {
+        return subject && subject->tag == T_SYM && strcmp(subject->s, "true") == 0;
+    }
+
+    // Literal false - matches only the symbol false
+    if (pattern->tag == T_SYM && strcmp(pattern->s, "false") == 0) {
+        return subject && subject->tag == T_SYM && strcmp(subject->s, "false") == 0;
+    }
+
+    // Variable binding (symbols other than true/false/_/else)
     if (pattern->tag == T_SYM) {
         env_define(env, pattern, subject);
         return 1;
@@ -731,6 +762,7 @@ static int match_list_pattern(Value* patterns, Value* items, Env* env) {
     return is_nil(patterns) && is_nil(items);
 }
 
+// cond expands to chained match: each [test result] matches test against true
 static Value* eval_cond(Value* args, Env* env) {
     while (!is_nil(args)) {
         Value* clause = car(args);
@@ -744,17 +776,25 @@ static Value* eval_cond(Value* args, Env* env) {
         Value* test = car(clause);
         Value* result = car(cdr(clause));
 
-        // else clause
+        // else clause - matches _ pattern (always succeeds)
         if (test && test->tag == T_SYM && strcmp(test->s, "else") == 0) {
+            // _ pattern always matches - just evaluate result
             return omni_eval(result, env);
         }
 
+        // Evaluate test and normalize to bool for pattern matching
         Value* test_result = omni_eval(test, env);
         if (is_error(test_result)) return test_result;
+        Value* bool_val = mk_sym(is_truthy(test_result) ? "true" : "false");
 
-        if (is_truthy(test_result)) {
-            return omni_eval(result, env);
+        // Match against true pattern
+        Env* match_env = env_new(env);
+        if (match_pattern(mk_sym("true"), bool_val, match_env)) {
+            Value* res = omni_eval(result, match_env);
+            env_free(match_env);
+            return res;
         }
+        env_free(match_env);
 
         args = cdr(args);
     }
