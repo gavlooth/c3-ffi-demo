@@ -1393,6 +1393,10 @@ static Value* prim_not(Value* args) {
     return mk_sym(is_truthy(car(args)) ? "false" : "true");
 }
 
+static Value* prim_identity(Value* args) {
+    return car(args);
+}
+
 static Value* prim_and(Value* args) {
     while (!is_nil(args)) {
         if (!is_truthy(car(args))) return mk_sym("false");
@@ -1440,6 +1444,7 @@ Env* omni_env_init(void) {
     register_primitive("filter", 2, prim_filter);
     register_primitive("length", 1, prim_length);
     register_primitive("not", 1, prim_not);
+    register_primitive("identity", 1, prim_identity);
     register_primitive("and", -1, prim_and);
     register_primitive("or", -1, prim_or);
 

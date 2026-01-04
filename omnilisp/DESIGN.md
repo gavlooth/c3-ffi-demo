@@ -1489,5 +1489,27 @@ TCO_START:;
 |-----------|-----|
 | Simple self-recursion | Just write it - compiler handles TCO |
 | Mutual recursion (A calls B calls A) | `bounce`/`trampoline` |
+| Non-tail recursion (needs CPS) | `bounce`/`trampoline` with `identity` |
 | Early exit, backtracking | `prompt`/`control` |
-| CPS-style code | `prompt`/`control` |
+
+#### CPS Trampolining with `identity`
+
+For non-tail recursion, use CPS transformation with `identity` as the final continuation:
+
+```lisp
+;; Non-tail recursion (stack grows with depth)
+(define (sum-list lst)
+  (if (null? lst) 0
+      (+ (car lst) (sum-list (cdr lst)))))
+
+;; CPS + trampoline (constant stack)
+(define (sum-list-k lst k)
+  (if (null? lst)
+      (k 0)
+      (bounce sum-list-k (cdr lst)
+              (fn [rest] (k (+ (car lst) rest))))))
+
+(trampoline sum-list-k my-list identity)  ; identity is the initial continuation
+```
+
+The `identity` function simply returns its argument, serving as the "done" continuation.
