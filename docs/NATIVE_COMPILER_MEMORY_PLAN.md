@@ -17,7 +17,7 @@ Wire shape analysis, Symmetric RC, weak edges, and ASAP strategies into `pkg/com
 |-----------|----------|-----------------|
 | Pure ASAP | 60% | Trees, lists, records |
 | Reference Counting | 20% | DAG-shaped shared data |
-| Symmetric RC | 5-10% | Cyclic structures |
+| Component Tethering | 5-10% | Cyclic structures |
 | Stack Allocation | 5% | Non-escaping temps |
 | Arena | 3% | Complex temp cycles |
 | Weak Edges | 2% | Back-pointers |
@@ -27,7 +27,7 @@ Wire shape analysis, Symmetric RC, weak edges, and ASAP strategies into `pkg/com
 ## Phase 1: Infrastructure Setup ✅
 - [x] P1.1 Add ShapeContext to Compiler struct
 - [x] P1.2 Add TypeRegistry to Compiler struct
-- [x] P1.3 Add symScopes/arenaScopes for scope tracking
+- [x] P1.3 Add ComponentPools for island tracking
 - [x] P1.4 Create VarMemInfo struct (shape, strategy, escape class)
 - [x] P1.5 Update VarInfo to include VarMemInfo
 
@@ -42,16 +42,16 @@ Wire shape analysis, Symmetric RC, weak edges, and ASAP strategies into `pkg/com
 - [x] P3.1 Implement `selectFreeStrategy(shape, escapeClass)` function
 - [x] P3.2 Tree shape → `free_tree()` for let-bound vars (Pure ASAP)
 - [x] P3.3 DAG shape → `dec_ref()` (Reference counting)
-- [x] P3.4 Cyclic + non-escaping → `sym_exit_scope()`
-- [x] P3.5 Cyclic + escaping → Symmetric RC
+- [x] P3.4 Cyclic + non-escaping → `sym_release_handle()`
+- [x] P3.5 Cyclic + escaping → Component Tethering
 - [x] P3.6 Function args always use dec_ref (borrowing)
 
-## Phase 4: Symmetric RC Integration ✅
-- [x] P4.1 Add `sym_enter_scope()` calls when cyclic data detected
-- [x] P4.2 Add `sym_alloc(obj)` for cyclic allocations
-- [x] P4.3 Track symScopes stack for scope management
-- [x] P4.4 Add `sym_exit_scope()` at scope boundaries
-- [x] P4.5 Skip individual frees for sym-managed data
+## Phase 4: Component Tethering Integration ✅
+- [x] P4.1 Add `sym_acquire_handle()` calls when cyclic data detected
+- [x] P4.2 Add `sym_component_new()` for island units
+- [x] P4.3 Track active components for scope management
+- [x] P4.4 Add `sym_release_handle()` at scope boundaries
+- [x] P4.5 Inject `sym_tether_begin/end` for zero-cost blocks
 
 ## Phase 5: Weak Edge Integration ✅
 - [x] P5.1 TypeRegistry.AnalyzeBackEdges() called from handleDeftype
@@ -83,11 +83,11 @@ Wire shape analysis, Symmetric RC, weak edges, and ASAP strategies into `pkg/com
 - [x] P8.5 Add debug comments showing chosen strategy
 
 ## Phase 9: Runtime Code Updates ✅
-- [x] P9.1 GenerateSymmetricRuntime() available
-- [x] P9.2 Symmetric RC C functions exist
-- [x] P9.3 Arena runtime functions exist
-- [x] P9.4 Weak reference runtime support exists
-- [x] P9.5 free_tree, dec_ref, release_children implemented
+- [x] GenerateComponentRuntime() available
+- [x] Component Tethering C functions exist
+- [x] Arena runtime functions exist
+- [x] Weak reference runtime support exists
+- [x] free_tree, dec_ref, release_children implemented
 
 ## Phase 10: Testing & Validation
 - [x] P10.1 Fix pkg/codegen build error (format string)
@@ -96,7 +96,7 @@ Wire shape analysis, Symmetric RC, weak edges, and ASAP strategies into `pkg/com
 - [ ] P10.4 Valgrind tests (staged compiler, not native)
 - [ ] P10.5 Add native compiler unit tests
 - [ ] P10.6 Add shape-specific test cases
-- [ ] P10.7 Benchmark: compare RC-only vs shape-aware
+- [ ] P10.7 Benchmark: compare RC-only vs component-aware
 
 ---
 
@@ -105,7 +105,7 @@ Wire shape analysis, Symmetric RC, weak edges, and ASAP strategies into `pkg/com
 ```
 Week 1: Phase 1-2 (Infrastructure + Shape Analysis)
         ↓
-Week 2: Phase 3-4 (Free Strategy + Symmetric RC)
+Week 2: Phase 3-4 (Free Strategy + Component Tethering)
         ↓
 Week 3: Phase 5-6 (Weak Edges + Stack Alloc)
         ↓
@@ -130,7 +130,7 @@ Week 5: Phase 9-10 (Runtime + Testing)
 2. AddressSanitizer shows no memory errors
 3. Valgrind shows no leaks
 4. Shape analysis correctly identifies 80%+ of allocations
-5. Cyclic structures handled by Symmetric RC (no leaks)
+5. Cyclic structures handled by Component Tethering (no leaks)
 6. Performance: no regression vs current RC-only approach
 
 ## Rollback Plan

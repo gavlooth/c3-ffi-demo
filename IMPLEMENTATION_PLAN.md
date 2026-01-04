@@ -59,7 +59,7 @@ This table is the single source of truth for "arena vs GenRef vs RC" decisions.
 | Shape = tree, not provably unique | `free_tree` with ASAP frees | Deterministic, no RC |
 | Shape = DAG or aliasing | `dec_ref` (RC) | Required for shared acyclic graphs |
 | Shape = cyclic and weak edges break cycle | `dec_ref` (RC) | Weak edges make it acyclic for ownership |
-| Shape = cyclic and unbroken, escapes | Symmetric RC or SCC-local release | Deterministic, no arena reliance |
+| Shape = cyclic and unbroken, escapes | Component Tethering | Island-based units; Zero-cost tethered access |
 | Shape = cyclic and local only | Arena allocation is allowed (opt-in) | Bulk free is safe and fast |
 
 Notes:
@@ -94,7 +94,7 @@ Reasoning: Without a real entry point the compiler work can’t be exercised or 
 
 Reasoning: This is the minimum semantic surface needed for most programs.
 
-- [ ] P2.1 Literals: int/float/char/bool/nil/symbol; string as list-of-chars.
+- [ ] P2.1 Literals: int/float/char/bool/nothing/symbol; string as list-of-chars.
 - [ ] P2.2 Variable resolution + hygiene (scope stack, gensym).
 - [ ] P2.3 `if` lowering with proper temp lifetimes (`is_truthy`).
 - [ ] P2.4 `do` lowering with ASAP frees for prior temps.
@@ -280,7 +280,7 @@ Goal: Compile **AST directly to C** (no interpreter staging), emit a standalone 
 - [ ] A4. Add `jit.CompileAndRunAST(expr)` to compile AST directly for tests/benchmarks.
 
 ## Phase B: Core AST -> C Expression Codegen
-- [ ] B1. Literals: int/float/char/bool/nil/symbol/string.
+- [ ] B1. Literals: int/float/char/bool/nothing/symbol/string.
 - [ ] B2. Variables: map AST symbols to C identifiers with hygiene (gensym + scope stack).
 - [ ] B3. `if`: generate `({ ... })` expression or temp variable block with proper frees.
 - [ ] B4. `do`: sequential evaluation, return last value, ASAP frees for earlier temps.
@@ -364,7 +364,7 @@ Legend: ✅ = Implementation complete
 
 ### Acceptance Criteria
 - [x] `(deftype Node (value int) (next Node))` creates callable `mk-Node`
-- [x] `(mk-Node 42 nil)` returns value with correct fields
+- [x] `(mk-Node 42 ())` returns value with correct fields
 - [x] `(Node-value n)` accesses field
 - [x] Generated C compiles for complex type hierarchies
 
@@ -474,7 +474,7 @@ Legend: ✅ = Implementation complete
 
 ### Acceptance Criteria
 - [x] `(define (f x) x)` → summary: x=borrowed, return=borrowed
-- [x] `(define (g x) (cons x nil))` → summary: x=borrowed, return=fresh
+- [x] `(define (g x) (cons x ()))` → summary: x=borrowed, return=fresh
 - [x] Call sites can query callee summaries via CodeGenerator
 
 ---

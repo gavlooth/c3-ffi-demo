@@ -9,7 +9,7 @@ The repo currently ships a small C compiler/runtime subset. The rest of the lang
 *   **Special forms:** `define`, `lambda`/`fn`, `let`, `let*`, `if`, `do`/`begin`
 *   **Bindings:** list-style `(let ((x 1) (y 2)) ...)` and array-style `(let [x 1 y 2] ...)`
 *   **Primitives:** `+ - * / %`, `< > <= >= =`, `cons car cdr null?`, `display print newline`
-*   **Truthiness:** empty list and numeric zero are false; everything else is truthy
+*   **Truthiness:** only `false` and `nothing` are falsy; everything else is truthy (including numeric `0` and empty lists)
 
 ## Key Design Pillars (Planned)
 

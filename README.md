@@ -1,20 +1,28 @@
 # OmniLisp
 
-A Go implementation of the OmniLisp language - a stage-polymorphic language with compile-time memory management.
+A C-based compiler/runtime implementation of OmniLisp (stage-polymorphic, compile-time memory management).
+
+**Implementation status:** the current C compiler/runtime implements a **subset** of the full language design. See `omnilisp/SUMMARY.md` for the implemented set and `docs/LANGUAGE_PARITY_PLAN.md` for planned features.
 
 OmniLisp implements the **"Collapsing Towers of Interpreters"** paradigm from Amin & Rompf (POPL 2018), combined with **ASAP (As Static As Possible)** memory management that inserts deallocation calls at compile time.
 
-## Features
+## Features (Current C Compiler)
 
-- **Tower of Interpreters** - Meta-circular evaluation with customizable handlers
-- **Stage Polymorphism** - Seamlessly mix interpretation and code generation
+- **Core forms**: `define`, `lambda`/`fn`, `let`, `let*`, `if`, `do`/`begin`
+- **Core data**: lists, integers, symbols, chars, floats
+- **Primitives**: `+ - * / %`, `< > <= >= =`, `cons car cdr null?`, `display print newline`
 - **ASAP Memory Management** - Compile-time memory analysis (no garbage collection)
-- **Pattern Matching** - Full pattern matching with guards, or-patterns, as-patterns
-- **Macro System** - Hygienic macros with quasiquote
-- **JIT Execution** - Runtime C code execution via GCC
-- **FFI** - Foreign function interface for C interop
+- **C99 + POSIX output** - generated C compiles with gcc/clang
 
-## Quick Start
+## Features (Planned Design)
+
+- **Pattern Matching** (guards, constructor patterns)
+- **Macro System** (hygienic, syntax-case)
+- **Multiple Dispatch** (Julia-style)
+- **Effect Handlers** (typed recovery protocols)
+- **Expanded FFI** (auto-wrapped bindings)
+
+## Quick Start (C Compiler)
 
 ```bash
 # Build
@@ -68,7 +76,10 @@ omnilisp> help
 'foo                  ; symbols
 #\a                   ; characters
 '(1 2 3)              ; lists
-nil                   ; nil/false
+()                    ; empty list
+nothing               ; nothing (falsy)
+false                 ; false (falsy)
+true                  ; true
 ```
 
 ### Functions
@@ -103,7 +114,7 @@ nil                   ; nil/false
 ### Macros
 ```scheme
 (defmacro when (cond body)
-  `(if ,cond ,body nil)
+  `(if ,cond ,body nothing)
   (mcall when (> 5 3) 'yes))
 ```
 

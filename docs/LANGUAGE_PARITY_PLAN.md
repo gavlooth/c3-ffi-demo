@@ -83,7 +83,7 @@ else { result = "positive"; }
 ```scheme
 ;; Source
 (match expr
-  ((Nil) "empty")
+  (() "empty")
   ((Cons h t) (process h t))
   (_ "other"))
 
@@ -101,6 +101,7 @@ else { result = "other"; }
 - `pkg/compiler/compiler.go`: Add `compileMatch()` function
 - `pkg/compiler/pattern.go`: New file for pattern compilation
 - Handle: literals, wildcards, constructors, nested patterns
+- Guards: `:when` accepts any expression; if it evaluates to a function, invoke it as a predicate with pattern-bound variables.
 
 ### Phase 2: Error Handling
 **Goal**: Full try/catch/error support in compiled code.

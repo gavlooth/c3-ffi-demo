@@ -14,21 +14,67 @@
 
 #define INITIAL_CAPACITY 8
 
+/* Slab allocator for SymObj */
+#define SYM_POOL_SIZE 512
+
+typedef struct SymPool {
+    struct SymObj* objects; /* Allocated as a block of SYM_POOL_SIZE objects */
+    struct SymPool* next;
+} SymPool;
+
+/* Global symmetric RC context wrapper for TLS */
+static __thread struct {
+    SymPool* pools;       /* Slab allocator pools */
+    SymObj* freelist;     /* Free list of SymObj */
+} SYM_TLS = {NULL, NULL};
+
+static SymObj* sym_pool_alloc(void) {
+    if (!SYM_TLS.freelist) {
+        /* Allocate new pool */
+        SymPool* pool = malloc(sizeof(SymPool));
+        if (!pool) return NULL;
+        pool->objects = malloc(SYM_POOL_SIZE * sizeof(SymObj));
+        if (!pool->objects) { free(pool); return NULL; }
+        pool->next = SYM_TLS.pools;
+        SYM_TLS.pools = pool;
+        /* Add all objects to freelist */
+        for (int i = 0; i < SYM_POOL_SIZE; i++) {
+            pool->objects[i].refs = (SymObj**)SYM_TLS.freelist;
+            SYM_TLS.freelist = &pool->objects[i];
+        }
+    }
+    SymObj* obj = SYM_TLS.freelist;
+    SYM_TLS.freelist = (SymObj*)obj->refs;
+    return obj;
+}
+
+static void sym_pool_free(SymObj* obj) {
+    obj->refs = (SymObj**)SYM_TLS.freelist;
+    SYM_TLS.freelist = obj;
+}
+
+void sym_pool_cleanup(void) {
+    SymPool* p = SYM_TLS.pools;
+    while (p) {
+        SymPool* next = p->next;
+        free(p->objects);
+        free(p);
+        p = next;
+    }
+    SYM_TLS.pools = NULL;
+    SYM_TLS.freelist = NULL;
+}
+
 /* ============== Object Operations ============== */
 
 SymObj* sym_obj_new(void* data, void (*destructor)(void*)) {
-    SymObj* obj = malloc(sizeof(SymObj));
+    SymObj* obj = sym_pool_alloc();
     if (!obj) return NULL;
-
-    obj->external_rc = 0;
-    obj->internal_rc = 0;
-    obj->refs = NULL;
-    obj->ref_count = 0;
-    obj->ref_capacity = 0;
+    memset(obj, 0, sizeof(SymObj));
+    obj->ref_capacity = SYM_INLINE_REFS;
+    obj->refs = obj->inline_refs;
     obj->data = data;
-    obj->freed = 0;
     obj->destructor = destructor;
-
     return obj;
 }
 
@@ -37,16 +83,16 @@ void sym_obj_add_ref(SymObj* obj, SymObj* target) {
 
     /* Grow refs array if needed */
     if (obj->ref_count >= obj->ref_capacity) {
-        int new_cap;
-        if (obj->ref_capacity == 0) {
-            new_cap = INITIAL_CAPACITY;
-        } else if (obj->ref_capacity > INT_MAX / 2) {
-            return;  /* Overflow protection */
+        int new_cap = obj->ref_capacity == 0 ? 8 : obj->ref_capacity * 2;
+        SymObj** new_refs;
+        if (obj->refs == obj->inline_refs) {
+            new_refs = malloc(new_cap * sizeof(SymObj*));
+            if (!new_refs) return;
+            memcpy(new_refs, obj->inline_refs, obj->ref_count * sizeof(SymObj*));
         } else {
-            new_cap = obj->ref_capacity * 2;
+            new_refs = realloc(obj->refs, new_cap * sizeof(SymObj*));
+            if (!new_refs) return;
         }
-        SymObj** new_refs = realloc(obj->refs, new_cap * sizeof(SymObj*));
-        if (!new_refs) return;
         obj->refs = new_refs;
         obj->ref_capacity = new_cap;
     }
@@ -152,12 +198,14 @@ static void sym_check_free(SymObj* obj) {
         if (obj->destructor && obj->data) {
             obj->destructor(obj->data);
         }
-        free(obj->refs);
+        if (obj->refs && obj->refs != obj->inline_refs) {
+            free(obj->refs);
+        }
         obj->refs = NULL;
         obj->ref_count = 0;
         obj->data = NULL;
 
-        free(obj);
+        sym_pool_free(obj);
     }
 }
 
@@ -196,7 +244,7 @@ void sym_context_free(SymContext* ctx) {
 
     /* Release all scopes from innermost to outermost */
     while (ctx->stack_size > 0) {
-        sym_exit_scope(ctx);
+        sym_ctx_exit_scope(ctx);
     }
 
     sym_scope_free(ctx->global_scope);
@@ -209,7 +257,7 @@ SymScope* sym_current_scope(SymContext* ctx) {
     return ctx->scope_stack[ctx->stack_size - 1];
 }
 
-SymScope* sym_enter_scope(SymContext* ctx) {
+SymScope* sym_ctx_enter_scope(SymContext* ctx) {
     if (!ctx) return NULL;
 
     SymScope* parent = sym_current_scope(ctx);
@@ -218,10 +266,6 @@ SymScope* sym_enter_scope(SymContext* ctx) {
 
     /* Grow stack if needed */
     if (ctx->stack_size >= ctx->stack_capacity) {
-        if (ctx->stack_capacity > INT_MAX / 2) {
-            sym_scope_free(scope);
-            return NULL;  /* Overflow protection */
-        }
         int new_cap = ctx->stack_capacity * 2;
         SymScope** new_stack = realloc(ctx->scope_stack, new_cap * sizeof(SymScope*));
         if (!new_stack) {
@@ -236,7 +280,7 @@ SymScope* sym_enter_scope(SymContext* ctx) {
     return scope;
 }
 
-void sym_exit_scope(SymContext* ctx) {
+void sym_ctx_exit_scope(SymContext* ctx) {
     if (!ctx || ctx->stack_size <= 1) return;  /* Don't exit global scope */
 
     SymScope* scope = ctx->scope_stack[--ctx->stack_size];
@@ -255,7 +299,7 @@ void sym_exit_scope(SymContext* ctx) {
     sym_scope_free(scope);
 }
 
-SymObj* sym_alloc(SymContext* ctx, void* data, void (*destructor)(void*)) {
+SymObj* sym_ctx_alloc(SymContext* ctx, void* data, void (*destructor)(void*)) {
     if (!ctx) return NULL;
 
     SymObj* obj = sym_obj_new(data, destructor);
@@ -268,7 +312,7 @@ SymObj* sym_alloc(SymContext* ctx, void* data, void (*destructor)(void*)) {
     return obj;
 }
 
-void sym_link(SymContext* ctx, SymObj* from, SymObj* to) {
+void sym_ctx_link(SymContext* ctx, SymObj* from, SymObj* to) {
     if (!ctx || !from || !to) return;
     sym_inc_internal(from, to);
 }

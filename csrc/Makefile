@@ -16,7 +16,7 @@ UBSAN_FLAGS = -fsanitize=undefined
 # Source files
 AST_SRCS = ast/ast.c
 PARSER_SRCS = parser/parser.c parser/pika_core.c
-ANALYSIS_SRCS = analysis/analysis.c
+ANALYSIS_SRCS = analysis/analysis.c analysis/dominator.c analysis/scc.c analysis/static_sym.c analysis/component.c
 CODEGEN_SRCS = codegen/codegen.c
 COMPILER_SRCS = compiler/compiler.c
 CLI_SRCS = cli/main.c
@@ -101,6 +101,9 @@ test: $(TARGET)
 	@echo "Running basic tests..."
 	@echo "(+ 1 2)" | ./$(TARGET) && echo "PASS: arithmetic"
 	@echo "(if (< 1 2) 10 20)" | ./$(TARGET) && echo "PASS: conditionals"
+	@echo "(if 0 1 2)" | ./$(TARGET) | grep -q "^1$$" && echo "PASS: zero truthy"
+	@echo "(if false 1 2)" | ./$(TARGET) | grep -q "^2$$" && echo "PASS: false falsy"
+	@echo "(if nothing 1 2)" | ./$(TARGET) | grep -q "^2$$" && echo "PASS: nothing falsy"
 	@echo "(let [x 5] (* x x))" | ./$(TARGET) && echo "PASS: let bindings"
 	@echo "(define (square n) (* n n)) (square 7)" | ./$(TARGET) && echo "PASS: functions"
 	@echo "All basic tests passed!"
@@ -114,6 +117,10 @@ clean:
 ast/ast.o: ast/ast.c ast/ast.h
 parser/parser.o: parser/parser.c parser/parser.h ast/ast.h
 analysis/analysis.o: analysis/analysis.c analysis/analysis.h ast/ast.h
+analysis/dominator.o: analysis/dominator.c analysis/analysis.h
+analysis/scc.o: analysis/scc.c analysis/analysis.h
+analysis/static_sym.o: analysis/static_sym.c analysis/analysis.h
+analysis/component.o: analysis/component.c analysis/analysis.h
 codegen/codegen.o: codegen/codegen.c codegen/codegen.h ast/ast.h analysis/analysis.h
 compiler/compiler.o: compiler/compiler.c compiler/compiler.h parser/parser.h analysis/analysis.h codegen/codegen.h
 cli/main.o: cli/main.c compiler/compiler.h

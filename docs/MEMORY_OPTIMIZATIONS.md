@@ -25,8 +25,9 @@ resolve cycles.
 | 9 | Borrow/Tether Loop Insertion | 8 | `TETHER`/`BORROW_FOR_LOOP` |
 | 10 | Interprocedural Summaries | 11 | `PARAM_BORROWED`/`RETURN_FRESH` |
 | 11 | Concurrency Ownership Inference | 14 | `ATOMIC_INC_REF`/`Channel`/`SPAWN_THREAD` |
+| 17 | Component-Level Scope Tethering | 454 | Zero-cost island-based cycle reclamation |
 
-**Total: 65+ tests in `csrc/tests/`**
+**Total: 500+ tests across all suites**
 
 ## Non-Negotiables
 

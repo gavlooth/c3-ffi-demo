@@ -66,7 +66,8 @@ typedef enum {
     TAG_CHANNEL,
     TAG_ERROR,
     TAG_ATOM,
-    TAG_THREAD
+    TAG_THREAD,
+    TAG_NOTHING
 } ObjTag;
 
 #define TAG_USER_BASE 1000
@@ -121,20 +122,12 @@ static inline Obj* mk_int_unboxed(long i) {
 #define OMNI_FALSE         ((Obj*)(((uintptr_t)0 << 3) | IMM_TAG_BOOL))
 #define OMNI_TRUE          ((Obj*)(((uintptr_t)1 << 3) | IMM_TAG_BOOL))
 
-#define IS_FALSE(p)          ((p) == OMNI_FALSE || (p) == NULL)
+#define IS_FALSE(p)          ((p) == OMNI_FALSE)
 #define IS_TRUE(p)           ((p) == OMNI_TRUE)
 
 /* Unboxed boolean constructor */
 static inline Obj* mk_bool(int b) {
     return b ? OMNI_TRUE : OMNI_FALSE;
-}
-
-/* Boolean extraction */
-static inline int obj_to_bool(Obj* p) {
-    if (IS_IMMEDIATE_BOOL(p)) return p == OMNI_TRUE;
-    if (IS_IMMEDIATE_INT(p)) return INT_IMM_VALUE(p) != 0;
-    if (p == NULL) return 0;
-    return 1;  /* Non-null boxed values are truthy */
 }
 
 /* ---- Immediate Characters ---- */
@@ -241,6 +234,16 @@ typedef struct Obj {
     };
 } Obj;
 /* Size: 32 bytes (compact mode) or 40 bytes (robust mode) */
+
+/* Boolean extraction (only false and nothing are falsy; empty list is truthy) */
+static inline int obj_to_bool(Obj* p) {
+    if (IS_IMMEDIATE_BOOL(p)) return p == OMNI_TRUE;
+    if (p == NULL) return 1;  /* Empty list is truthy */
+    if (IS_IMMEDIATE_INT(p) || IS_IMMEDIATE_CHAR(p)) return 1;
+    if (p->tag == TAG_NOTHING) return 0;
+    if (p->tag == TAG_SYM && p->ptr && strcmp((char*)p->ptr, "false") == 0) return 0;
+    return 1;
+}
 
 /* ========== Scope Tethering (Vale-style) ========== */
 /*
@@ -396,6 +399,7 @@ Obj* mk_pair(Obj* a, Obj* b);
 Obj* mk_sym(const char* s);
 Obj* mk_box(Obj* v);
 Obj* mk_error(const char* msg);
+Obj* mk_nothing(void);
 Obj* mk_closure(ClosureFn fn, Obj** captures, BorrowRef** refs, int count, int arity);
 
 /* Stack-allocated primitives (optimization for non-escaping values) */
@@ -414,6 +418,7 @@ void flush_freelist(void);
 
 /* Check if object is nil */
 int is_nil(Obj* x);
+int is_nothing(Obj* x);
 
 /* Check if object is stack-allocated */
 int is_stack_obj(Obj* x);

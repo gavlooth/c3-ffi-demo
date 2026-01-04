@@ -84,6 +84,8 @@ typedef enum {
     FREE_STRATEGY_TREE,          /* free_tree: tree-shaped, recursive free */
     FREE_STRATEGY_RC,            /* dec_ref: shared/DAG, RC decrement */
     FREE_STRATEGY_RC_TREE,       /* dec_ref with recursive free on 0 */
+    FREE_STRATEGY_SCC_STATIC,    /* static collection of known SCC */
+    FREE_STRATEGY_COMPONENT_RELEASE, /* release_handle for component */
 } FreeStrategy;
 
 /* Allocation strategy - determined by escape analysis */
@@ -100,6 +102,7 @@ typedef struct OwnerInfo {
     bool must_free;      /* Must free when scope ends */
     int free_pos;        /* Position where free should occur */
     bool is_unique;      /* Known to be the only reference */
+    bool is_static_scc;  /* True if SCC can be statically collected */
     ShapeClass shape;    /* Shape of the data structure */
     AllocStrategy alloc_strategy;  /* Where to allocate */
     struct OwnerInfo* next;
@@ -303,6 +306,18 @@ typedef struct ThreadLocalityInfo ThreadLocalityInfo;
 typedef struct ThreadSpawnInfo ThreadSpawnInfo;
 typedef struct ChannelOpInfo ChannelOpInfo;
 
+/* ============== Component Analysis ============== */
+
+typedef struct ComponentInfo {
+    int component_id;
+    int scc_id;              /* The static SCC this component represents */
+    char** handles;          /* External variables (handles) pointing to this component */
+    size_t handle_count;
+    size_t handle_capacity;
+    bool is_static;          /* True if can be collected via ASAP release_handle */
+    struct ComponentInfo* next;
+} ComponentInfo;
+
 /* ============== Analysis Context ============== */
 
 typedef struct AnalysisContext {
@@ -317,6 +332,10 @@ typedef struct AnalysisContext {
 
     /* Shape info */
     ShapeInfo* shape_info;
+
+    /* Component info */
+    ComponentInfo* components;
+    int next_component_id;
 
     /* Reuse candidates */
     ReuseCandidate* reuse_candidates;
@@ -602,6 +621,15 @@ typedef struct CFGNode {
     char** live_out;         /* Live at exit from this node */
     size_t live_out_count;
 
+    /* Dominator Analysis */
+    struct CFGNode* idom;    /* Immediate dominator */
+    struct CFGNode** doms;   /* Dominator set */
+    size_t dom_count;
+
+    /* SCC Analysis */
+    int scc_id;              /* SCC identifier (-1 if not in a cycle) */
+    bool is_scc_entry;       /* True if node is the dominator of its SCC */
+
     /* Node type for structured control flow */
     enum {
         CFG_BASIC,           /* Basic block */
@@ -627,6 +655,18 @@ CFG* omni_build_cfg(OmniValue* expr);
 
 /* Free CFG */
 void omni_cfg_free(CFG* cfg);
+
+/* Compute dominators for CFG */
+void omni_compute_dominators(CFG* cfg);
+
+/* Compute strongly connected components for CFG */
+void omni_compute_scc(CFG* cfg);
+
+/* Static Symmetric RC analysis */
+void omni_analyze_static_symmetric(AnalysisContext* ctx, CFG* cfg);
+
+/* Component analysis */
+void omni_analyze_components(AnalysisContext* ctx, CFG* cfg);
 
 /* Compute liveness using backward dataflow */
 void omni_compute_liveness(CFG* cfg, AnalysisContext* ctx);

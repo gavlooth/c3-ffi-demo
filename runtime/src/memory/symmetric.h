@@ -18,6 +18,9 @@
 /* Forward declarations */
 typedef struct SymObj SymObj;
 typedef struct SymScope SymScope;
+typedef struct SymComponent SymComponent;
+
+#define SYM_INLINE_REFS 3
 
 /* Reference type */
 typedef enum {
@@ -35,6 +38,8 @@ struct SymObj {
     void* data;             /* Actual data payload */
     int freed;              /* Mark to prevent double-free */
     void (*destructor)(void*);  /* Optional destructor for data */
+    SymComponent* comp;     /* Parent island/SCC (v0.6.0) */
+    SymObj* inline_refs[SYM_INLINE_REFS];
 };
 
 /* Scope that owns objects */
@@ -60,6 +65,7 @@ typedef struct {
 /* Object operations */
 SymObj* sym_obj_new(void* data, void (*destructor)(void*));
 void sym_obj_add_ref(SymObj* obj, SymObj* target);
+void sym_pool_cleanup(void);
 
 /* Scope operations */
 SymScope* sym_scope_new(SymScope* parent);
@@ -77,10 +83,10 @@ void sym_dec_internal(SymObj* obj);
 SymContext* sym_context_new(void);
 void sym_context_free(SymContext* ctx);
 SymScope* sym_current_scope(SymContext* ctx);
-SymScope* sym_enter_scope(SymContext* ctx);
-void sym_exit_scope(SymContext* ctx);
-SymObj* sym_alloc(SymContext* ctx, void* data, void (*destructor)(void*));
-void sym_link(SymContext* ctx, SymObj* from, SymObj* to);
+SymScope* sym_ctx_enter_scope(SymContext* ctx);
+void sym_ctx_exit_scope(SymContext* ctx);
+SymObj* sym_ctx_alloc(SymContext* ctx, void* data, void (*destructor)(void*));
+void sym_ctx_link(SymContext* ctx, SymObj* from, SymObj* to);
 
 /* Utility */
 int sym_is_orphaned(SymObj* obj);

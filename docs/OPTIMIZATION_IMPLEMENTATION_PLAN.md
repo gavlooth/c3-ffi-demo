@@ -4,10 +4,10 @@ This document provides step-by-step implementation instructions for each of the
 11 remaining optimizations from `UNIFIED_OPTIMIZATION_PLAN.md`.
 
 **Current State Summary:**
-- Analysis module (`csrc/analysis/`) has infrastructure for VarUsage, EscapeInfo, OwnerInfo, ShapeInfo, ReuseCandidate
-- Codegen (`csrc/codegen/`) emits basic C with `free_obj` at scope end, but doesn't use analysis data fully
-- Runtime (`runtime/src/runtime.c`) has Arena, Region, SCC, Symmetric RC, BorrowRef implementations
-- Compiler driver works end-to-end but optimizations are not wired in
+- Analysis module (`csrc/analysis/`) has infrastructure for VarUsage, EscapeInfo, OwnerInfo, ShapeInfo, ReuseCandidate, and Components.
+- Codegen (`csrc/codegen/`) emits C with CFG-aware free placement and component handle/tether support.
+- Runtime (`runtime/src/runtime.c`) has Arena, Region, SCC, Component Tethering, BorrowRef implementations
+- Compiler driver works end-to-end with all 17 optimizations integrated.
 
 ---
 

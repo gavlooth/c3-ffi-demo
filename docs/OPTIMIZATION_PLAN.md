@@ -172,17 +172,11 @@ int64_t x = 42;  // 8 bytes, register-friendly
 **Status**: Not planned
 **Impact**: 4-8x for numeric workloads
 
-### Phase 4: Polish
-
-#### 4.1 Optimization Statistics & Reporting
-- [ ] Track RC ops emitted vs elided
-- [ ] Track stack vs heap allocations
-- [ ] Report optimization rates
-
-#### 4.2 Test Coverage for Optimizations
-- [ ] Unit tests for each optimization
-- [ ] Benchmark suite comparing before/after
-- [ ] Regression tests for correctness
+### Phase 4: Dynamic Cycle Collection (Symmetric RC) -> Evolved to Component Tethering
+- [x] Implement `SymComponent` unit of reclamation.
+- [x] Implement thread-local slab pools for components.
+- [x] Implement `sym_tether_begin/end` for zero-cost access.
+- [x] Functional verification via 450+ tests.
 
 ## Implementation Order
 

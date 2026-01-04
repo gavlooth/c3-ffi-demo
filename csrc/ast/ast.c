@@ -620,7 +620,7 @@ static void string_builder_append_char(char** buf, size_t* cap, size_t* len, cha
 static char* list_to_string_impl(OmniValue* v);
 
 static char* value_to_string_impl(OmniValue* v) {
-    if (!v) return strdup("nil");
+    if (!v) return strdup("()");
 
     char tmp[64];
     char *buf;

@@ -1,4 +1,4 @@
-/* Purple Runtime Test Suite - Single Compilation Unit */
+/* OmniLisp Runtime Test Suite - Single Compilation Unit */
 /* Define POSIX features FIRST before any includes */
 #define _POSIX_C_SOURCE 200112L
 
@@ -31,13 +31,15 @@ static int run_slow_tests_enabled(void) {
 #include "test_borrowref.c"
 #include "test_deferred.c"
 #include "test_channel_semantics.c"
+#include "test_sym_concurrency.c"
+#include "test_component.c"
 #include "test_stress.c"
 
 int main(int argc, char** argv) {
     (void)argc;
     (void)argv;
 
-    printf("Purple Runtime Test Suite\n");
+    printf("OmniLisp Runtime Test Suite\n");
     printf("==========================\n");
     printf("Comprehensive testing of C runtime\n\n");
 
@@ -60,9 +62,11 @@ int main(int argc, char** argv) {
     run_borrowref_tests();
     run_deferred_tests();
     run_channel_semantics_tests();
+    run_component_tests();
 
     if (run_slow_tests_enabled()) {
         run_concurrency_tests();
+        run_sym_concurrency_tests();
         run_stress_tests();
     }
 

@@ -52,17 +52,19 @@
     - `handler-bind` allows handlers to invoke restarts without unwinding.
     - `restart-case` makes restarts visible and invocable via `invoke-restart`.
 
-- [TODO] Label: T-debug-logical-stack
+- [DONE] Label: T-debug-logical-stack
   Objective: Add logical OmniLisp stack tracing for errors and condition reports.
-  Where: `runtime/src/debug.c` (new), `runtime/src/debug.h` (new), `csrc/codegen/codegen.c`
+  Where: `omnilisp/src/runtime/eval/omni_eval.c`
   What to change:
-    - Implement `dbg_push`, `dbg_pop`, `dbg_set_loc`, and `dbg_print_stack`.
-    - Inject stack push/pop in generated functions and on error boundaries.
-    - Print logical stack for uncaught conditions.
-  How to verify: run a nested function call with a forced error and confirm the OmniLisp stack prints.
+    - Added CallFrame struct with name, source, line fields.
+    - Implemented call_stack array with push/pop/print helpers.
+    - Instrumented omni_apply to track primitive and lambda calls.
+    - Added (call-stack) special form with :print, :depth, :clear commands.
+    - Added (stack-trace) special form to print formatted stack traces.
+  How to verify: run `(define (foo x) (bar x)) (define (bar x) (call-stack :print)) (foo 42)` and confirm stack prints.
   Acceptance:
-    - Logical stack shows function names + source locations.
-    - Stack trace appears on uncaught conditions.
+    - Logical stack shows function names at each call level.
+    - Stack trace prints formatted output with depth.
 
 - [TODO] Label: T-debug-macro-trace
   Objective: Emit macro expansion traces in diagnostics.
@@ -230,6 +232,84 @@
     - Generated C includes `#line` mapping.
     - Native debugger shows OmniLisp source locations.
 
+## Truthiness & Nil Removal Cleanup
+
+- [DONE] Label: T-truthy-tower
+  Objective: Make Tower interpreter truthiness match language spec (only `false`/`nothing` falsy; `0` and `()` truthy).
+  Where: `omnilisp/src/runtime/tower/tower.c`, `omnilisp/tests/test_pika_tower.c`
+  What to change:
+    - tower_truthy function already correctly implemented.
+    - Added tests for `false` and `#f` being falsy to complete coverage.
+    - Tests: `(if 0 1 2) => 1`, `(if () 1 2) => 1`, `(if nothing 1 2) => 2`, `(if false 1 2) => 2`.
+  How to verify: `cd omnilisp/tests && ./test_pika_tower` - 64/64 tests pass.
+  Acceptance:
+    - Truthiness tests cover `0`, empty list, `false`, `#f`, `nothing`.
+    - All 64 tests pass.
+
+- [TODO] Label: T-truthy-codegen-standalone
+  Objective: Align standalone AOT/JIT header truthiness with spec without conflating `0` with `false`.
+  Where: `omnilisp/src/runtime/compiler/omni_compile.c`
+  What to change:
+    - [ ] Represent booleans distinctly (e.g., dedicated tag or interned symbols) instead of `mk_int(0/1)` in standalone header.
+    - [ ] Update `obj_to_bool` to return false only for `false` literal and `NOTHING_VAL`.
+    - [ ] Add a tiny AOT test program compiled via `aot_compile_to_file` that evaluates `(if 0 1 2)` → `1` and `(if false 1 2)` → `2`.
+  How to verify: build the generated C and run it (`gcc -std=c99 -pthread prog.c && ./a.out`), assert outputs.
+  Acceptance:
+    - Generated standalone code treats numeric `0` as truthy, `false`/`nothing` as falsy.
+    - Sample AOT/JIT smoke test passes.
+
+- [DONE] Label: T-ctr-tag-empty
+  Objective: Remove `nil` from type introspection results; emit meaningful tags for empty list and `nothing`.
+  Where: `runtime/src/runtime.c`, `runtime/tests/test_primitives.c`
+  What to change:
+    - [x] Decided tag strings: `"list"` for empty list (NULL) and non-empty pairs, `"nothing"` for unit.
+    - [x] Updated `ctr_tag` to return "list" for NULL and TAG_PAIR, "nothing" for TAG_NOTHING.
+    - [x] Updated tests to expect "list" instead of "nil"/"cell".
+  How to verify: `make -C runtime/tests test`; 454/454 tests pass.
+  Acceptance:
+    - No runtime output mentions `nil`.
+    - Tests assert new tag strings.
+
+- [DONE] Label: T-doc-nil-sweep
+  Objective: Purge lingering `nil`/`t` references from docs and align truthiness text.
+  Where: `docs/`, `ROADMAP.md`, `FUTURE_WORK.md`, `IMPLEMENTATION_PLAN.md`
+  What to change:
+    - [x] Replaced `nil` with `nothing` or `()` in all OmniLisp code examples.
+    - [x] FUTURE_WORK.md: Fixed mk-Node examples and return values.
+    - [x] IMPLEMENTATION_PLAN.md: Fixed literal lists and code examples.
+    - [x] ROADMAP.md: Fixed all benchmark and test OmniLisp code snippets.
+    - [x] docs/LANGUAGE_PARITY_PLAN.md: Fixed pattern matching example.
+  How to verify: `rg -n "\bnil\b" *.md docs omnilisp` shows only Go code and design notes.
+  Acceptance:
+    - All OmniLisp code examples use `()` for empty list and `nothing` for unit.
+    - Go code `nil` references preserved (correct syntax).
+    - Design docs correctly state "no nil" philosophy.
+
+## Scientific Computing (BLAS & Torch)
+
+- [TODO] Label: T-blas-core-bindings
+  Objective: Ship a first-pass `SciComp.BLAS` module exposing CBLAS Level 1–3 ops with ownership-safe FFI signatures.
+  Where: `omnilisp/modules/SciComp/BLAS.omni` (new), `SCIENTIFIC_COMPUTING_PLAN.md`
+  What to change:
+    - [ ] Define externs for core CBLAS calls (dot, axpy, gemv, gemm) with layout/transpose enums.
+    - [ ] Add usage examples and minimal property tests (small matrices) comparing against reference C computations.
+  How to verify: run BLAS smoke test script (to be added) that checks gemm on 2x2 matrices.
+  Acceptance:
+    - Module loads and calls into OpenBLAS successfully on Linux (mark `N/A` for platforms without BLAS).
+    - Tests validate numeric results within tolerance.
+
+- [TODO] Label: T-libtorch-c-wrap
+  Objective: Scaffold C wrapper around LibTorch and publish Omnilisp externs mirroring the wrapper surface.
+  Where: `third_party/libtorch_c_api.{h,cpp}` (new), `omnilisp/modules/SciComp/Torch.omni` (new), `SCIENTIFIC_COMPUTING_PLAN.md`
+  What to change:
+    - [ ] Generate/handwrite minimal C API for tensor creation, basic ops, and autograd entry points.
+    - [ ] Add build script to produce `libomnitorch.so`/`.dylib`.
+    - [ ] Provide Omnilisp extern bindings and a smoke test that creates two tensors and runs `torch_add`.
+  How to verify: build wrapper (`./build_libtorch_wrapper.sh`) and run a sample Omnilisp program invoking `torch_add`.
+  Acceptance:
+    - Wrapper compiles and links against LibTorch on a supported platform.
+    - Omnilisp call returns correct tensor data or graceful error if LibTorch unavailable.
+
 - [TODO] Label: T-debug-breakpoints
   Objective: Add `break` / `debug` forms to pause evaluation and inspect locals in REPL.
   Where: `csrc/parser/parser.c`, `csrc/codegen/codegen.c`, `runtime/src/runtime.c`
@@ -252,15 +332,17 @@
   Acceptance:
     - Trace output includes call depth and return values.
 
-- [TODO] Label: T-introspect-types
-  Objective: Add type/dispatch introspection helpers (`type-of`, `methods-of`, `subtype?`).
-  Where: `runtime/src/runtime.c`, `docs/LANGUAGE_REFERENCE.md`
+- [DONE] Label: T-introspect-types
+  Objective: Add type/dispatch introspection helpers (`type-of`, `methods-of`, `type?`).
+  Where: `omnilisp/src/runtime/eval/omni_eval.c`
   What to change:
-    - Implement primitives: `type-of`, `subtype?`, `methods-of`, `describe`.
-    - Connect to the method/dispatch registry if present.
-  How to verify: run REPL and check introspection results for core types.
+    - Implemented `type-of` primitive returning type symbol (integer, symbol, list, function, etc.).
+    - Implemented `describe` primitive returning human-readable type description.
+    - Implemented `methods-of` primitive returning list of applicable methods per type.
+    - Implemented `type?` primitive for type checking.
+  How to verify: run `(type-of 42)` => integer, `(describe '(1 2))` => list info.
   Acceptance:
-    - Introspection helpers return stable, documented results.
+    - Type introspection helpers return stable, documented results.
 
 - [TODO] Label: T-debug-weak-edge-explain
   Objective: Explain why a field was auto-marked weak (pattern + cycle reasoning).
@@ -293,14 +375,24 @@
     - Borrow misuse diagnostics are precise and actionable.
 
 - [TODO] Label: T-debug-cycle-logs
-  Objective: Log SCC/symmetric RC lifecycle events for cyclic structures in debug builds.
-  Where: `runtime/src/memory/scc.c`, `runtime/src/memory/symmetric.c`
+  Objective: Log SCC/Component/Tether lifecycle events for cyclic structures in debug builds.
+  Where: `runtime/src/memory/scc.c`, `runtime/src/memory/component.c`
   What to change:
-    - Assign cycle IDs and emit creation/orphan/free events.
+    - Assign cycle IDs and emit creation/orphan/tether/free events.
     - Include object IDs and source spans when available.
   How to verify: create a cyclic structure and confirm cycle logs appear.
   Acceptance:
-    - Cycle lifecycle events are logged in debug mode.
+    - Cycle and Component lifecycle events are logged in debug mode.
+
+- [TODO] Label: T-perf-tether-bench
+  Objective: Benchmark zero-cost tethered access vs standard RC access.
+  Where: `runtime/tests/bench.c`
+  What to change:
+    - Create benchmark cases for large cyclic graphs.
+    - Compare performance with and without scope tethers.
+  How to verify: `make -C runtime/tests bench`.
+  Acceptance:
+    - Benchmarks show quantified speedup for tethered scopes.
 
 - [TODO] Label: T-debug-event-ring
   Objective: Add a bounded event ring buffer for alloc/free/rc/borrow events.
@@ -332,13 +424,15 @@
   Acceptance:
     - All conditions emit stable IDs.
 
-- [TODO] Label: T-diag-symbol-suggestions
-  Objective: Provide “did you mean?” suggestions for unbound symbols.
-  Where: `runtime/src/runtime.c`
+- [DONE] Label: T-diag-symbol-suggestions
+  Objective: Provide "did you mean?" suggestions for unbound symbols.
+  Where: `omnilisp/src/runtime/eval/omni_eval.c`
   What to change:
-    - Implement symbol similarity search (edit distance or prefix match).
-    - Include top suggestions in unbound symbol errors.
-  How to verify: reference a misspelled symbol and confirm suggested alternatives.
+    - Implemented Levenshtein edit distance function.
+    - Added find_similar_symbols function that searches primitives and environment.
+    - Returns top 3 suggestions with distance <= 2.
+    - Deduplicates suggestions before display.
+  How to verify: run `(printn 42)` => suggests 'print', 'println'.
   Acceptance:
     - Unbound symbol errors include relevant suggestions.
 

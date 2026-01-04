@@ -132,27 +132,34 @@ void arena_cycle_example(void) {
 }
 ```
 
-### Symmetric RC for Unbroken Cycles
+### Component-Level Tethering for Unbroken Cycles
 
 ```c
-void symmetric_rc_example(void) {
-    sym_enter_scope();
+void component_tethering_example(void) {
+    // 1. Create a component (island unit)
+    SymComponent* c = sym_component_new();
+    sym_acquire_handle(c); // ASAP manages liveness
 
-    // Create objects
+    // 2. Add members to the island
     SymObj* a = sym_alloc(mk_int(1));
     SymObj* b = sym_alloc(mk_int(2));
+    sym_component_add_member(c, a);
+    sym_component_add_member(c, b);
 
-    // Create cycle
-    sym_link(a, b);  // a -> b (internal ref)
-    sym_link(b, a);  // b -> a (internal ref)
+    // 3. Create cycle inside island (A <-> B)
+    a->refs[0] = b;
+    b->refs[0] = a;
 
-    // Use objects
-    printf("a: %ld\n", obj_to_int(sym_get_data(a)));
-    printf("b: %ld\n", obj_to_int(sym_get_data(b)));
+    // 4. Zero-cost access block
+    {
+        SymTetherToken t = sym_tether_begin(c);
+        Obj* data = sym_get_data(a);
+        printf("A data: %ld\n", obj_to_int(data));
+        sym_tether_end(t);
+    }
 
-    // Exit scope - both freed automatically!
-    // (external_rc drops to 0 for both)
-    sym_exit_scope();
+    // 5. Final release (dismantles island)
+    sym_release_handle(c);
 }
 ```
 

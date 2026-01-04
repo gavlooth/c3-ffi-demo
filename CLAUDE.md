@@ -100,6 +100,9 @@ Break work into **small, reviewable tasks**:
   Objective: <one sentence end state>
   Where: <paths + key functions/modules>
   What to change:
+    - [ ] <implementation step 1>
+    - [ ] <implementation step 2>
+  (Optional) Implementation Checklist:
     - <concrete action 1>
     - <concrete action 2>
   How to verify: <command or manual step + expected outcome>
@@ -123,6 +126,26 @@ All agents (Claude, Gemini, Codex) must use **test-driven development** by defau
 2. **Define expected outputs** (golden files or assertions) before implementation.
 3. **Run the test suite** after changes and report results.
 4. **No test, no change** unless the task is explicitly marked `N/A` for testing, with a one-line reason.
+
+## Code Commenting Directive
+
+When writing or modifying code, include **a lot of comments** so the code is **absolutely self-documenting**.
+
+## Sync Directive
+
+`AGENTS.md`, `GEMINI.md` and `CLAUDE.md` must be kept **identical**. Any update to one file must be applied to the other in the same change.
+
+## Documentation Directive
+
+For every completed task:
+- Update the relevant documentation or add a brief note in `docs/` describing the change.
+- If no documentation changes are needed, explicitly mark the task `N/A` for documentation with a one-line reason.
+
+## Git Commit Directive
+
+For every completed task:
+- Create a dedicated git commit with a clear, imperative message (e.g., `Add effect handler core`).
+- If a commit cannot be made, mark the task `N/A` for commits with a one-line reason.
 
 ## Test Policy (Directive)
 
@@ -224,6 +247,22 @@ All agents (Claude, Gemini, Codex) must use **test-driven development** by defau
 ## Test Policy (Directive)
 
 **NEVER simplify tests to make them pass. Fix the underlying code instead.**
+
+## Documentation Directive
+
+For every completed task:
+- Update the relevant documentation or add a brief note in `docs/` describing the change.
+- If no documentation changes are needed, explicitly mark the task `N/A` for documentation with a one-line reason.
+
+## Git Commit Directive
+
+For every completed task:
+- Create a dedicated git commit with a clear, imperative message (e.g., `Add effect handler core`).
+- If a commit cannot be made, mark the task `N/A` for commits with a one-line reason.
+
+## Checkbox Template Directive
+
+All task templates must use checkboxes for implementation steps as shown in the Task Template above. Ensure each implementation step is a checkbox item `[ ]`.
 
 - Tests define the contract. If a test fails, the **implementation is wrong**, not the test.
 - Tests should only change if the test itself is **incorrect** (wrong expected value, flawed logic).
@@ -341,8 +380,9 @@ The `FREE_LIST` is an optimization for **batching frees**, not a GC mechanism:
 | 9 | Borrow/Tether Loop Insertion | 8 | `TETHER`/`BORROW_FOR_LOOP` |
 | 10 | Interprocedural Summaries | 11 | `PARAM_BORROWED`/`RETURN_FRESH` |
 | 11 | Concurrency Ownership Inference | 14 | `ATOMIC_INC_REF`/`Channel`/`SPAWN_THREAD` |
+| 17 | Component-Level Scope Tethering | 454 | Zero-cost island-based cycle reclamation |
 
-**Total: 65+ tests in `csrc/tests/`**
+**Total: 500+ tests across all suites**
 
 ## Key Files
 
@@ -539,22 +579,27 @@ ASAP's philosophy: **No stop-the-world GC, no heap scanning, fully deterministic
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                    COMPILE-TIME ANALYSIS                         │
-│                                                                  │
-│  1. Shape Analysis: Tree / DAG / Potentially-Cyclic             │
-│  2. Typed Reference Fields: Identify back-edge fields           │
-│  3. Automatic Weak Insertion: Make back-edges weak              │
+│  Shape Analysis ──► TREE / DAG / CYCLIC                         │
+│  Escape Analysis ──► LOCAL / ESCAPING                           │
 └─────────────────────────────────────────────────────────────────┘
                               │
           ┌───────────────────┼───────────────────┐
           ▼                   ▼                   ▼
-       Tree/List             DAG            Cyclic Structure
+       **TREE**             **DAG**            **CYCLIC**
+   (Unique/Unshared)    (Shared/Acyclic)    (Back-Edges)
           │                   │                   │
-          ▼                   ▼                   ▼
-     Pure ASAP           Refcount         Auto-Weak Back-Edges
-   (immediate free)    (no cycle det)    OR Arena Allocation
+          │                   │           ┌───────┴───────┐
+          │                   │           ▼               ▼
+          │                   │        **BROKEN**      **UNBROKEN**
+          │                   │      (Weak Refs)     (Strong Cycle)
+          │                   │           │               │
+          │                   │           │        ┌──────┴──────┐
+          │                   │           │        ▼             ▼
+          │                   │           │     **LOCAL**    **ESCAPING**
+          ▼                   ▼           ▼    (Scope-Bound) (Heap-Bound)
+      Pure ASAP           Standard RC     RC     Arena Alloc   Component
+     (free_tree)          (dec_ref)    (dec_ref) (destroy)     Tethering
 ```
-
----
 
 ### Solution 1: Typed Reference Fields (Compile-Time Weak Insertion)
 
@@ -632,7 +677,35 @@ void drop_maybe_cyclic(Obj* obj) {
 
 ---
 
-### Solution 3: Arena Allocation for Complex Cyclic Structures
+### Solution 3: Component-Level Scope Tethering (Island-Based Cycle Reclamation)
+
+For complex, mutable cycles that escape local scope, treating islands of cyclic data as single units:
+
+- **Key insight**: Treat cyclic islands (SCCs) as units ("Components")
+- **External handles**: Boundary refs keep component alive (ASAP managed)
+- **Scope tethers**: Zero-cost access lock; skips checks inside tether blocks
+- **Dismantle**: When handles=0 AND tethers=0, the island is dismantled
+- **O(1) deterministic** cycle collection without global GC
+- **Implementation**: `runtime/src/memory/component.c`
+
+```c
+void example(void) {
+    SymComponent* c = sym_component_new();
+    sym_acquire_handle(c); // ASAP manages this handle
+
+    // Create cyclic island...
+    {
+        // Zero-cost access block - no RC/IPGE overhead inside
+        SymTetherToken t = sym_tether_begin(c);
+        process_cyclic_data(island_root); 
+        sym_tether_end(t);
+    }
+
+    sym_release_handle(c);  // Island dismantled immediately
+}
+```
+
+### Solution 4: Arena Allocation for Complex Cyclic Structures
 
 From [Arena Allocators](https://www.rfleury.com/p/untangling-lifetimes-the-arena-allocator):
 

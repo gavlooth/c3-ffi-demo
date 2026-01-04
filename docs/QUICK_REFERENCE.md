@@ -1,5 +1,7 @@
 # OmniLisp Quick Reference
 
+**Implementation status:** this quick reference reflects the **current C compiler/runtime** unless a section is explicitly marked “Design Target” (see `omnilisp/SUMMARY.md` and `docs/LANGUAGE_PARITY_PLAN.md`).
+
 ## Data Types
 ```scheme
 42              ; integer
@@ -7,11 +9,15 @@
 'foo            ; symbol
 #\a #\newline   ; character
 '(1 2 3)        ; list
-nil             ; nil/false
-t               ; true
+()              ; empty list
+nothing         ; nothing (falsy)
+false           ; false (falsy)
+true            ; true
+0               ; integer (truthy)
 ```
 
 ## Special Forms
+**Implemented subset (current C compiler/runtime):** `define`, `lambda`/`fn`, `let`, `let*`, `if`, `do`/`begin`, and `quote`. Other forms listed below are design target.
 ```scheme
 (lambda (x) body)              ; function
 (lambda self (x) body)         ; recursive function
@@ -27,7 +33,9 @@ t               ; true
 (unquote-splicing x) / ,@x     ; splice in quasiquote
 ```
 
-## Pattern Matching
+## Pattern Matching (Design Target)
+
+**Note:** `match` is not yet implemented in the current C compiler/runtime.
 ```scheme
 (match val
   (_              result)      ; wildcard
@@ -36,7 +44,8 @@ t               ; true
   ((cons a b)     result)      ; constructor
   ((or p1 p2)     result)      ; or-pattern
   ((x @ pat)      result)      ; as-pattern
-  ((n :when (> n 0)) result))  ; guard
+  ((n :when (> n 0)) result)   ; guard
+  ((n :when (lambda (n) (> n 0))) result))  ; guard as lambda predicate
 ```
 
 ## Primitives

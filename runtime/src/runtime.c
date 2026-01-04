@@ -15,6 +15,7 @@
 
 /* Sound generational references - slot pool never frees to system allocator */
 #include "memory/slot_pool.h"
+#include "memory/component.h"
 
 /* Structured condition system */
 #include "condition.h"
@@ -200,6 +201,7 @@ typedef enum {
     TAG_CONDITION,      /* Structured condition object */
     TAG_ATOM,           /* Pthread-based atom (OS threads) */
     TAG_THREAD,         /* OS thread handle */
+    TAG_NOTHING,
     /* Continuation-based concurrency (green threads) */
     TAG_GREEN_CHANNEL,  /* Continuation-based channel */
     TAG_GENERATOR,      /* Iterator/generator */
@@ -266,9 +268,11 @@ static inline long obj_to_int(Obj* p) {
 /* Safe boolean extraction */
 static inline int obj_to_bool(Obj* p) {
     if (IS_IMMEDIATE_BOOL(p)) return p == OMNI_TRUE;
-    if (IS_IMMEDIATE_INT(p)) return INT_IMM_VALUE(p) != 0;
-    if (p == NULL) return 0;
-    return 1;  /* Non-null is truthy */
+    if (p == NULL) return 1;  /* Empty list is truthy */
+    if (IS_IMMEDIATE_INT(p) || IS_IMMEDIATE_CHAR(p)) return 1;
+    if (p->tag == TAG_NOTHING) return 0;
+    if (p->tag == TAG_SYM && p->ptr && strcmp((char*)p->ptr, "false") == 0) return 0;
+    return 1;
 }
 
 /* Safe character extraction */
@@ -315,6 +319,17 @@ int FREE_COUNT = 0;
 Obj STACK_POOL[STACK_POOL_SIZE];
 int STACK_PTR = 0;
 
+/* nothing singleton (distinct from empty list / NULL) */
+static Obj omni_nothing_obj = {
+    .generation = 0,
+    .mark = -1,
+    .tag = TAG_NOTHING,
+    .is_pair = 0,
+    .scc_id = -1,
+    .scan_tag = 0,
+    .ptr = NULL
+};
+
 int is_stack_obj(Obj* x) {
     uintptr_t px = (uintptr_t)x;
     uintptr_t start = (uintptr_t)&STACK_POOL[0];
@@ -324,6 +339,10 @@ int is_stack_obj(Obj* x) {
 
 int is_nil(Obj* x) {
     return x == NULL;
+}
+
+int is_nothing(Obj* x) {
+    return x == &omni_nothing_obj || (x && !IS_IMMEDIATE(x) && x->tag == TAG_NOTHING);
 }
 
 /* Internal Weak Reference Support */
@@ -494,6 +513,10 @@ Obj* mk_sym(const char* s) {
         x->ptr = NULL;
     }
     return x;
+}
+
+Obj* mk_nothing(void) {
+    return &omni_nothing_obj;
 }
 
 Obj* mk_box(Obj* v) {
@@ -732,6 +755,7 @@ Obj* mk_char_stack(long c) {
 void release_children(Obj* x) {
     if (!x) return;
     if (IS_IMMEDIATE(x)) return;
+    if (is_nothing(x)) return;
     switch (x->tag) {
     case TAG_PAIR:
         dec_ref(x->a);
@@ -771,6 +795,7 @@ void release_children(Obj* x) {
 void free_tree(Obj* x) {
     if (!x) return;
     if (IS_IMMEDIATE(x)) return;
+    if (is_nothing(x)) return;
     if (is_stack_obj(x)) return;
     switch (x->tag) {
     case TAG_PAIR:
@@ -806,6 +831,7 @@ void dec_ref(Obj* x) {
     if (!x) return;
     /* Immediate integers don't need RC */
     if (IS_IMMEDIATE(x)) return;
+    if (is_nothing(x)) return;
     if (is_stack_obj(x)) return;
     if (x->mark < 0) return;
     x->mark--;
@@ -821,6 +847,7 @@ void inc_ref(Obj* x) {
     if (!x) return;
     /* Immediate integers don't need RC */
     if (IS_IMMEDIATE(x)) return;
+    if (is_nothing(x)) return;
     if (is_stack_obj(x)) return;
     if (x->mark < 0) { x->mark = 1; return; }
     x->mark++;
@@ -832,6 +859,7 @@ void free_unique(Obj* x) {
     if (!x) return;
     /* Immediate integers don't need freeing */
     if (IS_IMMEDIATE(x)) return;
+    if (is_nothing(x)) return;
     if (is_stack_obj(x)) return;
     /* Proven unique at compile time - no RC check needed */
     release_children(x);
@@ -849,6 +877,7 @@ void free_obj(Obj* x) {
     if (!x) return;
     /* Immediates don't need freeing */
     if (IS_IMMEDIATE(x)) return;
+    if (is_nothing(x)) return;
     if (is_stack_obj(x)) return;
     if (x->mark < 0) return;
     x->mark = -1;
@@ -1434,187 +1463,48 @@ void set_deferred_batch_size(int size) {
 /* Internal refs: Within the object graph */
 /* When external_rc drops to 0, the object (or cycle) is orphaned garbage */
 
-typedef struct SymObj SymObj;
-typedef struct SymScope SymScope;
+#include "memory/symmetric.h"
 
-struct SymObj {
-    int external_rc;      /* References from live scopes */
-    int internal_rc;      /* References from other objects */
-    SymObj** refs;        /* Objects this object references */
-    int ref_count;        /* Number of outgoing references */
-    int ref_capacity;
-    void* data;           /* Actual data payload (Obj*) */
-    int freed;            /* Mark to prevent double-free */
-};
+/* Global symmetric RC context wrapper for TLS */
+static __thread SymContext* SYM_TLS_CTX = NULL;
 
-struct SymScope {
-    SymObj** owned;       /* Objects owned by this scope */
-    int owned_count;
-    int owned_capacity;
-    SymScope* parent;
-};
-
-/* Global symmetric RC context */
-static struct {
-    SymScope* current;
-    SymScope** stack;
-    int stack_size;
-    int stack_capacity;
-    int objects_created;
-    int cycles_collected;
-} SYM_CTX = {NULL, NULL, 0, 0, 0, 0};
-
-/* Forward declarations */
-void sym_check_free(SymObj* obj);
-
-SymObj* sym_obj_new(void* data) {
-    SymObj* obj = malloc(sizeof(SymObj));
-    if (!obj) return NULL;
-    obj->external_rc = 0;
-    obj->internal_rc = 0;
-    obj->refs = NULL;
-    obj->ref_count = 0;
-    obj->ref_capacity = 0;
-    obj->data = data;
-    obj->freed = 0;
-    return obj;
-}
-
-void sym_obj_add_ref(SymObj* obj, SymObj* target) {
-    if (!obj || !target) return;
-    if (obj->ref_count >= obj->ref_capacity) {
-        int new_cap = obj->ref_capacity == 0 ? 8 : obj->ref_capacity * 2;
-        SymObj** new_refs = realloc(obj->refs, new_cap * sizeof(SymObj*));
-        if (!new_refs) return;
-        obj->refs = new_refs;
-        obj->ref_capacity = new_cap;
+void sym_cleanup(void) {
+    if (SYM_TLS_CTX) {
+        sym_context_free(SYM_TLS_CTX);
+        SYM_TLS_CTX = NULL;
     }
-    obj->refs[obj->ref_count++] = target;
-}
-
-SymScope* sym_scope_new(SymScope* parent) {
-    SymScope* scope = malloc(sizeof(SymScope));
-    if (!scope) return NULL;
-    scope->owned = NULL;
-    scope->owned_count = 0;
-    scope->owned_capacity = 0;
-    scope->parent = parent;
-    return scope;
-}
-
-void sym_scope_own(SymScope* scope, SymObj* obj) {
-    if (!scope || !obj || obj->freed) return;
-    if (scope->owned_count >= scope->owned_capacity) {
-        int new_cap = scope->owned_capacity == 0 ? 8 : scope->owned_capacity * 2;
-        SymObj** new_owned = realloc(scope->owned, new_cap * sizeof(SymObj*));
-        if (!new_owned) return;
-        scope->owned = new_owned;
-        scope->owned_capacity = new_cap;
-    }
-    obj->external_rc++;
-    scope->owned[scope->owned_count++] = obj;
-}
-
-void sym_dec_external(SymObj* obj) {
-    if (!obj || obj->freed) return;
-    obj->external_rc--;
-    sym_check_free(obj);
-}
-
-void sym_dec_internal(SymObj* obj) {
-    if (!obj || obj->freed) return;
-    obj->internal_rc--;
-    sym_check_free(obj);
-}
-
-void sym_check_free(SymObj* obj) {
-    if (!obj || obj->freed) return;
-    /* Object is garbage when it has no external references */
-    if (obj->external_rc <= 0) {
-        obj->freed = 1;
-        /* Cascade: decrement internal refs for all objects we reference */
-        for (int i = 0; i < obj->ref_count; i++) {
-            sym_dec_internal(obj->refs[i]);
-        }
-        /* Free the data (Obj*) if present */
-        if (obj->data) {
-            dec_ref((Obj*)obj->data);
-        }
-        free(obj->refs);
-        free(obj);
-    }
-}
-
-void sym_scope_release(SymScope* scope) {
-    if (!scope) return;
-    for (int i = 0; i < scope->owned_count; i++) {
-        sym_dec_external(scope->owned[i]);
-    }
-    scope->owned_count = 0;
-}
-
-void sym_scope_free(SymScope* scope) {
-    if (!scope) return;
-    free(scope->owned);
-    free(scope);
+    sym_pool_cleanup();
+    sym_component_cleanup();
 }
 
 /* Context operations */
 void sym_init(void) {
-    if (SYM_CTX.current) return;  /* Already initialized */
-    SYM_CTX.current = sym_scope_new(NULL);
-    SYM_CTX.stack = malloc(8 * sizeof(SymScope*));
-    SYM_CTX.stack[0] = SYM_CTX.current;
-    SYM_CTX.stack_size = 1;
-    SYM_CTX.stack_capacity = 8;
+    if (SYM_TLS_CTX) return;  /* Already initialized */
+    SYM_TLS_CTX = sym_context_new();
 }
 
 SymScope* sym_enter_scope(void) {
-    if (!SYM_CTX.current) sym_init();
-    SymScope* scope = sym_scope_new(SYM_CTX.current);
-    if (!scope) return NULL;
-    if (SYM_CTX.stack_size >= SYM_CTX.stack_capacity) {
-        int new_cap = SYM_CTX.stack_capacity * 2;
-        SymScope** new_stack = realloc(SYM_CTX.stack, new_cap * sizeof(SymScope*));
-        if (!new_stack) { sym_scope_free(scope); return NULL; }
-        SYM_CTX.stack = new_stack;
-        SYM_CTX.stack_capacity = new_cap;
-    }
-    SYM_CTX.stack[SYM_CTX.stack_size++] = scope;
-    SYM_CTX.current = scope;
-    return scope;
+    if (!SYM_TLS_CTX) sym_init();
+    return sym_ctx_enter_scope(SYM_TLS_CTX);
 }
 
 void sym_exit_scope(void) {
-    if (SYM_CTX.stack_size <= 1) return;  /* Don't exit global */
-    SymScope* scope = SYM_CTX.stack[--SYM_CTX.stack_size];
-    SYM_CTX.current = SYM_CTX.stack[SYM_CTX.stack_size - 1];
-    /* Count cycles for stats */
-    for (int i = 0; i < scope->owned_count; i++) {
-        SymObj* obj = scope->owned[i];
-        if (obj && !obj->freed && obj->internal_rc > 0 && obj->external_rc == 1) {
-            SYM_CTX.cycles_collected++;
-        }
-    }
-    sym_scope_release(scope);
-    sym_scope_free(scope);
+    if (!SYM_TLS_CTX) return;
+    sym_ctx_exit_scope(SYM_TLS_CTX);
 }
 
 /* Allocate object in current scope */
 SymObj* sym_alloc(Obj* data) {
-    if (!SYM_CTX.current) sym_init();
-    SymObj* obj = sym_obj_new(data);
-    if (!obj) return NULL;
-    sym_scope_own(SYM_CTX.current, obj);
-    SYM_CTX.objects_created++;
+    if (!SYM_TLS_CTX) sym_init();
+    
+    SymObj* obj = sym_ctx_alloc(SYM_TLS_CTX, data, NULL);
     return obj;
 }
 
 /* Create internal reference (from one object to another) */
 void sym_link(SymObj* from, SymObj* to) {
-    if (!from || !to || to->freed) return;
-    to->internal_rc++;
-    sym_obj_add_ref(from, to);
+    if (!SYM_TLS_CTX) sym_init();
+    sym_ctx_link(SYM_TLS_CTX, from, to);
 }
 
 /* Get the Obj* from a SymObj* */
@@ -2368,86 +2258,68 @@ Obj* mod_op(Obj* a, Obj* b) {
 
 /* Comparison Operations - with unboxed integer support */
 Obj* eq_op(Obj* a, Obj* b) {
+    if (a == b) return mk_bool(1);
     /* Fast path: both immediate */
     if (IS_IMMEDIATE(a) && IS_IMMEDIATE(b)) {
-        return mk_int_unboxed(a == b ? 1 : 0);
+        return mk_bool(a == b ? 1 : 0);
     }
-    if (!a && !b) return mk_int_unboxed(1);
-    if (!a || !b) return mk_int_unboxed(0);
+    if (!a || !b) return mk_bool(0);
     if (num_is_float(a) || num_is_float(b)) {
-        return mk_int_unboxed(num_to_double(a) == num_to_double(b) ? 1 : 0);
+        return mk_bool(num_to_double(a) == num_to_double(b) ? 1 : 0);
     }
-    return mk_int_unboxed(obj_to_int(a) == obj_to_int(b) ? 1 : 0);
+    return mk_bool(obj_to_int(a) == obj_to_int(b) ? 1 : 0);
 }
 
 Obj* lt_op(Obj* a, Obj* b) {
     if (IS_IMMEDIATE(a) && IS_IMMEDIATE(b)) {
-        return mk_int_unboxed(IMMEDIATE_VALUE(a) < IMMEDIATE_VALUE(b) ? 1 : 0);
+        return mk_bool(IMMEDIATE_VALUE(a) < IMMEDIATE_VALUE(b) ? 1 : 0);
     }
-    if (!a || !b) return mk_int_unboxed(0);
+    if (!a || !b) return mk_bool(0);
     if (num_is_float(a) || num_is_float(b)) {
-        return mk_int_unboxed(num_to_double(a) < num_to_double(b) ? 1 : 0);
+        return mk_bool(num_to_double(a) < num_to_double(b) ? 1 : 0);
     }
-    return mk_int_unboxed(obj_to_int(a) < obj_to_int(b) ? 1 : 0);
+    return mk_bool(obj_to_int(a) < obj_to_int(b) ? 1 : 0);
 }
 
 Obj* gt_op(Obj* a, Obj* b) {
     if (IS_IMMEDIATE(a) && IS_IMMEDIATE(b)) {
-        return mk_int_unboxed(IMMEDIATE_VALUE(a) > IMMEDIATE_VALUE(b) ? 1 : 0);
+        return mk_bool(IMMEDIATE_VALUE(a) > IMMEDIATE_VALUE(b) ? 1 : 0);
     }
-    if (!a || !b) return mk_int_unboxed(0);
+    if (!a || !b) return mk_bool(0);
     if (num_is_float(a) || num_is_float(b)) {
-        return mk_int_unboxed(num_to_double(a) > num_to_double(b) ? 1 : 0);
+        return mk_bool(num_to_double(a) > num_to_double(b) ? 1 : 0);
     }
-    return mk_int_unboxed(obj_to_int(a) > obj_to_int(b) ? 1 : 0);
+    return mk_bool(obj_to_int(a) > obj_to_int(b) ? 1 : 0);
 }
 
 Obj* le_op(Obj* a, Obj* b) {
     if (IS_IMMEDIATE(a) && IS_IMMEDIATE(b)) {
-        return mk_int_unboxed(IMMEDIATE_VALUE(a) <= IMMEDIATE_VALUE(b) ? 1 : 0);
+        return mk_bool(IMMEDIATE_VALUE(a) <= IMMEDIATE_VALUE(b) ? 1 : 0);
     }
-    if (!a || !b) return mk_int_unboxed(0);
+    if (!a || !b) return mk_bool(0);
     if (num_is_float(a) || num_is_float(b)) {
-        return mk_int_unboxed(num_to_double(a) <= num_to_double(b) ? 1 : 0);
+        return mk_bool(num_to_double(a) <= num_to_double(b) ? 1 : 0);
     }
-    return mk_int_unboxed(obj_to_int(a) <= obj_to_int(b) ? 1 : 0);
+    return mk_bool(obj_to_int(a) <= obj_to_int(b) ? 1 : 0);
 }
 
 Obj* ge_op(Obj* a, Obj* b) {
     if (IS_IMMEDIATE(a) && IS_IMMEDIATE(b)) {
-        return mk_int_unboxed(IMMEDIATE_VALUE(a) >= IMMEDIATE_VALUE(b) ? 1 : 0);
+        return mk_bool(IMMEDIATE_VALUE(a) >= IMMEDIATE_VALUE(b) ? 1 : 0);
     }
-    if (!a || !b) return mk_int_unboxed(0);
+    if (!a || !b) return mk_bool(0);
     if (num_is_float(a) || num_is_float(b)) {
-        return mk_int_unboxed(num_to_double(a) >= num_to_double(b) ? 1 : 0);
+        return mk_bool(num_to_double(a) >= num_to_double(b) ? 1 : 0);
     }
-    return mk_int_unboxed(obj_to_int(a) >= obj_to_int(b) ? 1 : 0);
+    return mk_bool(obj_to_int(a) >= obj_to_int(b) ? 1 : 0);
 }
 
 Obj* not_op(Obj* a) {
-    if (!a) return mk_int_unboxed(1);
-    if (IS_IMMEDIATE(a)) {
-        return mk_int_unboxed(IMMEDIATE_VALUE(a) == 0 ? 1 : 0);
-    }
-    return mk_int_unboxed(a->i == 0 ? 1 : 0);
+    return mk_bool(!obj_to_bool(a));
 }
 
 int is_truthy(Obj* x) {
-    if (!x) return 0;
-    /* Fast path: immediate integer */
-    if (IS_IMMEDIATE(x)) {
-        return IMMEDIATE_VALUE(x) != 0;
-    }
-    switch (x->tag) {
-    case TAG_INT:
-        return x->i != 0;
-    case TAG_FLOAT:
-        return x->f != 0.0;
-    case TAG_CHAR:
-        return x->i != 0;
-    default:
-        return 1;
-    }
+    return obj_to_bool(x);
 }
 
 /* Primitive aliases for compiler */
@@ -2474,12 +2346,12 @@ Obj* prim_abs(Obj* a) {
 
 /* Type predicate wrappers - return Obj* for uniformity */
 /* Use obj_tag() to handle immediate values (tagged pointers) */
-Obj* prim_null(Obj* x) { return mk_int(x == NULL ? 1 : 0); }
-Obj* prim_pair(Obj* x) { return mk_int(x && obj_tag(x) == TAG_PAIR ? 1 : 0); }
-Obj* prim_int(Obj* x) { return mk_int(obj_tag(x) == TAG_INT ? 1 : 0); }
-Obj* prim_float(Obj* x) { return mk_int(x && obj_tag(x) == TAG_FLOAT ? 1 : 0); }
-Obj* prim_char(Obj* x) { return mk_int(obj_tag(x) == TAG_CHAR ? 1 : 0); }
-Obj* prim_sym(Obj* x) { return mk_int(x && obj_tag(x) == TAG_SYM ? 1 : 0); }
+Obj* prim_null(Obj* x) { return mk_bool(x == NULL ? 1 : 0); }
+Obj* prim_pair(Obj* x) { return mk_bool(x && obj_tag(x) == TAG_PAIR ? 1 : 0); }
+Obj* prim_int(Obj* x) { return mk_bool(obj_tag(x) == TAG_INT ? 1 : 0); }
+Obj* prim_float(Obj* x) { return mk_bool(x && obj_tag(x) == TAG_FLOAT ? 1 : 0); }
+Obj* prim_char(Obj* x) { return mk_bool(obj_tag(x) == TAG_CHAR ? 1 : 0); }
+Obj* prim_sym(Obj* x) { return mk_bool(x && obj_tag(x) == TAG_SYM ? 1 : 0); }
 
 /* I/O Primitives */
 void print_obj(Obj* x);  /* forward declaration */
@@ -2539,7 +2411,7 @@ void print_obj(Obj* x) {
         return;
     }
     if (IS_IMMEDIATE_BOOL(x)) {
-        printf("%s", x == OMNI_TRUE ? "#t" : "#f");
+        printf("%s", x == OMNI_TRUE ? "true" : "false");
         return;
     }
     switch (x->tag) {
@@ -2554,6 +2426,9 @@ void print_obj(Obj* x) {
         break;
     case TAG_SYM:
         printf("%s", x->ptr ? (char*)x->ptr : "nil");
+        break;
+    case TAG_NOTHING:
+        printf("nothing");
         break;
     case TAG_PAIR:
         print_list(x);
@@ -2575,34 +2450,35 @@ void print_obj(Obj* x) {
 
 Obj* prim_display(Obj* x) {
     print_obj(x);
-    return NULL;
+    return mk_nothing();
 }
 
 Obj* prim_print(Obj* x) {
     print_obj(x);
     printf("\n");
-    return NULL;
+    return mk_nothing();
 }
 
 Obj* prim_newline(void) {
     printf("\n");
-    return NULL;
+    return mk_nothing();
 }
 
 /* Type introspection */
 Obj* ctr_tag(Obj* x) {
-    if (!x) return mk_sym("nil");
+    if (!x) return mk_sym("list");  /* NULL represents empty list */
     switch (x->tag) {
     case TAG_INT: return mk_sym("int");
     case TAG_FLOAT: return mk_sym("float");
     case TAG_CHAR: return mk_sym("char");
     case TAG_SYM: return mk_sym("sym");
-    case TAG_PAIR: return mk_sym("cell");
+    case TAG_PAIR: return mk_sym("list");  /* Non-empty list is also a list */
     case TAG_BOX: return mk_sym("box");
     case TAG_CLOSURE: return mk_sym("closure");
     case TAG_CHANNEL: return mk_sym("channel");
     case TAG_ATOM: return mk_sym("atom");
     case TAG_THREAD: return mk_sym("thread");
+    case TAG_NOTHING: return mk_sym("nothing");
     default:
         if (x->tag >= TAG_USER_BASE) return mk_sym("user");
         return mk_sym("unknown");
@@ -3459,6 +3335,7 @@ static void* thread_entry(void* arg) {
     pthread_cond_signal(&ta->handle->cond);
     pthread_mutex_unlock(&ta->handle->lock);
 
+    sym_cleanup();
     free(ta);
     return NULL;
 }

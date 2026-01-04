@@ -218,30 +218,59 @@ Relax the "ASAP First" rule slightly while keeping the **no stop-the-world** gua
 | Zero runtime overhead | Small arena bookkeeping |
 | May reject valid programs | Accepts more programs |
 
-## Hybrid Memory Strategy (v0.4.0)
+## Hybrid Memory Strategy (v0.6.0)
 
-The compiler now uses a **hybrid strategy** that selects the optimal memory management technique based on static analysis:
+The compiler selects the optimal memory management technique based on static analysis of **Shape** and **Escape**:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                    COMPILE-TIME ANALYSIS                         │
 │                                                                  │
 │  Shape Analysis ──► TREE / DAG / CYCLIC                         │
-│  Back-Edge Detection ──► cycles_broken: true/false              │
-│  Escape Analysis ──► local / arg / global                       │
-│  RC Optimization ──► unique / alias / borrowed                  │
+│  Escape Analysis ──► LOCAL / ESCAPING                           │
 └─────────────────────────────────────────────────────────────────┘
                               │
           ┌───────────────────┼───────────────────┐
           ▼                   ▼                   ▼
-       TREE/DAG          CYCLIC+broken      CYCLIC+unbroken
+       **TREE**             **DAG**            **CYCLIC**
+   (Unique/Unshared)    (Shared/Acyclic)    (Back-Edges)
           │                   │                   │
-          ▼                   ▼                   ▼
-   Pure ASAP/RC          dec_ref           Symmetric RC
-   (free_tree/dec_ref)   (weak edges)      (scope-as-object)
+          │                   │           ┌───────┴───────┐
+          │                   │           ▼               ▼
+          │                   │        **BROKEN**      **UNBROKEN**
+          │                   │      (Weak Refs)     (Strong Cycle)
+          │                   │           │               │
+          │                   │           │        ┌──────┴──────┐
+          │                   │           │        ▼             ▼
+          │                   │           │     **LOCAL**    **ESCAPING**
+          ▼                   ▼           ▼    (Scope-Bound) (Heap-Bound)
+      Pure ASAP           Standard RC     RC     Arena Alloc   Component
+     (free_tree)          (dec_ref)    (dec_ref) (destroy)     Tethering
 ```
 
-### Strategy Selection
+### Strategy Hierarchy (Fastest to Most Capable)
+
+1.  **Pure ASAP** (`free_tree` / `free_unique`)
+    *   **Use Case**: Trees, Lists, unique records.
+    *   **Cost**: Zero runtime overhead (static calls).
+    *   **Mechanism**: Recursive static free at last use.
+
+2.  **Standard RC** (`inc_ref` / `dec_ref`)
+    *   **Use Case**: DAGs, shared immutable data, weak-cycle graphs.
+    *   **Cost**: Atomic increment/decrement (or non-atomic if thread-local).
+    *   **Mechanism**: count == 0 triggers free.
+
+3.  **Arena Allocation** (`arena_create` / `arena_destroy`)
+    *   **Use Case**: Complex local graphs that *do not escape* their scope.
+    *   **Cost**: O(1) bulk free.
+    *   **Mechanism**: Bump pointer allocation, single free at scope exit.
+
+4.  **Component Tethering** (`sym_acquire_handle` / `sym_release_handle`)
+    *   **Use Case**: Complex mutable cycles that *escape* to the heap.
+    *   **Cost**: Handle management + O(cycle_size) dismantle.
+    *   **Mechanism**: Treats SCC as a unit. Zero-cost access via Tethers.
+
+### Strategy Selection Matrix
 
 | Shape | Cycle Status | Frozen | Strategy | Function |
 |-------|--------------|--------|----------|----------|
@@ -249,18 +278,19 @@ The compiler now uses a **hybrid strategy** that selects the optimal memory mana
 | DAG | - | - | Standard RC | `dec_ref()` |
 | CYCLIC | Broken | - | Standard RC | `dec_ref()` |
 | CYCLIC | Unbroken | Yes | SCC-based RC | `scc_release()` |
-| CYCLIC | Unbroken | No | **Symmetric RC** | `sym_exit_scope()` |
-| Unknown | - | - | Symmetric RC | `sym_exit_scope()` |
+| CYCLIC | Unbroken | No | **Component Tethering** | `sym_release_handle()` |
+| Unknown | - | - | Component Tethering | `sym_release_handle()` |
 
-### Why Symmetric RC for Unbroken Cycles?
+### Why Component Tethering for Unbroken Cycles?
 
-Previously, unbroken cycles used **arena allocation**. Symmetric RC is now preferred:
+Component-Level Tethering treats an entire SCC as a single unit:
 
-| Aspect | Arena | Symmetric RC |
+| Aspect | Arena | Component Tethering |
 |--------|-------|--------------|
 | Peak memory | High (holds until scope) | Low (immediate free) |
 | Long scopes | Everything held | Freed as orphaned |
-| Cycle collection | At scope exit only | Immediate when orphaned |
+| Cycle collection | At scope exit only | Immediate when Handle=0 |
+| Zero-Cost access | No | Yes (via Tether blocks) |
 | Memory pattern | O(scope_lifetime) | O(object_lifetime) |
 
 Arena remains available as **opt-in** for batch allocation scenarios.
@@ -372,7 +402,7 @@ selects the lightest safe runtime guard.
 | Shape = tree, not provably unique | `free_tree` with ASAP frees | Deterministic, no RC |
 | Shape = DAG or aliasing | `dec_ref` (RC) | Required for shared acyclic graphs |
 | Shape = cyclic and weak edges break cycle | `dec_ref` (RC) | Weak edges make it acyclic for ownership |
-| Shape = cyclic and unbroken, escapes | Symmetric RC or SCC-local release | Deterministic, no arena reliance |
+| Shape = cyclic and unbroken, escapes | Component Tethering | Island-based units; Zero-cost tethered access |
 | Shape = cyclic and local only | Arena allocation is allowed (opt-in) | Bulk free is safe and fast |
 
 ### Notes
@@ -577,15 +607,15 @@ Compile with: `gcc -std=c99 -pthread` or `clang -std=c99 -pthread`
   - `GetOwnershipMode(name)` - Get current ownership mode
   - `IsSingleUse(name)` - Check for move optimization opportunity
 
-### Symmetric Reference Counting (Hybrid Strategy)
+### Component-Level Scope Tethering (Hybrid Strategy)
 - **Default for unbroken cycles** - more memory efficient than arenas
-- **Key insight**: Treat scope as an object that participates in ownership graph
-- **External refs**: From live scopes/roots
-- **Internal refs**: Within the object graph
-- **When external_rc drops to 0**, the cycle is orphaned → freed immediately
+- **Key insight**: Treat cyclic islands (SCCs) as units ("Components")
+- **External handles**: Boundary refs keep component alive (ASAP managed)
+- **Scope tethers**: Zero-cost access lock; skips checks inside tether blocks
+- **Dismantle**: When handles=0 AND tethers=0, the island is dismantled
 - **O(1) deterministic** cycle collection without global GC
-- **Implementation**: `pkg/memory/symmetric.go`
-- **Generated runtime**: `sym_enter_scope()`, `sym_exit_scope()`, `sym_alloc()`, `sym_link()`
+- **Implementation**: `runtime/src/memory/component.c`
+- **Generated runtime**: `sym_acquire_handle()`, `sym_release_handle()`, `sym_tether_begin()`, `sym_tether_end()`
 
 ## Package Structure
 

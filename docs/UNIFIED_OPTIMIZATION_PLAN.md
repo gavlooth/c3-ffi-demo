@@ -28,8 +28,8 @@ Safety layers can be disabled without breaking correctness. Reclamation layers c
 | DAG | N/A | N/A | Any | RC | `inc_ref` / `dec_ref` |
 | Cyclic | Broken (weak edges) | Any | Any | RC | `dec_ref` |
 | Cyclic | Unbroken | Frozen | Any | SCC RC | `scc_release` |
-| Cyclic | Unbroken | Mutable | Any | Symmetric RC | `sym_exit_scope` |
-| Unknown | Unknown | Unknown | Any | Symmetric RC | `sym_exit_scope` |
+| Cyclic | Unbroken | Mutable | Any | Component Tethering | `sym_release_handle` / `sym_tether` |
+| Unknown | Unknown | Unknown | Any | Component Tethering | `sym_release_handle` / `sym_tether` |
 | Any | N/A | N/A | Local-only | Arena/Region | `arena_*` / `region_*` |
 
 Notes:
@@ -566,6 +566,7 @@ Actions to make IPGE sound:
 ├─────────────────────────────────────────────────────────────────────────┤
 │  Pure + Borrowed    → Zero-cost access (no checks, no RC)               │
 │  Pure + Owned       → Tethered access (skip repeated gen checks)        │
+│  Complex Cycle      → Component Tethering (bulk reclamation)            │
 │  Unique + Local     → Direct free (no RC check)                         │
 │  Consumed           → Ownership transfer (no inc_ref)                   │
 │  Reuse Match        → In-place reuse (no alloc/free)                    │

@@ -98,68 +98,28 @@ func (g *CodeGenerator) GenerateVarAccess(varName string) string {
 }
 ```
 
-## Phase 2: Scope Tethering (Low-Hanging Fruit)
+## Phase 2: Scope Tethering (COMPLETE)
 
 ### Concept
 
-When borrowing a reference, set a "tethered" bit on the target object. While tethered, skip all generation checks within that scope. Clear on scope exit.
+When borrowing a reference, set a "tethered" bit or increment a component-level tether counter. While tethered, skip all generation checks and reference counting within that scope.
 
-### Implementation
+### Implementation (v0.6.0)
+
+Scope tethering has been implemented at the **Component Level**. Instead of a per-object bit, we use a component-wide counter to lock an entire cyclic island.
 
 ```c
-// Add to Obj struct
-typedef struct Obj {
-    uint64_t generation;
-    int mark;
-    int tag;
-    int is_pair;
-    int scc_id;
-    unsigned int scan_tag;
-    uint8_t tethered;      // NEW: scope tethering flag
-    uint8_t _pad[3];       // Alignment padding
-    union { ... };
-} Obj;
-
-// Tether a reference (on borrow)
-static inline void tether_obj(Obj* obj) {
-    if (obj && !IS_IMMEDIATE(obj)) {
-        obj->tethered = 1;
-    }
-}
-
-// Untether (on scope exit)
-static inline void untether_obj(Obj* obj) {
-    if (obj && !IS_IMMEDIATE(obj)) {
-        obj->tethered = 0;
-    }
-}
-
-// Fast deref with tether check
-static inline Obj* tethered_deref(Obj* obj, uint64_t expected_gen) {
-    if (!obj || IS_IMMEDIATE(obj)) return obj;
-    if (obj->tethered) return obj;  // Skip gen check!
-    return (obj->generation == expected_gen) ? obj : NULL;
-}
-```
-
-### Codegen Integration
-
-```go
-func (g *CodeGenerator) GenerateBorrowedAccess(varName string, expr string) string {
-    return fmt.Sprintf(`({
-        tether_obj(%s);
-        Obj* _result = %s;
-        untether_obj(%s);
-        _result;
-    })`, varName, expr, varName)
-}
+/* Scope Tethering (Zero-cost access) */
+SymTetherToken sym_tether_begin(SymComponent* c);
+void sym_tether_end(SymTetherToken token);
 ```
 
 ### Performance Impact
 
-For a function that accesses a borrowed reference 10 times:
-- Without tethering: 10 generation checks
-- With tethering: 1 tether + 10 fast accesses + 1 untether = ~3 ops
+For an island that is accessed 100 times:
+- Without tethering: 100 RC ops + 100 IPGE checks.
+- With tethering: 1 tether + 100 fast accesses + 1 untether = ~3 ops.
+- Improvement: **~97% reduction** in overhead for cyclic island access.
 
 ## Phase 3: Pool Allocation for Pure Regions
 

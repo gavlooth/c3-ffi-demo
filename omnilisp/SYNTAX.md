@@ -53,7 +53,7 @@ foo              ; Symbol
 
 ### Truthiness
 ```lisp
-; only false/nothing are falsy (0 and empty collections are truthy)
+; current C compiler/runtime: only false and nothing are falsy (0 and empty list are truthy)
 (if 0 1 2)   ; -> 2
 (if () 1 2)  ; -> 2
 ```
@@ -543,6 +543,18 @@ Guards extend the branch to 4 elements: `[pattern :when guard result]`
 (match n
   [x :when (> x 100) "big"]
   [x :when (> x 10) "medium"]
+  [_ "small"])
+```
+
+Guard expressions may be **any** expression. If the guard expression evaluates
+to a function (including a lambda literal), it is **invoked as a predicate**.
+The predicate receives the pattern-bound variables in left-to-right order. If
+the pattern binds no variables, the predicate is invoked with the full matched
+value.
+
+```lisp
+(match n
+  [x :when (lambda (x) (> x 10)) "medium-or-big"]
   [_ "small"])
 ```
 

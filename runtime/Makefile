@@ -21,8 +21,8 @@ MAIN_OBJECTS = $(MAIN_SOURCES:$(SRCDIR)/%.c=$(BUILDDIR)/%.o)
 
 # Memory module sources - slot pool for sound generational references
 # Also includes continuation-based concurrency (green threads, generators, promises)
-MEMORY_SOURCES = $(SRCDIR)/memory/slot_pool.c $(SRCDIR)/memory/handle.c $(SRCDIR)/memory/region.c $(SRCDIR)/memory/continuation.c
-MEMORY_OBJECTS = $(BUILDDIR)/memory/slot_pool.o $(BUILDDIR)/memory/handle.o $(BUILDDIR)/memory/region.o $(BUILDDIR)/memory/continuation.o
+MEMORY_SOURCES = $(SRCDIR)/memory/slot_pool.c $(SRCDIR)/memory/handle.c $(SRCDIR)/memory/region.c $(SRCDIR)/memory/continuation.c $(SRCDIR)/memory/component.c $(SRCDIR)/memory/symmetric.c
+MEMORY_OBJECTS = $(BUILDDIR)/memory/slot_pool.o $(BUILDDIR)/memory/handle.o $(BUILDDIR)/memory/region.o $(BUILDDIR)/memory/continuation.o $(BUILDDIR)/memory/component.o $(BUILDDIR)/memory/symmetric.o
 
 # Utility module sources - useful helpers for the runtime
 UTIL_SOURCES = $(wildcard $(SRCDIR)/util/*.c)
@@ -52,7 +52,7 @@ $(BUILDDIR)/util/%.o: $(SRCDIR)/util/%.c
 	$(CC) $(CFLAGS) -I$(INCDIR) -I$(SRCDIR) -c $< -o $@
 
 # Compile memory module files (stable slot pool for sound generational refs)
-$(BUILDDIR)/memory/%.o: $(SRCDIR)/memory/%.c $(SRCDIR)/memory/slot_pool.h
+$(BUILDDIR)/memory/%.o: $(SRCDIR)/memory/%.c $(SRCDIR)/memory/slot_pool.h $(SRCDIR)/memory/component.h $(SRCDIR)/memory/symmetric.h
 	$(CC) $(CFLAGS) -I$(INCDIR) -I$(SRCDIR) -I$(SRCDIR)/memory -c $< -o $@
 
 # Build static library

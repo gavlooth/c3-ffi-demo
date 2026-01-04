@@ -157,6 +157,7 @@ of this document describes the intended language design.
 
 **Truthiness**
 - Only `false` and `nothing` are falsy.
+- **Implementation note:** the current C compiler/runtime treats only `false` and `nothing` as falsy; numeric `0` and empty lists are truthy.
 
 ---
 
@@ -396,6 +397,22 @@ Guards extend the branch to 4 elements: `[pattern :when guard result]`
   [_ "small"])
 ```
 
+Guard expressions may be **any** expression. If the guard expression evaluates
+to a function (including a lambda literal), OmniLisp **invokes it automatically**
+as a predicate. The predicate receives the pattern-bound variables in
+left-to-right order. If the pattern binds no variables, the predicate is invoked
+with the full matched value.
+
+```lisp
+(match n
+  [x :when (lambda (x) (> x 10)) "medium-or-big"]
+  [_ "small"])
+
+(match value
+  [_ :when (lambda (v) (valid? v)) "ok"]
+  [_ "bad"])
+```
+
 Branch structure:
 - 2 elements: `[pattern result]`
 - 4 elements: `[pattern :when guard-expr result]`
@@ -625,7 +642,7 @@ can invoke restarts to resume execution at the signaling site.
     (parse-config-file new-path))
 
   (abort ()
-    nil))
+    nothing))
 ```
 
 #### 4.7.6 Invoke-Restart
@@ -687,11 +704,11 @@ Check if a restart is available:
   (retry () (connect-to-server)))
 ```
 
-**Abort**: Give up and return nil
+**Abort**: Give up and return nothing
 ```lisp
 (restart-case
   (dangerous-operation)
-  (abort () nil))
+  (abort () nothing))
 ```
 
 **Continue**: Proceed despite the condition
@@ -699,7 +716,7 @@ Check if a restart is available:
 (restart-case
   (when (check-fails?)
     (signal warning "check failed"))
-  (continue () nil))
+  (continue () nothing))
 ```
 
 #### 4.7.9 Implementation Notes

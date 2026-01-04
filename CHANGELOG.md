@@ -100,7 +100,11 @@ All 5 backlog items from ARCHITECTURE.md implemented with 99 new tests:
   - Debug mode: + Constraint refs (assert on free)
 
 - **Comprehensive Benchmarks** (`pkg/memory/benchmark_test.go`)
-  - Region, GenRef, Constraint, and Symmetric RC benchmarks
+  - Region, GenRef, Constraint, and Component Tethering benchmarks
+- Unbroken cycles default to Component Tethering instead of Arena
+- Runtime generator includes Component Tethering functions
+- Component-Level Scope Tethering for island-based cycle reclamation
+- Slab allocation for cyclic metadata (SymObj/SymComponent)
   - Baseline comparisons (raw pointer vs safety strategies)
   - Realistic workload benchmarks (closure-heavy, observer pattern)
 

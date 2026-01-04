@@ -183,6 +183,7 @@ void box_set(Obj* b, Obj* v);  /* Set boxed value */
 int is_int(Obj* p);            /* Is integer? */
 int is_char(Obj* p);           /* Is character? */
 int is_nil(Obj* x);            /* Is NULL? */
+int is_nothing(Obj* x);        /* Is nothing? */
 int is_stack_obj(Obj* x);      /* From stack pool? */
 int is_truthy(Obj* x);         /* Truthy for conditionals? */
 ```
@@ -193,25 +194,47 @@ int is_truthy(Obj* x);         /* Truthy for conditionals? */
 
 ### ASAP Strategy Overview
 
-OmniLisp uses **ASAP (As Static As Possible)** memory management:
+OmniLisp uses a **Hybrid Strategy** where the compiler selects the optimal tool for the data shape:
 
 ```
-Compile-Time Analysis:
 ┌─────────────────────────────────────────────────────────────────┐
-│  1. Shape Analysis: Tree / DAG / Cyclic                         │
-│  2. Escape Analysis: None / Arg / Global                        │
-│  3. Liveness Analysis: Last use of each variable                │
-│  4. Capture Tracking: Variables captured by closures            │
+│                    COMPILE-TIME ANALYSIS                         │
+│  Shape Analysis ──► TREE / DAG / CYCLIC                         │
+│  Escape Analysis ──► LOCAL / ESCAPING                           │
 └─────────────────────────────────────────────────────────────────┘
                               │
           ┌───────────────────┼───────────────────┐
           ▼                   ▼                   ▼
-       Tree/List             DAG            Cyclic Structure
+       **TREE**             **DAG**            **CYCLIC**
+   (Unique/Unshared)    (Shared/Acyclic)    (Back-Edges)
           │                   │                   │
-          ▼                   ▼                   ▼
-     free_tree()          dec_ref()         Arena/SCC/SymRC
-   (immediate free)    (standard RC)    (bulk or frozen cycles)
+          │                   │           ┌───────┴───────┐
+          │                   │           ▼               ▼
+          │                   │        **BROKEN**      **UNBROKEN**
+          │                   │      (Weak Refs)     (Strong Cycle)
+          │                   │           │               │
+          │                   │           │        ┌──────┴──────┐
+          │                   │           │        ▼             ▼
+          │                   │           │     **LOCAL**    **ESCAPING**
+          ▼                   ▼           ▼    (Scope-Bound) (Heap-Bound)
+      Pure ASAP           Standard RC     RC     Arena Alloc   Component
+     (free_tree)          (dec_ref)    (dec_ref) (destroy)     Tethering
 ```
+
+### Strategy Hierarchy (Fastest to Most Capable)
+
+1.  **Pure ASAP** (`free_tree`):
+    *   For **Trees** (lists, records).
+    *   **Zero overhead**. Static recursive free.
+2.  **Standard RC** (`dec_ref`):
+    *   For **DAGs** (shared data) or Cycles broken by **Weak Refs**.
+    *   Standard atomic refcounting.
+3.  **Arena Allocation** (`arena_destroy`):
+    *   For **Local Cyclic** data (doesn't escape function).
+    *   O(1) bulk free.
+4.  **Component Tethering** (`sym_release_handle`):
+    *   For **Escaping Cyclic** data (complex graphs).
+    *   Treats SCC as a unit. Zero-cost access via `sym_tether`.
 
 ### Reference Counting
 
@@ -329,37 +352,52 @@ void release_scc(SCC* scc);
 void detect_and_freeze_sccs(Obj* root);
 ```
 
-### Symmetric Reference Counting
+### Component-Level Scope Tethering
 
-For unbroken cycles with O(1) collection:
+For unbroken cycles with O(1) collection and zero-cost tethered access:
 
 ```c
-/* Enter/exit scope */
-SymScope* sym_enter_scope(void);
-void sym_exit_scope(void);
+/* Component Lifecycle */
+SymComponent* sym_component_new(void);
+void sym_component_add_member(SymComponent* c, SymObj* obj);
 
-/* Allocate object in current scope */
-SymObj* sym_alloc(Obj* data);
+/* Boundary Operations (ASAP called) */
+void sym_acquire_handle(SymComponent* c);
+void sym_release_handle(SymComponent* c);
 
-/* Create internal reference (from one object to another) */
-void sym_link(SymObj* from, SymObj* to);
+/* Scope Tethering (Zero-cost access) */
+SymTetherToken sym_tether_begin(SymComponent* c);
+void sym_tether_end(SymTetherToken token);
 
 /* Get underlying Obj* */
 Obj* sym_get_data(SymObj* obj);
 ```
 
-Key insight: Scope is treated as an object in the ownership graph.
+Key insight: Cyclic islands (SCCs) are treated as single units ("Components").
 
 ```c
 void example(void) {
-    sym_enter_scope();
+    SymComponent* c = sym_component_new();
+    sym_acquire_handle(c); // ASAP manages this handle
 
     SymObj* a = sym_alloc(mk_int(1));
     SymObj* b = sym_alloc(mk_int(2));
-    sym_link(a, b);  // a -> b (internal ref)
-    sym_link(b, a);  // b -> a (cycle!)
+    sym_component_add_member(c, a);
+    sym_component_add_member(c, b);
+    
+    // Create internal cycle
+    a->refs[0] = b;
+    b->refs[0] = a;
 
-    sym_exit_scope();  // Both a and b freed (external_rc = 0)
+    {
+        // Zero-cost access block
+        SymTetherToken t = sym_tether_begin(c);
+        process(a); 
+        process(b);
+        sym_tether_end(t);
+    }
+
+    sym_release_handle(c);  // Both a and b freed immediately
 }
 ```
 
@@ -1052,7 +1090,7 @@ bool region_bound_ref_is_valid(RegionBoundRef* ref);
 | Tree (no sharing) | ASAP immediate free | `free_tree()` |
 | DAG (sharing, no cycles) | Reference counting | `dec_ref()` |
 | Frozen cycles | SCC-based RC | `release_with_scc()` |
-| Unbroken cycles | Symmetric RC | `sym_exit_scope()` |
+| Unbroken cycles | Component Tethering | `sym_release_handle()` |
 | Scoped cyclic | Arena allocation | `arena_destroy()` |
 
 ### 2. Use Immediates When Possible

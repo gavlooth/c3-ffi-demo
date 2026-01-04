@@ -5,7 +5,8 @@
 The OmniLisp runtime is a mature C99 + POSIX runtime with:
 
 - **Core object model** with tagged pointers and immediate values
-- **Multiple memory strategies**: ASAP, RC, SCC, Arena, Symmetric RC
+- **Multiple memory strategies**: ASAP, RC, SCC, Arena, Component Tethering
+- [x] Component-Level Tethering for unbroken cycles (island units)
 - **Region-based memory**: IRegion interface with 5 allocator types
 - **Two-tier concurrency**: OS threads (pthreads) + Green threads (continuations)
 - **Generators/Iterators**: Lazy sequences via continuations

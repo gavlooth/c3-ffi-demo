@@ -12,7 +12,7 @@ See also:
 *   **Special forms:** `define`, `lambda`/`fn`, `let`, `let*`, `if`, `do`/`begin`
 *   **Bindings:** list-style `(let ((x 1) (y 2)) ...)` and array-style `(let [x 1 y 2] ...)`
 *   **Primitives:** `+ - * / %`, `< > <= >= =`, `cons car cdr null?`, `display print newline`
-*   **Truthiness:** only `false` and `nothing` are falsy
+*   **Truthiness:** only `false` and `nothing` are falsy; numeric `0` and empty lists are truthy
 
 ## Planned Design (Not Yet Implemented)
 ### Syntax & Aesthetics (planned)
@@ -33,7 +33,7 @@ See also:
 *   **Defaults:** `[name default]` or `[name Type default]` for parameters.
 
 ### Control & Error Handling (planned)
-*   **Truthiness:** only `false` and `nothing` are falsy.
+*   **Truthiness (design target):** only `false` and `nothing` are falsy.
 *   **Let modifiers:** `^:seq`/`^:rec` metadata.
 *   **Continuations:** native `prompt`/`control` plus TCO via trampolining.
 *   **Errors:** `error` + single `restart-case` in phase 1; full condition system deferred.
@@ -41,7 +41,7 @@ See also:
 
 ### Power Tools (planned)
 *   **Hygienic macros:** Racket-style `syntax-case`.
-*   **Pattern matching:** guards, `satisfies` predicates, and constructor patterns.
+*   **Pattern matching:** guards, `satisfies` predicates, constructor patterns; guard expressions may be any expression and lambdas are invoked as predicates.
 *   **Iterators & loops:** `iterate` protocol with `for`/`foreach` (multiple bindings are nested).
 *   **Sequences:** arrays are the primary mutable sequence; sequence ops work on any iterator.
 

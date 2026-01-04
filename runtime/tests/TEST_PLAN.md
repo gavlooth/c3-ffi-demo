@@ -154,15 +154,18 @@
 | `_deref_weak` | alive, dead | NULL |
 | `invalidate_weak_refs_for` | found, not found | NULL target |
 
-### 17. Symmetric RC (8 functions)
-| Function | Test Cases | Edge Cases |
-|----------|-----------|------------|
-| `sym_enter_scope` | normal, nested | |
-| `sym_exit_scope` | normal, with orphans | exit without enter |
-| `sym_alloc` | normal | NULL |
-| `sym_add_ref` | normal | NULL src/tgt |
-| `sym_inc_external` | normal | NULL |
-| `sym_dec_external` | to zero, above zero | NULL |
+### 17. Component Tethering (10 functions)
+- [x] `sym_component_new`: verify header allocation
+- [x] `sym_component_add_member`: verify island grouping
+- [x] `sym_acquire_handle`: verify boundary count
+- [x] `sym_release_handle`: verify immediate dismantle
+- [x] `sym_tether_begin`: verify zero-cost lock
+- [x] `sym_tether_end`: verify deferred dismantle
+- [x] `sym_dismantle_component`: verify edge cancellation
+- [x] `sym_cleanup`: verify thread-local cleanup
+- [x] `sym_alloc`: verify slab allocation
+- [x] `sym_get_data`: verify payload extraction
+
 
 ### 18. Channels (5 functions)
 | Function | Test Cases | Edge Cases |

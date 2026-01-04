@@ -222,6 +222,7 @@ void omni_codegen_runtime_header(CodeGenContext* ctx) {
         omni_codegen_emit_raw(ctx, "#include \"%s/include/omni.h\"\n\n", ctx->runtime_path);
         /* Compatibility macros for runtime */
         omni_codegen_emit_raw(ctx, "#define NIL mk_pair(NULL, NULL)\n");
+        omni_codegen_emit_raw(ctx, "#define NOTHING mk_nothing()\n");
         omni_codegen_emit_raw(ctx, "#define omni_print(o) prim_print(o)\n");
         omni_codegen_emit_raw(ctx, "#define car(o) obj_car(o)\n");
         omni_codegen_emit_raw(ctx, "#define cdr(o) obj_cdr(o)\n");
@@ -238,7 +239,7 @@ void omni_codegen_runtime_header(CodeGenContext* ctx) {
 
         /* Value type */
         omni_codegen_emit_raw(ctx, "typedef enum {\n");
-        omni_codegen_emit_raw(ctx, "    T_INT, T_SYM, T_CELL, T_NIL, T_PRIM, T_LAMBDA, T_CODE, T_ERROR\n");
+        omni_codegen_emit_raw(ctx, "    T_INT, T_SYM, T_CELL, T_NIL, T_NOTHING, T_PRIM, T_LAMBDA, T_CODE, T_ERROR\n");
         omni_codegen_emit_raw(ctx, "} Tag;\n\n");
 
         omni_codegen_emit_raw(ctx, "struct Obj;\n");
@@ -258,7 +259,9 @@ void omni_codegen_runtime_header(CodeGenContext* ctx) {
 
         /* Nil singleton */
         omni_codegen_emit_raw(ctx, "static Obj _nil = { .tag = T_NIL, .rc = 1 };\n");
-        omni_codegen_emit_raw(ctx, "#define NIL (&_nil)\n\n");
+        omni_codegen_emit_raw(ctx, "#define NIL (&_nil)\n");
+        omni_codegen_emit_raw(ctx, "static Obj _nothing = { .tag = T_NOTHING, .rc = 1 };\n");
+        omni_codegen_emit_raw(ctx, "#define NOTHING (&_nothing)\n\n");
 
         /* Heap Constructors */
         omni_codegen_emit_raw(ctx, "static Obj* mk_int(int64_t i) {\n");
@@ -271,6 +274,10 @@ void omni_codegen_runtime_header(CodeGenContext* ctx) {
         omni_codegen_emit_raw(ctx, "    Obj* o = malloc(sizeof(Obj));\n");
         omni_codegen_emit_raw(ctx, "    o->tag = T_SYM; o->rc = 1; o->s = strdup(s);\n");
         omni_codegen_emit_raw(ctx, "    return o;\n");
+        omni_codegen_emit_raw(ctx, "}\n\n");
+
+        omni_codegen_emit_raw(ctx, "static Obj* mk_bool(int v) {\n");
+        omni_codegen_emit_raw(ctx, "    return mk_sym(v ? \"true\" : \"false\");\n");
         omni_codegen_emit_raw(ctx, "}\n\n");
 
         omni_codegen_emit_raw(ctx, "static Obj* mk_cell(Obj* car, Obj* cdr) {\n");
@@ -307,16 +314,16 @@ void omni_codegen_runtime_header(CodeGenContext* ctx) {
         /* Accessors */
         omni_codegen_emit_raw(ctx, "#define car(o) ((o)->cell.car)\n");
         omni_codegen_emit_raw(ctx, "#define cdr(o) ((o)->cell.cdr)\n");
-        omni_codegen_emit_raw(ctx, "#define is_nil(o) ((o) == NIL || (o)->tag == T_NIL)\n\n");
+        omni_codegen_emit_raw(ctx, "#define is_nil(o) ((o) == NIL || ((o) && (o)->tag == T_NIL))\n\n");
 
         /* Reference counting and ownership-aware free strategies */
-        omni_codegen_emit_raw(ctx, "static void inc_ref(Obj* o) { if (o && o != NIL) o->rc++; }\n");
+        omni_codegen_emit_raw(ctx, "static void inc_ref(Obj* o) { if (o && o != NIL && o != NOTHING) o->rc++; }\n");
         omni_codegen_emit_raw(ctx, "static void dec_ref(Obj* o);\n");
         omni_codegen_emit_raw(ctx, "static void free_tree(Obj* o);\n\n");
 
         /* free_unique: Known single reference, no RC check needed */
         omni_codegen_emit_raw(ctx, "static void free_unique(Obj* o) {\n");
-        omni_codegen_emit_raw(ctx, "    if (!o || o == NIL) return;\n");
+        omni_codegen_emit_raw(ctx, "    if (!o || o == NIL || o == NOTHING) return;\n");
         omni_codegen_emit_raw(ctx, "    switch (o->tag) {\n");
         omni_codegen_emit_raw(ctx, "    case T_SYM: free(o->s); break;\n");
         omni_codegen_emit_raw(ctx, "    case T_CELL: free_unique(o->cell.car); free_unique(o->cell.cdr); break;\n");
@@ -328,7 +335,7 @@ void omni_codegen_runtime_header(CodeGenContext* ctx) {
 
         /* free_tree: Tree-shaped, recursive free (still checks RC for shared children) */
         omni_codegen_emit_raw(ctx, "static void free_tree(Obj* o) {\n");
-        omni_codegen_emit_raw(ctx, "    if (!o || o == NIL) return;\n");
+        omni_codegen_emit_raw(ctx, "    if (!o || o == NIL || o == NOTHING) return;\n");
         omni_codegen_emit_raw(ctx, "    if (o->rc > 1) { o->rc--; return; } /* Shared child - dec only */\n");
         omni_codegen_emit_raw(ctx, "    switch (o->tag) {\n");
         omni_codegen_emit_raw(ctx, "    case T_SYM: free(o->s); break;\n");
@@ -341,7 +348,7 @@ void omni_codegen_runtime_header(CodeGenContext* ctx) {
 
         /* free_obj: Standard RC-based free (dec_ref alias) */
         omni_codegen_emit_raw(ctx, "static void free_obj(Obj* o) {\n");
-        omni_codegen_emit_raw(ctx, "    if (!o || o == NIL) return;\n");
+        omni_codegen_emit_raw(ctx, "    if (!o || o == NIL || o == NOTHING) return;\n");
         omni_codegen_emit_raw(ctx, "    if (--o->rc > 0) return;\n");
         omni_codegen_emit_raw(ctx, "    switch (o->tag) {\n");
         omni_codegen_emit_raw(ctx, "    case T_SYM: free(o->s); break;\n");
@@ -410,7 +417,7 @@ void omni_codegen_runtime_header(CodeGenContext* ctx) {
 
         omni_codegen_emit_raw(ctx, "/* Reuse an object's memory for an integer */\n");
         omni_codegen_emit_raw(ctx, "static Obj* reuse_as_int(Obj* old, int64_t val) {\n");
-        omni_codegen_emit_raw(ctx, "    if (!old || old == NIL) return mk_int(val);\n");
+        omni_codegen_emit_raw(ctx, "    if (!old || old == NIL || old == NOTHING) return mk_int(val);\n");
         omni_codegen_emit_raw(ctx, "    /* Clear old content if needed */\n");
         omni_codegen_emit_raw(ctx, "    if (old->tag == T_SYM && old->s) free(old->s);\n");
         omni_codegen_emit_raw(ctx, "    else if (old->tag == T_CELL) {\n");
@@ -425,7 +432,7 @@ void omni_codegen_runtime_header(CodeGenContext* ctx) {
 
         omni_codegen_emit_raw(ctx, "/* Reuse an object's memory for a cell/cons */\n");
         omni_codegen_emit_raw(ctx, "static Obj* reuse_as_cell(Obj* old, Obj* car, Obj* cdr) {\n");
-        omni_codegen_emit_raw(ctx, "    if (!old || old == NIL) return mk_cell(car, cdr);\n");
+        omni_codegen_emit_raw(ctx, "    if (!old || old == NIL || old == NOTHING) return mk_cell(car, cdr);\n");
         omni_codegen_emit_raw(ctx, "    /* Clear old content if needed */\n");
         omni_codegen_emit_raw(ctx, "    if (old->tag == T_SYM && old->s) free(old->s);\n");
         omni_codegen_emit_raw(ctx, "    else if (old->tag == T_CELL) {\n");
@@ -441,7 +448,7 @@ void omni_codegen_runtime_header(CodeGenContext* ctx) {
 
         omni_codegen_emit_raw(ctx, "/* Reuse an object's memory for a float */\n");
         omni_codegen_emit_raw(ctx, "static Obj* reuse_as_float(Obj* old, double val) {\n");
-        omni_codegen_emit_raw(ctx, "    if (!old || old == NIL) return mk_float(val);\n");
+        omni_codegen_emit_raw(ctx, "    if (!old || old == NIL || old == NOTHING) return mk_float(val);\n");
         omni_codegen_emit_raw(ctx, "    /* Clear old content if needed */\n");
         omni_codegen_emit_raw(ctx, "    if (old->tag == T_SYM && old->s) free(old->s);\n");
         omni_codegen_emit_raw(ctx, "    else if (old->tag == T_CELL) {\n");
@@ -455,7 +462,7 @@ void omni_codegen_runtime_header(CodeGenContext* ctx) {
         omni_codegen_emit_raw(ctx, "}\n\n");
 
         omni_codegen_emit_raw(ctx, "/* Check if object can be reused (unique, about to be freed) */\n");
-        omni_codegen_emit_raw(ctx, "#define CAN_REUSE(o) ((o) && (o) != NIL && (o)->rc == 1)\n\n");
+        omni_codegen_emit_raw(ctx, "#define CAN_REUSE(o) ((o) && (o) != NIL && (o) != NOTHING && (o)->rc == 1)\n\n");
 
         omni_codegen_emit_raw(ctx, "/* Conditional reuse macro - falls back to fresh alloc if can't reuse */\n");
         omni_codegen_emit_raw(ctx, "#define REUSE_OR_NEW_INT(old, val) \\\n");
@@ -574,7 +581,7 @@ void omni_codegen_runtime_header(CodeGenContext* ctx) {
         omni_codegen_emit_raw(ctx, "#define RETURN_FRESH(v) (v)        /* Fresh allocation, caller must free */\n");
         omni_codegen_emit_raw(ctx, "#define RETURN_PASSTHROUGH(v) (v)  /* Returns a parameter, no new alloc */\n");
         omni_codegen_emit_raw(ctx, "#define RETURN_BORROWED(v) (v)     /* Borrowed ref, don't free */\n");
-        omni_codegen_emit_raw(ctx, "#define RETURN_NONE() NIL          /* Returns nil/void */\n\n");
+        omni_codegen_emit_raw(ctx, "#define RETURN_NONE() NOTHING      /* Returns nothing */\n\n");
 
         omni_codegen_emit_raw(ctx, "/* Caller-side ownership handling */\n");
         omni_codegen_emit_raw(ctx, "#define CALL_CONSUMED(arg, call_expr) \\\n");
@@ -590,7 +597,7 @@ void omni_codegen_runtime_header(CodeGenContext* ctx) {
         omni_codegen_emit_raw(ctx, "/* Ownership transfer assertion (debug builds) */\n");
         omni_codegen_emit_raw(ctx, "#ifndef NDEBUG\n");
         omni_codegen_emit_raw(ctx, "#define ASSERT_OWNED(o) do { \\\n");
-        omni_codegen_emit_raw(ctx, "    if ((o) && (o) != NIL && (o)->rc < 1) { \\\n");
+        omni_codegen_emit_raw(ctx, "    if ((o) && (o) != NIL && (o) != NOTHING && (o)->rc < 1) { \\\n");
         omni_codegen_emit_raw(ctx, "        fprintf(stderr, \"Ownership error: %%p has rc=%%d\\n\", (void*)(o), (o)->rc); \\\n");
         omni_codegen_emit_raw(ctx, "    } \\\n");
         omni_codegen_emit_raw(ctx, "} while(0)\n");
@@ -611,12 +618,12 @@ void omni_codegen_runtime_header(CodeGenContext* ctx) {
         omni_codegen_emit_raw(ctx, "static pthread_mutex_t _rc_mutex = PTHREAD_MUTEX_INITIALIZER;\n");
         omni_codegen_emit_raw(ctx, "#define ATOMIC_INC_REF(o) do { \\\n");
         omni_codegen_emit_raw(ctx, "    pthread_mutex_lock(&_rc_mutex); \\\n");
-        omni_codegen_emit_raw(ctx, "    if ((o) && (o) != NIL) (o)->rc++; \\\n");
+        omni_codegen_emit_raw(ctx, "    if ((o) && (o) != NIL && (o) != NOTHING) (o)->rc++; \\\n");
         omni_codegen_emit_raw(ctx, "    pthread_mutex_unlock(&_rc_mutex); \\\n");
         omni_codegen_emit_raw(ctx, "} while(0)\n\n");
         omni_codegen_emit_raw(ctx, "#define ATOMIC_DEC_REF(o) do { \\\n");
         omni_codegen_emit_raw(ctx, "    pthread_mutex_lock(&_rc_mutex); \\\n");
-        omni_codegen_emit_raw(ctx, "    if ((o) && (o) != NIL) { \\\n");
+        omni_codegen_emit_raw(ctx, "    if ((o) && (o) != NIL && (o) != NOTHING) { \\\n");
         omni_codegen_emit_raw(ctx, "        if (--(o)->rc <= 0) { \\\n");
         omni_codegen_emit_raw(ctx, "            pthread_mutex_unlock(&_rc_mutex); \\\n");
         omni_codegen_emit_raw(ctx, "            free_obj(o); \\\n");
@@ -628,10 +635,10 @@ void omni_codegen_runtime_header(CodeGenContext* ctx) {
         omni_codegen_emit_raw(ctx, "#else\n");
         omni_codegen_emit_raw(ctx, "/* Using __atomic builtins for GCC/Clang compatibility */\n");
         omni_codegen_emit_raw(ctx, "#define ATOMIC_INC_REF(o) do { \\\n");
-        omni_codegen_emit_raw(ctx, "    if ((o) && (o) != NIL) __atomic_add_fetch(&(o)->rc, 1, __ATOMIC_SEQ_CST); \\\n");
+        omni_codegen_emit_raw(ctx, "    if ((o) && (o) != NIL && (o) != NOTHING) __atomic_add_fetch(&(o)->rc, 1, __ATOMIC_SEQ_CST); \\\n");
         omni_codegen_emit_raw(ctx, "} while(0)\n\n");
         omni_codegen_emit_raw(ctx, "#define ATOMIC_DEC_REF(o) do { \\\n");
-        omni_codegen_emit_raw(ctx, "    if ((o) && (o) != NIL) { \\\n");
+        omni_codegen_emit_raw(ctx, "    if ((o) && (o) != NIL && (o) != NOTHING) { \\\n");
         omni_codegen_emit_raw(ctx, "        if (__atomic_sub_fetch(&(o)->rc, 1, __ATOMIC_SEQ_CST) <= 0) { \\\n");
         omni_codegen_emit_raw(ctx, "            free_obj(o); \\\n");
         omni_codegen_emit_raw(ctx, "        } \\\n");
@@ -745,10 +752,12 @@ void omni_codegen_runtime_header(CodeGenContext* ctx) {
 
         /* Print */
         omni_codegen_emit_raw(ctx, "static void print_obj(Obj* o) {\n");
-        omni_codegen_emit_raw(ctx, "    if (!o || is_nil(o)) { printf(\"()\"); return; }\n");
+        omni_codegen_emit_raw(ctx, "    if (!o || o == NOTHING) { printf(\"nothing\"); return; }\n");
+        omni_codegen_emit_raw(ctx, "    if (is_nil(o)) { printf(\"()\"); return; }\n");
         omni_codegen_emit_raw(ctx, "    switch (o->tag) {\n");
         omni_codegen_emit_raw(ctx, "    case T_INT: printf(\"%%ld\", (long)o->i); break;\n");
         omni_codegen_emit_raw(ctx, "    case T_SYM: printf(\"%%s\", o->s); break;\n");
+        omni_codegen_emit_raw(ctx, "    case T_NOTHING: printf(\"nothing\"); break;\n");
         omni_codegen_emit_raw(ctx, "    case T_CELL:\n");
         omni_codegen_emit_raw(ctx, "        printf(\"(\");\n");
         omni_codegen_emit_raw(ctx, "        while (!is_nil(o)) {\n");
@@ -769,16 +778,21 @@ void omni_codegen_runtime_header(CodeGenContext* ctx) {
         omni_codegen_emit_raw(ctx, "static Obj* prim_mul(Obj* a, Obj* b) { return mk_int(a->i * b->i); }\n");
         omni_codegen_emit_raw(ctx, "static Obj* prim_div(Obj* a, Obj* b) { return mk_int(a->i / b->i); }\n");
         omni_codegen_emit_raw(ctx, "static Obj* prim_mod(Obj* a, Obj* b) { return mk_int(a->i %% b->i); }\n");
-        omni_codegen_emit_raw(ctx, "static Obj* prim_lt(Obj* a, Obj* b) { return mk_int(a->i < b->i ? 1 : 0); }\n");
-        omni_codegen_emit_raw(ctx, "static Obj* prim_gt(Obj* a, Obj* b) { return mk_int(a->i > b->i ? 1 : 0); }\n");
-        omni_codegen_emit_raw(ctx, "static Obj* prim_le(Obj* a, Obj* b) { return mk_int(a->i <= b->i ? 1 : 0); }\n");
-        omni_codegen_emit_raw(ctx, "static Obj* prim_ge(Obj* a, Obj* b) { return mk_int(a->i >= b->i ? 1 : 0); }\n");
-        omni_codegen_emit_raw(ctx, "static Obj* prim_eq(Obj* a, Obj* b) { return mk_int(a->i == b->i ? 1 : 0); }\n");
+        omni_codegen_emit_raw(ctx, "static Obj* prim_lt(Obj* a, Obj* b) { return mk_bool(a->i < b->i ? 1 : 0); }\n");
+        omni_codegen_emit_raw(ctx, "static Obj* prim_gt(Obj* a, Obj* b) { return mk_bool(a->i > b->i ? 1 : 0); }\n");
+        omni_codegen_emit_raw(ctx, "static Obj* prim_le(Obj* a, Obj* b) { return mk_bool(a->i <= b->i ? 1 : 0); }\n");
+        omni_codegen_emit_raw(ctx, "static Obj* prim_ge(Obj* a, Obj* b) { return mk_bool(a->i >= b->i ? 1 : 0); }\n");
+        omni_codegen_emit_raw(ctx, "static Obj* prim_eq(Obj* a, Obj* b) { return mk_bool(a->i == b->i ? 1 : 0); }\n");
         omni_codegen_emit_raw(ctx, "static Obj* prim_cons(Obj* a, Obj* b) { inc_ref(a); inc_ref(b); return mk_cell(a, b); }\n");
         omni_codegen_emit_raw(ctx, "static Obj* prim_car(Obj* lst) { return is_nil(lst) ? NIL : car(lst); }\n");
         omni_codegen_emit_raw(ctx, "static Obj* prim_cdr(Obj* lst) { return is_nil(lst) ? NIL : cdr(lst); }\n");
-        omni_codegen_emit_raw(ctx, "static Obj* prim_null(Obj* o) { return mk_int(is_nil(o) ? 1 : 0); }\n");
-        omni_codegen_emit_raw(ctx, "static int is_truthy(Obj* o) { return o && o != NIL && (o->tag != T_INT || o->i != 0); }\n\n");
+        omni_codegen_emit_raw(ctx, "static Obj* prim_null(Obj* o) { return mk_bool(is_nil(o) ? 1 : 0); }\n");
+        omni_codegen_emit_raw(ctx, "static int is_truthy(Obj* o) {\n");
+        omni_codegen_emit_raw(ctx, "    if (!o) return 0;\n");
+        omni_codegen_emit_raw(ctx, "    if (o == NOTHING) return 0;\n");
+        omni_codegen_emit_raw(ctx, "    if (o->tag == T_SYM && o->s && strcmp(o->s, \"false\") == 0) return 0;\n");
+        omni_codegen_emit_raw(ctx, "    return 1;\n");
+        omni_codegen_emit_raw(ctx, "}\n\n");
     }
 }
 
@@ -802,7 +816,11 @@ static void codegen_sym(CodeGenContext* ctx, OmniValue* expr) {
     } else {
         /* Check for primitives */
         const char* name = expr->str_val;
-        if (strcmp(name, "+") == 0) omni_codegen_emit_raw(ctx, "prim_add");
+        if (strcmp(name, "true") == 0) {
+            omni_codegen_emit_raw(ctx, "mk_bool(1)");
+        } else if (strcmp(name, "false") == 0) {
+            omni_codegen_emit_raw(ctx, "mk_bool(0)");
+        } else if (strcmp(name, "+") == 0) omni_codegen_emit_raw(ctx, "prim_add");
         else if (strcmp(name, "-") == 0) omni_codegen_emit_raw(ctx, "prim_sub");
         else if (strcmp(name, "*") == 0) omni_codegen_emit_raw(ctx, "prim_mul");
         else if (strcmp(name, "/") == 0) omni_codegen_emit_raw(ctx, "prim_div");
@@ -838,8 +856,16 @@ static void codegen_quote(CodeGenContext* ctx, OmniValue* expr) {
         omni_codegen_emit_raw(ctx, "NIL");
     } else if (omni_is_int(val)) {
         omni_codegen_emit_raw(ctx, "mk_int(%ld)", (long)val->int_val);
+    } else if (omni_is_nothing(val)) {
+        omni_codegen_emit_raw(ctx, "NOTHING");
     } else if (omni_is_sym(val)) {
-        omni_codegen_emit_raw(ctx, "mk_sym(\"%s\")", val->str_val);
+        if (strcmp(val->str_val, "true") == 0) {
+            omni_codegen_emit_raw(ctx, "mk_bool(1)");
+        } else if (strcmp(val->str_val, "false") == 0) {
+            omni_codegen_emit_raw(ctx, "mk_bool(0)");
+        } else {
+            omni_codegen_emit_raw(ctx, "mk_sym(\"%s\")", val->str_val);
+        }
     } else if (omni_is_cell(val)) {
         /* Build list at runtime */
         omni_codegen_emit_raw(ctx, "mk_cell(");
@@ -865,10 +891,10 @@ static void codegen_if(CodeGenContext* ctx, OmniValue* expr) {
     codegen_expr(ctx, cond);
     omni_codegen_emit_raw(ctx, ") ? (");
     if (then_expr) codegen_expr(ctx, then_expr);
-    else omni_codegen_emit_raw(ctx, "NIL");
+    else omni_codegen_emit_raw(ctx, "NOTHING");
     omni_codegen_emit_raw(ctx, ") : (");
     if (else_expr) codegen_expr(ctx, else_expr);
-    else omni_codegen_emit_raw(ctx, "NIL");
+    else omni_codegen_emit_raw(ctx, "NOTHING");
     omni_codegen_emit_raw(ctx, "))");
 }
 
@@ -1015,7 +1041,7 @@ static void codegen_lambda(CodeGenContext* ctx, OmniValue* expr) {
         }
         omni_codegen_free(tmp);
     } else {
-        p += sprintf(p, "    return NIL;\n");
+        p += sprintf(p, "    return NOTHING;\n");
     }
 
     p += sprintf(p, "}");
@@ -1039,7 +1065,7 @@ static void codegen_define(CodeGenContext* ctx, OmniValue* expr) {
         if (!omni_is_nil(body)) {
             codegen_expr(ctx, omni_car(body));
         } else {
-            omni_codegen_emit_raw(ctx, "NIL");
+            omni_codegen_emit_raw(ctx, "NOTHING");
         }
         omni_codegen_emit_raw(ctx, ";\n");
         register_symbol(ctx, name_or_sig->str_val, c_name);
@@ -1090,7 +1116,7 @@ static void codegen_define(CodeGenContext* ctx, OmniValue* expr) {
             codegen_expr(ctx, result);
             omni_codegen_emit_raw(ctx, ";\n");
         } else {
-            omni_codegen_emit(ctx, "return NIL;\n");
+            omni_codegen_emit(ctx, "return NOTHING;\n");
         }
 
         omni_codegen_dedent(ctx);
@@ -1131,12 +1157,12 @@ static void codegen_apply(CodeGenContext* ctx, OmniValue* expr) {
             omni_codegen_emit_raw(ctx, "(omni_print(");
             if (!omni_is_nil(args)) codegen_expr(ctx, omni_car(args));
             else omni_codegen_emit_raw(ctx, "NIL");
-            omni_codegen_emit_raw(ctx, "), NIL)");
+            omni_codegen_emit_raw(ctx, "), NOTHING)");
             return;
         }
 
         if (strcmp(name, "newline") == 0) {
-            omni_codegen_emit_raw(ctx, "(printf(\"\\n\"), NIL)");
+            omni_codegen_emit_raw(ctx, "(printf(\"\\n\"), NOTHING)");
             return;
         }
     }
@@ -1223,6 +1249,9 @@ static void codegen_expr(CodeGenContext* ctx, OmniValue* expr) {
         break;
     case OMNI_SYM:
         codegen_sym(ctx, expr);
+        break;
+    case OMNI_NOTHING:
+        omni_codegen_emit_raw(ctx, "NOTHING");
         break;
     case OMNI_CELL:
         codegen_list(ctx, expr);
@@ -1369,11 +1398,47 @@ static void emit_ownership_free(CodeGenContext* ctx, const char* var_name, const
 
         case FREE_STRATEGY_RC:
         case FREE_STRATEGY_RC_TREE:
-        default:
             /* Shared/DAG/cyclic - use RC */
             omni_codegen_emit(ctx, "dec_ref(%s); /* %s */\n", c_name, strategy_name);
             break;
+
+        case FREE_STRATEGY_SCC_STATIC:
+            /* Static collection of known SCC */
+            omni_codegen_emit(ctx, "free_scc_static(%s); /* %s */\n", c_name, strategy_name);
+            break;
+
+        case FREE_STRATEGY_COMPONENT_RELEASE:
+            /* release_handle for component */
+            omni_codegen_emit(ctx, "sym_release_handle(%s->comp); /* %s */\n", c_name, strategy_name);
+            break;
+
+        default:
+            /* Unknown - conservative RC */
+            omni_codegen_emit(ctx, "dec_ref(%s); /* %s */\n", c_name, strategy_name);
+            break;
     }
+}
+
+void omni_codegen_emit_tethers(CodeGenContext* ctx, int position) {
+    if (!ctx->analysis) return;
+
+    /* Check for tether entries */
+    size_t tether_count;
+    TetherPoint** tethers = omni_get_tethers_at(ctx->analysis, position, &tether_count);
+    
+    for (size_t i = 0; i < tether_count; i++) {
+        TetherPoint* tp = tethers[i];
+        const char* c_name = lookup_symbol(ctx, tp->tethered_var);
+        if (c_name) {
+            if (tp->is_entry) {
+                omni_codegen_emit(ctx, "SymTetherToken _tether_%s = sym_tether_begin(%s->comp);\n", c_name, c_name);
+            } else {
+                omni_codegen_emit(ctx, "sym_tether_end(_tether_%s);\n", c_name);
+            }
+        }
+    }
+    
+    if (tethers) free(tethers);
 }
 
 void omni_codegen_emit_frees(CodeGenContext* ctx, int position) {
@@ -1402,6 +1467,22 @@ void omni_codegen_emit_scope_cleanup(CodeGenContext* ctx, const char** vars, siz
 }
 
 /* ============== CFG-Based Code Generation ============== */
+
+/*
+ * Emit tethers for a specific CFG node.
+ */
+void omni_codegen_emit_cfg_tethers(CodeGenContext* ctx, CFGNode* node) {
+    if (!ctx || !node || !ctx->analysis) return;
+
+    /* Emit tethers at node start */
+    omni_codegen_emit_tethers(ctx, node->position_start);
+    
+    /* If node has a different end position, emit those too 
+     * (though usually tethers are at boundaries) */
+    if (node->position_end != node->position_start) {
+        omni_codegen_emit_tethers(ctx, node->position_end);
+    }
+}
 
 void omni_codegen_emit_cfg_frees(CodeGenContext* ctx, CFG* cfg, CFGNode* node) {
     if (!ctx || !cfg || !node || !ctx->analysis) return;
@@ -1433,9 +1514,19 @@ void omni_codegen_emit_cfg_frees(CodeGenContext* ctx, CFG* cfg, CFGNode* node) {
 
                 case FREE_STRATEGY_RC:
                 case FREE_STRATEGY_RC_TREE:
+                    omni_codegen_emit(ctx, "dec_ref(%s); /* %s */\n", c_name, strategy_name);
+                    break;
+
+                case FREE_STRATEGY_SCC_STATIC:
+                    omni_codegen_emit(ctx, "free_scc_static(%s); /* %s */\n", c_name, strategy_name);
+                    break;
+
+                case FREE_STRATEGY_COMPONENT_RELEASE:
+                    omni_codegen_emit(ctx, "sym_release_handle(%s->comp); /* %s */\n", c_name, strategy_name);
+                    break;
+
                 default:
-                    omni_codegen_emit(ctx, "dec_ref(%s); /* CFG node %d: %s */\n",
-                                      c_name, node->id, strategy_name);
+                    omni_codegen_emit(ctx, "dec_ref(%s); /* %s */\n", c_name, strategy_name);
                     break;
             }
         }
@@ -1475,6 +1566,12 @@ void omni_codegen_with_cfg(CodeGenContext* ctx, OmniValue* expr) {
     /* Compute liveness */
     omni_compute_liveness(cfg, ctx->analysis);
 
+    /* Run static cycle analysis */
+    omni_analyze_static_symmetric(ctx->analysis, cfg);
+
+    /* Group SCCs into components */
+    omni_analyze_components(ctx->analysis, cfg);
+
     /* Compute free points */
     CFGFreePoint* free_points = omni_compute_cfg_free_points(cfg, ctx->analysis);
 
@@ -1491,6 +1588,11 @@ void omni_codegen_with_cfg(CodeGenContext* ctx, OmniValue* expr) {
             }
             omni_codegen_emit_raw(ctx, "*/\n");
         }
+    }
+
+    /* Print tether information as comments */
+    for (size_t i = 0; i < cfg->node_count; i++) {
+        omni_codegen_emit_cfg_tethers(ctx, cfg->nodes[i]);
     }
 
     /* Generate the actual code */

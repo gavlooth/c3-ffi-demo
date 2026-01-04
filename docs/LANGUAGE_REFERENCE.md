@@ -2,6 +2,8 @@
 
 OmniLisp is a stage-polymorphic language implementing the "Collapsing Towers of Interpreters" paradigm (Amin & Rompf, POPL 2018). It features compile-time memory management via ASAP (As Static As Possible) analysis.
 
+**Implementation status:** this reference mixes **current implementation** and **design target**. Sections explicitly marked “Design Target” are not yet implemented in the current C compiler/runtime (see `omnilisp/SUMMARY.md` and `docs/LANGUAGE_PARITY_PLAN.md`).
+
 ## Table of Contents
 
 1. [Data Types](#data-types)
@@ -18,6 +20,8 @@ OmniLisp is a stage-polymorphic language implementing the "Collapsing Towers of 
 ---
 
 ## Data Types
+
+**Implemented subset (current C compiler/runtime):** `define`, `lambda`/`fn`, `let`, `let*`, `if`, `do`/`begin`, and `quote` are the only special forms currently compiled. All other syntax in this reference is design target unless explicitly marked implemented elsewhere.
 
 ### Integers
 ```scheme
@@ -52,21 +56,29 @@ my-variable
 ### Lists (Pairs)
 ```scheme
 '(1 2 3)              ; quoted list
-(cons 1 (cons 2 nil)) ; explicit construction
+(cons 1 (cons 2 ())) ; explicit construction
 (list 1 2 3)          ; list primitive
 ```
 
-### Nil
+### Empty List
 ```scheme
-nil
+()
 '()
 ```
 
-### Booleans
-OmniLisp uses nil for false and any non-nil value for true. The symbol `t` is conventionally used for true.
+### Nothing
 ```scheme
-t      ; true
-nil    ; false
+nothing
+```
+
+### Booleans
+In the current C compiler/runtime, **only** `false` and `nothing` are falsy; all other values are truthy (including numeric `0` and empty lists).
+```scheme
+true      ; true
+false     ; false
+nothing   ; false
+0         ; true
+()        ; true
 ```
 
 ### Code Values
@@ -98,7 +110,7 @@ behavior for OmniLisp’s own core types and should be preserved for user-define
 | `Number` | `Int`, `Float`, `Char` (numeric family) |
 | `AbstractArray` | `Array` (mutable), `Tuple` (immutable), `List` (linked) |
 | `Dict` | `Dict` |
-| `Bool` | `nil` (false) / `t` (true) |
+| `Bool` | `false` / `true` |
 | `Nothing` | `nothing` |
 | `Function` | `lambda`, `prim` |
 
@@ -153,8 +165,8 @@ core operators and should be the baseline for extensions.
 (letrec ((even? (lambda (n)
                   (if (= n 0) t (odd? (- n 1)))))
          (odd? (lambda (n)
-                 (if (= n 0) nil (even? (- n 1))))))
-  (even? 10))             ; => t
+                 (if (= n 0) false (even? (- n 1))))))
+  (even? 10))             ; => true
 ```
 
 ### if - Conditional
@@ -191,10 +203,10 @@ core operators and should be the baseline for extensions.
 ### and / or - Short-Circuit Logic
 ```scheme
 (and expr1 expr2 ...)      ; returns first falsy or last value
-(or expr1 expr2 ...)       ; returns first truthy or nil
+(or expr1 expr2 ...)       ; returns first truthy or false
 
-(and (> 5 3) (< 2 4))      ; => t
-(or nil nil 42)            ; => 42
+(and (> 5 3) (< 2 4))      ; => true
+(or false nothing 42)      ; => 42
 ```
 
 ### do - Sequence Expressions
@@ -213,7 +225,9 @@ core operators and should be the baseline for extensions.
 
 ---
 
-## Pattern Matching
+## Pattern Matching (Design Target)
+
+**Note:** `match` is part of the design target and is not yet implemented in the current C compiler/runtime.
 
 ### match - Pattern Matching
 ```scheme
@@ -287,6 +301,17 @@ core operators and should be the baseline for extensions.
   (_ 'zero))
 ```
 
+Guard expressions may be **any** expression. If the guard expression evaluates to a function
+(including a lambda literal), it is **invoked as a predicate** with the pattern-bound
+variables in left-to-right order. If the pattern binds no variables, the predicate is
+invoked with the full matched value.
+
+```scheme
+(match n
+  ((x :when (lambda (x) (> x 10))) 'big)
+  (_ 'small))
+```
+
 ---
 
 ## Primitives
@@ -303,12 +328,12 @@ core operators and should be the baseline for extensions.
 ### Comparison
 | Operator | Description | Example |
 |----------|-------------|---------|
-| `=` | Equality | `(= 1 1)` => t |
-| `<` | Less than | `(< 1 2)` => t |
-| `>` | Greater than | `(> 2 1)` => t |
-| `<=` | Less or equal | `(<= 1 1)` => t |
-| `>=` | Greater or equal | `(>= 2 2)` => t |
-| `not` | Logical not | `(not nil)` => t |
+| `=` | Equality | `(= 1 1)` => true |
+| `<` | Less than | `(< 1 2)` => true |
+| `>` | Greater than | `(> 2 1)` => true |
+| `<=` | Less or equal | `(<= 1 1)` => true |
+| `>=` | Greater or equal | `(>= 2 2)` => true |
+| `not` | Logical not | `(not false)` => true |
 
 ### List Operations
 | Function | Description | Example |
@@ -316,7 +341,7 @@ core operators and should be the baseline for extensions.
 | `cons` | Construct pair | `(cons 1 '(2 3))` => (1 2 3) |
 | `car` / `fst` | First element | `(car '(1 2 3))` => 1 |
 | `cdr` / `snd` | Rest of list | `(cdr '(1 2 3))` => (2 3) |
-| `null?` | Is nil? | `(null? '())` => t |
+| `null?` | Is empty list? | `(null? '())` => true |
 | `list` | Make list | `(list 1 2 3)` => (1 2 3) |
 | `length` | List length | `(length '(1 2 3))` => 3 |
 | `append` | Concatenate | `(append '(1 2) '(3 4))` => (1 2 3 4) |
@@ -460,7 +485,7 @@ The evaluator uses 9 handlers that can be customized:
 ```scheme
 ; (defmacro name (params...) body scope)
 (defmacro when (cond body)
-  `(if ,cond ,body nil)
+  `(if ,cond ,body nothing)
   ; scope - code using the macro
   (mcall when (> 5 3) 'yes))  ; => yes
 ```
@@ -488,7 +513,7 @@ The evaluator uses 9 handlers that can be customized:
 ```scheme
 ; Conditional execution
 (defmacro when (cond body)
-  `(if ,cond ,body nil)
+  `(if ,cond ,body nothing)
   ...)
 
 ; Local binding shorthand

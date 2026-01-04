@@ -280,8 +280,8 @@ use(x);
 
 ;; Cycle test: weak edges prevent leaks
 (deftype Node (value int) (next Node) (prev Node :weak))
-(let ((a (mk-Node 1 nil nil))
-      (b (mk-Node 2 a nil)))
+(let ((a (mk-Node 1 () ()))
+      (b (mk-Node 2 a ())))
   (set! (Node-prev a) b)
   (Node-value a))
 ```
@@ -307,7 +307,7 @@ use(x);
           (display y))))
   (chan-send! ch x)
   ;; x is dead here - transferred to goroutine
-  nil)
+  nothing)
 
 ;; Shared variable: atomic RC
 (let ((x (cons 1 2)))

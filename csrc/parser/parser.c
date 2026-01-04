@@ -83,7 +83,7 @@ static OmniValue* act_sym(PikaState* state, size_t pos, PikaMatch match) {
     char* s = malloc(match.len + 1);
     memcpy(s, state->input + pos, match.len);
     s[match.len] = '\0';
-    OmniValue* v = omni_new_sym(s);
+    OmniValue* v = (strcmp(s, "nothing") == 0) ? omni_nothing : omni_new_sym(s);
     free(s);
     return v;
 }

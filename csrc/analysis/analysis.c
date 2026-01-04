@@ -161,12 +161,25 @@ static void free_channel_ops(ChannelOpInfo* c) {
     }
 }
 
+static void free_components(ComponentInfo* c) {
+    while (c) {
+        ComponentInfo* next = c->next;
+        for (size_t i = 0; i < c->handle_count; i++) {
+            free(c->handles[i]);
+        }
+        free(c->handles);
+        free(c);
+        c = next;
+    }
+}
+
 void omni_analysis_free(AnalysisContext* ctx) {
     if (!ctx) return;
     free_var_usages(ctx->var_usages);
     free_escape_info(ctx->escape_info);
     free_owner_info(ctx->owner_info);
     free_shape_info(ctx->shape_info);
+    free_components(ctx->components);
     free_reuse_candidates(ctx->reuse_candidates);
     free_regions(ctx->regions);
     free_rc_elision(ctx->rc_elision);
@@ -262,6 +275,7 @@ static OwnerInfo* find_or_create_owner_info(AnalysisContext* ctx, const char* na
     o->must_free = true;
     o->free_pos = -1;
     o->is_unique = true;      /* Assume unique until proven otherwise */
+    o->is_static_scc = false;
     o->shape = SHAPE_UNKNOWN; /* Will be refined by shape analysis */
     o->alloc_strategy = ALLOC_HEAP; /* Default to heap, refined by escape analysis */
     o->next = ctx->owner_info;
@@ -595,6 +609,11 @@ void omni_analyze(AnalysisContext* ctx, OmniValue* expr) {
 void omni_analyze_program(AnalysisContext* ctx, OmniValue** exprs, size_t count) {
     for (size_t i = 0; i < count; i++) {
         analyze_expr(ctx, exprs[i]);
+    }
+    
+    /* Second pass: borrow/tether analysis */
+    for (size_t i = 0; i < count; i++) {
+        omni_analyze_borrows(ctx, exprs[i]);
     }
 }
 
@@ -1008,6 +1027,8 @@ const char* omni_free_strategy_name(FreeStrategy strategy) {
         case FREE_STRATEGY_TREE:    return "tree";
         case FREE_STRATEGY_RC:      return "rc";
         case FREE_STRATEGY_RC_TREE: return "rc_tree";
+        case FREE_STRATEGY_SCC_STATIC: return "scc_static";
+        case FREE_STRATEGY_COMPONENT_RELEASE: return "component_release";
         default:                    return "unknown";
     }
 }
@@ -1024,6 +1045,21 @@ FreeStrategy omni_get_free_strategy(AnalysisContext* ctx, const char* name) {
     /* If not must_free, don't emit a free */
     if (!o->must_free) {
         return FREE_STRATEGY_NONE;
+    }
+
+    /* Static SCC collection takes precedence for cyclic data */
+    if (o->is_static_scc) {
+        /* Check if it's a handle to a static component */
+        for (ComponentInfo* ci = ctx->components; ci; ci = ci->next) {
+            if (ci->is_static) {
+                for (size_t i = 0; i < ci->handle_count; i++) {
+                    if (strcmp(ci->handles[i], name) == 0) {
+                        return FREE_STRATEGY_COMPONENT_RELEASE;
+                    }
+                }
+            }
+        }
+        return FREE_STRATEGY_SCC_STATIC;
     }
 
     /* Determine strategy based on uniqueness and shape */

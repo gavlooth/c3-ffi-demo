@@ -241,15 +241,13 @@ closure_validate(Closure*)         // Check captures valid
 closure_release(Closure*)
 ```
 
-## Symmetric RC
-
-```c
-sym_enter_scope()                  // Push scope
-sym_exit_scope()                   // Pop scope, collect
-sym_alloc(Obj* data)               // Alloc in current scope
-sym_link(SymObj* from, SymObj* to) // Internal reference
-sym_get_data(SymObj*)              // Get Obj*
-```
+## Component Tethering (Cyclic Islands)
+- `sym_component_new()`: Create unit of reclamation
+- `sym_acquire_handle(c)`: Increment handle count (ASAP managed)
+- `sym_release_handle(c)`: Decrement handle count
+- `sym_tether_begin(c)`: Zero-cost scoped access
+- `sym_tether_end(t)`: Release scope tether
+- `sym_component_add_member(c, obj)`: Add object to island
 
 ## SCC-Based RC
 
