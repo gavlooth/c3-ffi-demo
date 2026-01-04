@@ -548,6 +548,49 @@ The evaluator uses 9 handlers that can be customized:
 (assert (> x 0) 'must-be-positive)  ; with message
 ```
 
+### Condition System (Runtime)
+
+OmniLisp uses a structured condition system inspired by Common Lisp. Conditions are typed error objects with slots for structured information.
+
+**Condition Type Hierarchy:**
+```
+:condition
+├── :error
+│   ├── :type-error
+│   ├── :arithmetic-error
+│   │   └── :division-by-zero
+│   ├── :unbound-variable
+│   ├── :undefined-function
+│   ├── :memory-error
+│   │   ├── :use-after-free
+│   │   ├── :double-free
+│   │   └── :region-mismatch
+│   ├── :ffi-error
+│   │   ├── :ffi-type-mismatch
+│   │   └── :ffi-load-error
+│   └── :io-error
+│       ├── :file-error
+│       └── :end-of-file
+└── :warning
+    ├── :style-warning
+    └── :deprecation-warning
+```
+
+**Condition Slots:**
+- `:error` conditions have a `message` slot
+- `:type-error` has `expected`, `got`, and `datum` slots
+- `:unbound-variable` and `:undefined-function` have a `name` slot
+- `:memory-error` has an `address` slot
+- `:ffi-error` has a `function` slot
+
+**Example output:**
+```
+:type-error: Expected integer, got string
+  at program.omni:42:10
+  expected: integer
+  got: string
+```
+
 ---
 
 ## Examples

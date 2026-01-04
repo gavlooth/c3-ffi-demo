@@ -16,6 +16,9 @@
 /* Sound generational references - slot pool never frees to system allocator */
 #include "memory/slot_pool.h"
 
+/* Structured condition system */
+#include "condition.h"
+
 /* ========== Tagged Pointers (Multi-Type Immediates) ========== */
 /*
  * 3-bit tag scheme for immediate values (no heap allocation):
@@ -191,6 +194,7 @@ typedef enum {
     TAG_CLOSURE,
     TAG_CHANNEL,        /* Pthread-based channel (OS threads) */
     TAG_ERROR,
+    TAG_CONDITION,      /* Structured condition object */
     TAG_ATOM,           /* Pthread-based atom (OS threads) */
     TAG_THREAD,         /* OS thread handle */
     /* Continuation-based concurrency (green threads) */
@@ -536,6 +540,52 @@ Obj* mk_error(const char* msg) {
     return x;
 }
 
+/* Create an Obj wrapping a Condition* */
+Obj* mk_condition_obj(Condition* cond) {
+    if (!cond) return NULL;
+    Obj* x = malloc(sizeof(Obj));
+    if (!x) return NULL;
+    x->mark = 1;
+    x->scc_id = -1;
+    x->is_pair = 0;
+    x->scan_tag = 0;
+    x->tag = TAG_CONDITION;
+    x->generation = _next_generation();
+    x->ptr = cond;
+    return x;
+}
+
+/* Extract Condition* from an Obj */
+Condition* obj_get_condition(Obj* obj) {
+    if (!obj || obj->tag != TAG_CONDITION) return NULL;
+    return (Condition*)obj->ptr;
+}
+
+/* Create error Obj from condition type and message */
+Obj* mk_error_condition(ConditionType* type, const char* msg) {
+    Condition* cond = condition_create_with_message(type, msg);
+    if (!cond) return mk_error(msg);  /* Fallback to old style */
+    return mk_condition_obj(cond);
+}
+
+/* Convenience: create a structured type error */
+Obj* mk_type_error_obj(const char* expected, const char* got, Obj* datum) {
+    Condition* cond = make_type_error(expected, got, datum);
+    return mk_condition_obj(cond);
+}
+
+/* Convenience: create unbound variable error */
+Obj* mk_unbound_error_obj(const char* name) {
+    Condition* cond = make_unbound_variable(name);
+    return mk_condition_obj(cond);
+}
+
+/* Convenience: create undefined function error */
+Obj* mk_undefined_fn_error_obj(const char* name) {
+    Condition* cond = make_undefined_function(name);
+    return mk_condition_obj(cond);
+}
+
 Obj* mk_int_stack(long i) {
     if (STACK_PTR < STACK_POOL_SIZE) {
         Obj* x = &STACK_POOL[STACK_PTR++];
@@ -601,6 +651,9 @@ void release_children(Obj* x) {
     case TAG_ERROR:
         if (x->ptr) free(x->ptr);
         break;
+    case TAG_CONDITION:
+        if (x->ptr) condition_free((Condition*)x->ptr);
+        break;
     case TAG_CHANNEL:
         if (x->ptr) free_channel_obj(x);
         break;
@@ -637,6 +690,9 @@ void free_tree(Obj* x) {
     case TAG_SYM:
     case TAG_ERROR:
         if (x->ptr) free(x->ptr);
+        break;
+    case TAG_CONDITION:
+        if (x->ptr) condition_free((Condition*)x->ptr);
         break;
     default:
         if (x->tag >= TAG_USER_BASE) {
@@ -1034,6 +1090,10 @@ void release_scc(SCC* scc) {
                 } else if (obj->ptr && (obj->tag == TAG_SYM || obj->tag == TAG_ERROR)) {
                     /* These have dynamically allocated strings */
                     free(obj->ptr);
+                    obj->ptr = NULL;
+                } else if (obj->ptr && obj->tag == TAG_CONDITION) {
+                    /* Condition has structured data */
+                    condition_free((Condition*)obj->ptr);
                     obj->ptr = NULL;
                 }
                 invalidate_weak_refs_for(obj);
@@ -1701,6 +1761,8 @@ void legacy_init(void) {
     if (!g_legacy_ctx) {
         g_legacy_ctx = legacy_context_new();
     }
+    /* Initialize condition system for structured errors */
+    condition_init();
 }
 
 static GenObj* legacy_alloc(LegacyGenContext* ctx, void* data, void (*destructor)(void*)) {
@@ -3556,9 +3618,13 @@ void exception_cleanup(ExceptionContext* ctx) {
 void exception_throw(Obj* value) {
     if (!g_exception_ctx) {
         /* No handler - print and abort */
-        fprintf(stderr, "Uncaught exception: ");
-        if (value && value->tag == TAG_ERROR && value->ptr) {
-            fprintf(stderr, "%s\n", (char*)value->ptr);
+        fprintf(stderr, "Uncaught exception:\n");
+        if (value && value->tag == TAG_CONDITION && value->ptr) {
+            /* Structured condition - print full details */
+            condition_print_full((Condition*)value->ptr);
+        } else if (value && value->tag == TAG_ERROR && value->ptr) {
+            /* Legacy error - just message */
+            fprintf(stderr, ":error: %s\n", (char*)value->ptr);
         } else {
             fprintf(stderr, "<unknown>\n");
         }
