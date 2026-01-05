@@ -118,13 +118,10 @@ Reader conditionals select the first matching feature key; `:else` provides a fa
 Typed literals expand to constructor calls (e.g., `#uuid"..."` -> `(uuid "...")`).
 
 ### 1.4 Collections
-*   **Lists:** Sequential linked lists. Use for ordered data and multiple return values.
-*   **Arrays:** Indexed sequential storage. `[]` literals produce arrays.
-*   **Dicts:** Key-value maps using `#{}` syntax. Keywords callable as getters: `(:name obj)`.
-
-All collections are mutable. Use naming convention for functional vs mutating operations:
-- `(sort xs)` → returns new sorted list
-- `(sort! xs)` → mutates xs in place
+*   **Arrays:** Primary mutable sequence. `[]` literals produce mutable arrays.
+*   **Lists:** Secondary persistent linked lists.
+*   **Tuples:** Fixed-size immutable records for multiple returns.
+*   **Dicts:** Key-value maps using `#{}` syntax (deferred to later phases).
 
 ### 1.5 Object Model
 Multiple Dispatch (Julia-style). No class-based OOP.
@@ -163,6 +160,7 @@ of this document describes the intended language design.
 - Strings: `str`, `string-append`, `string-length`, `string-ref`, `substring`
 - Higher-order: `map`, `filter`, `reduce`, `range`, `partial`, `compose`, `identity`
 - Files: `open`, `close`, `read-line`, `read-all`, `write-string`, `write-line`
+- Tuples: `tuple`, `tuple?`, `tuple-ref`, `named-tuple`
 - Control: `handle`/`perform`/`resume` (algebraic effects), `with-open-file`, `error`
 
 **Truthiness**
@@ -175,111 +173,60 @@ of this document describes the intended language design.
 
 This section provides complete documentation for features implemented in the C runtime.
 
-### 1.8.1 Core Data Structures
+### 1.8.1 Tuples
 
-OmniLisp has three core collection types. All are mutable; use operation conventions for immutable style.
-
-```lisp
-;; Lists - sequential, linked
-(list 1 2 3)
-(cons 1 (list 2 3))        ; -> (1 2 3)
-(car xs)                   ; first element
-(cdr xs)                   ; rest of list
-
-;; Arrays - sequential, indexed, contiguous
-[1 2 3]
-(array-ref arr 0)          ; -> 1
-(array-set! arr 0 99)      ; mutate in place
-
-;; Dicts - associative, key-value
-#{:name "Alice" :age 30}
-(get person :name)         ; -> "Alice"
-(set! person :age 31)      ; mutate
-```
-
-#### Multiple Return Values
-
-Use lists for returning multiple values, with destructuring to unpack:
+Tuples are immutable, fixed-size collections. Use them for returning multiple values or grouping related data.
 
 ```lisp
+;; Create a tuple
+(tuple 1 2 3)              ; -> (__tuple__ 1 2 3)
+(tuple "name" 42 true)     ; Mixed types allowed
+
+;; Type predicate
+(tuple? (tuple 1 2))       ; -> true
+(tuple? [1 2])             ; -> false (that's an array)
+
+;; Access elements by index (0-based)
+(define t (tuple 10 20 30))
+(tuple-ref t 0)            ; -> 10
+(tuple-ref t 1)            ; -> 20
+(tuple-ref t 2)            ; -> 30
+
+;; Common use: multiple return values
 (define (min-max a b)
   (if (< a b)
-      (list a b)
-      (list b a)))
+      (tuple a b)
+      (tuple b a)))
 
-(define [lo hi] (min-max 5 3))
-lo                         ; -> 3
-hi                         ; -> 5
+(define result (min-max 5 3))
+(tuple-ref result 0)       ; -> 3 (min)
+(tuple-ref result 1)       ; -> 5 (max)
 ```
 
-#### Named/Structured Data
+### 1.8.2 Named Tuples
 
-Use dicts for structured data with named fields:
+Named tuples are tuples with field names, providing readable access to elements.
 
 ```lisp
-(define person #{:name "Alice" :age 30 :active true})
+;; Create a named tuple with field names
+(named-tuple [x 10] [y 20])        ; -> (__named_tuple__ (x . 10) (y . 20))
+(named-tuple [name "Alice"] [age 30] [active true])
 
-;; Access
-(get person :name)         ; -> "Alice"
-(:name person)             ; -> "Alice" (keyword as getter)
-person.name                ; -> "Alice" (dot syntax)
+;; Access by field name
+(define point (named-tuple [x 10] [y 20]))
+(get point 'x)             ; -> 10
+(get point 'y)             ; -> 20
 
-;; In higher-order functions
-(map :name users)          ; extract all names
-(filter :active users)     ; filter by field
+;; Useful for structured data without defining a struct
+(define (make-user name email)
+  (named-tuple [name name] [email email] [created (current-time)]))
+
+(define user (make-user "Bob" "bob@example.com"))
+(get user 'name)           ; -> "Bob"
+(get user 'email)          ; -> "bob@example.com"
 ```
 
-### 1.8.2 Mutation Convention
-
-Operations follow a naming convention:
-- `op` - returns new value, original unchanged
-- `op!` - mutates in place, returns nothing
-
-```lisp
-;; Functional style (returns new)
-(define sorted (sort items))     ; items unchanged
-(define reversed (reverse xs))   ; xs unchanged
-(define updated (assoc person :age 31))  ; person unchanged
-
-;; Mutating style (modifies in place)
-(sort! items)              ; items is now sorted
-(reverse! xs)              ; xs is now reversed
-(set! person :age 31)      ; person modified
-
-;; Array operations
-(push items 4)             ; -> new array with 4 appended
-(push! items 4)            ; mutates items, appends 4
-
-;; Choose based on need:
-;; - Functional for clarity and safety
-;; - Mutating for performance in tight loops
-```
-
-### 1.8.3 Keywords as Getters
-
-Keywords (symbols starting with `:`) are callable as getter functions:
-
-```lisp
-;; Keyword extracts field from dict
-(:name person)             ; -> "Alice"
-(:age person)              ; -> 30
-
-;; Powerful with higher-order functions
-(define users [#{:name "Alice" :age 30}
-               #{:name "Bob" :age 25}
-               #{:name "Carol" :age 35}])
-
-(map :name users)          ; -> ("Alice" "Bob" "Carol")
-(map :age users)           ; -> (30 25 35)
-(filter :active users)     ; keep where :active is truthy
-(sort-by :age users)       ; sort by age field
-
-;; Compose with other operations
-(define get-names (partial map :name))
-(get-names users)          ; -> ("Alice" "Bob" "Carol")
-```
-
-### 1.8.4 Partial Application
+### 1.8.3 Partial Application
 
 `partial` creates a new function with some arguments pre-filled.
 

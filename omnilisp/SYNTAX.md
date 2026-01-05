@@ -294,48 +294,16 @@ data.items.(0)             ; nested dict then array access
 (with-fibers body...)     ; Scoped fiber execution
 ```
 
-### Core Collections (Implemented)
+### Tuples & Named Tuples (Implemented)
 ```lisp
-;; Lists - sequential, linked
-(list 1 2 3)              ; Create list
-(cons 1 (list 2 3))       ; -> (1 2 3)
-(car xs)                  ; First element
-(cdr xs)                  ; Rest of list
+;; Tuples - immutable fixed-size collections
+(tuple 1 2 3)             ; Create tuple
+(tuple? x)                ; Type predicate
+(tuple-ref t 0)           ; Get element at index
 
-;; Arrays - sequential, indexed
-[1 2 3]                   ; Array literal
-(array-ref arr 0)         ; -> 1
-(array-set! arr 0 99)     ; Mutate in place
-
-;; Dicts - associative, key-value
-#{:name "Alice" :age 30}  ; Dict literal
-(get person :name)        ; -> "Alice"
-(:name person)            ; -> "Alice" (keyword as getter)
-person.name               ; -> "Alice" (dot syntax)
-```
-
-### Keywords as Getters (Implemented)
-```lisp
-;; Keywords are callable - extract field from dict
-(:name person)            ; -> "Alice"
-
-;; Powerful with map/filter
-(map :name users)         ; Extract all names
-(filter :active users)    ; Keep where :active is truthy
-(sort-by :age users)      ; Sort by age field
-```
-
-### Mutation Convention (Implemented)
-```lisp
-;; op returns new value, op! mutates in place
-(sort items)              ; -> new sorted list
-(sort! items)             ; mutates items
-
-(reverse xs)              ; -> new reversed
-(reverse! xs)             ; mutates xs
-
-(push arr 4)              ; -> new array with 4
-(push! arr 4)             ; mutates arr
+;; Named tuples - tuples with field names
+(named-tuple [x 1] [y 2]) ; Create named tuple with fields
+(get nt 'x)               ; Access by field name
 ```
 
 ### Partial Application & Composition (Implemented)
