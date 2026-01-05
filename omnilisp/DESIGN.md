@@ -161,7 +161,7 @@ of this document describes the intended language design.
 - Higher-order: `map`, `filter`, `reduce`, `range`, `partial`, `compose`, `identity`
 - Files: `open`, `close`, `read-line`, `read-all`, `write-string`, `write-line`
 - Tuples: `tuple`, `tuple?`, `tuple-ref`, `named-tuple`
-- Control: `try`/`catch`/`finally`, `with-open-file`, `error`
+- Control: `handle`/`perform`/`resume` (algebraic effects), `with-open-file`, `error`
 
 **Truthiness**
 - Only `false` and `nothing` are falsy.
@@ -386,59 +386,132 @@ y                          ; -> 2
 ;; rest is ignored
 ```
 
-### 1.8.9 Exception Handling: try/catch/finally
+### 1.8.9 Exception Handling with Effects
 
-Simplified exception handling for common error cases. For resumable effects, use algebraic effects.
+OmniLisp uses algebraic effects for all error handling. The `:abort` mode provides traditional exception semantics.
 
 ```lisp
-;; Basic try/catch
-(try
-  (/ 10 0)
-  (catch e
-    (println "Error:" e)
-    0))                    ; -> 0 (caught division error)
+;; Define an error effect (abort mode = no resume)
+(define {effect fail} :abort (payload String))
+
+;; Basic error handling
+(handle
+  (do
+    (when (= b 0)
+      (perform fail "Division by zero"))
+    (/ a b))
+  (fail (msg _)
+    (println "Error:" msg)
+    0))                    ; -> 0 on error
 
 ;; Catch and return default
-(define (safe-parse str)
-  (try
-    (parse-int str)
-    (catch e
-      nothing)))
+(define (safe-divide a b)
+  (handle
+    (do
+      (when (= b 0)
+        (perform fail "Division by zero"))
+      (/ a b))
+    (fail (_ _) nothing)))
 
-(safe-parse "42")          ; -> 42
-(safe-parse "abc")         ; -> nothing
+(safe-divide 10 2)         ; -> 5
+(safe-divide 10 0)         ; -> nothing
 
-;; With finally (always executes)
-(define (read-config path)
-  (try
-    (let [f (open path :read)]
-      (try
-        (parse-json (read-all f))
-        (finally
-          (close f))))     ; Always close, even on error
-    (catch e
-      (println "Failed to read config:" e)
-      (default-config))))
+;; Using the built-in error effect
+(handle
+  (do
+    (error "Something went wrong")
+    (println "Never reached"))
+  (error (msg _)
+    (str "Caught: " msg))) ; -> "Caught: Something went wrong"
 
-;; Signaling errors
-(define (divide a b)
-  (if (= b 0)
-      (error "Division by zero")
-      (/ a b)))
+;; Nested handlers (inner can re-signal to outer)
+(handle
+  (handle
+    (perform fail "inner error")
+    (fail (msg _)
+      (perform fail (str "Wrapped: " msg))))
+  (fail (msg _)
+    (println "Outer caught:" msg)))
+```
 
-(try
-  (divide 10 0)
+#### Defining try/catch/finally as Macros
+
+If you prefer familiar try/catch syntax, define it as a macro over effects:
+
+```lisp
+;; Define try/catch macro
+(define [syntax try-catch]
+  [(try-catch body (catch var handler))
+   (handle body
+     (error (var _) handler))])
+
+;; Usage:
+(try-catch
+  (error "oops")
   (catch e
-    (str "Caught: " e)))   ; -> "Caught: Division by zero"
+    (str "Caught: " e)))   ; -> "Caught: oops"
 
-;; Nested try blocks
+;; With finally (cleanup always runs)
+(define [syntax try-finally]
+  [(try-finally body (finally cleanup))
+   (let [result (handle
+                  (let [r body] (tuple :ok r))
+                  (error (e _) (tuple :err e)))]
+     cleanup
+     (match result
+       [(tuple :ok v) v]
+       [(tuple :err e) (error e)]))])
+
+;; Full try/catch/finally
+(define [syntax try]
+  [(try body (catch var handler) (finally cleanup))
+   (let [result (handle
+                  (let [r body] (tuple :ok r))
+                  (error (var _) (tuple :caught handler)))]
+     cleanup
+     (match result
+       [(tuple :ok v) v]
+       [(tuple :caught v) v]
+       [(tuple :err e) (error e)]))]
+  [(try body (catch var handler))
+   (handle body (error (var _) handler))]
+  [(try body (finally cleanup))
+   (try-finally body (finally cleanup))])
+
+;; Now you can use familiar syntax:
 (try
-  (try
-    (risky-operation)
-    (catch e
-      (error (str "Wrapped: " e))))  ; Re-throw wrapped
+  (risky-operation)
   (catch e
-    (println "Outer caught:" e)))
+    (println "Error:" e)
+    :default)
+  (finally
+    (cleanup-resources)))
+```
+
+#### Common Patterns
+
+```lisp
+;; Result type pattern (like Rust)
+(define {effect fail} :abort (payload String))
+
+(define (try-result body)
+  (handle
+    (tuple :ok (body))
+    (fail (e _) (tuple :err e))))
+
+(match (try-result (fn [] (parse-config path)))
+  [(tuple :ok config) (use-config config)]
+  [(tuple :err msg) (println "Failed:" msg)])
+
+;; Option type pattern (returns nothing on error)
+(define (try-option body)
+  (handle
+    (body)
+    (fail (_ _) nothing)))
+
+(define config (try-option (fn [] (parse-config path))))
+(when (nothing? config)
+  (println "Using defaults"))
 ```
 
 ### 1.8.10 Automatic Resource Management: with-open-file

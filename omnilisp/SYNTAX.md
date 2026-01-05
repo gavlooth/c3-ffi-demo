@@ -322,32 +322,38 @@ data.items.(0)             ; nested dict then array access
 (map identity xs)         ; -> xs
 ```
 
-### try/catch/finally (Implemented)
-Simplified exception handling syntax. For full algebraic effects, see `handle`/`perform`/`resume`.
+### Exception Handling with Effects (Implemented)
+OmniLisp uses algebraic effects for error handling. Use `:abort` mode for non-resumable exceptions.
 
 ```lisp
-;; Basic try/catch
-(try
-  (risky-operation)
-  (catch e
-    (println "Caught:" e)
+;; Define an error effect
+(define {effect fail} :abort (payload String))
+
+;; Handle errors
+(handle
+  (do
+    (when (= x 0)
+      (perform fail "Cannot be zero"))
+    (process x))
+  (fail (msg _)
+    (println "Error:" msg)
     :default-value))
 
-;; With finally clause (always runs)
-(try
-  (do
-    (open-resource)
-    (process))
+;; Built-in error effect
+(handle
+  (error "something went wrong")
+  (error (msg _)
+    (str "Caught: " msg)))
+
+;; Define try/catch as macro if you prefer that syntax:
+(define [syntax try-catch]
+  [(try-catch body (catch var handler))
+   (handle body (error (var _) handler))])
+
+(try-catch
+  (risky-operation)
   (catch e
-    (println "Error:" e))
-  (finally
-    (close-resource)))
-
-;; Error signaling
-(error "something went wrong")
-
-;; Note: For resumable effects, use algebraic effects:
-;; (handle (perform my-effect payload) (my-effect (p k) (resume k result)))
+    (println "Caught:" e)))
 ```
 
 ### with-open-file (Implemented)

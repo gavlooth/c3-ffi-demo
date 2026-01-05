@@ -9,12 +9,12 @@ See also:
 
 ## Implemented (C Compiler)
 *   **Core syntax:** lists `(...)`, arrays `[...]`, quote `'x`, comments `; ...`
-*   **Special forms:** `define`, `lambda`/`fn`, `let`, `let*`, `if`, `do`/`begin`, `match`, `try`/`catch`/`finally`, `with-open-file`
+*   **Special forms:** `define`, `lambda`/`fn`, `let`, `let*`, `if`, `do`/`begin`, `match`, `handle`/`perform`, `with-open-file`
 *   **Bindings:** list-style `(let ((x 1) (y 2)) ...)`, array-style `(let [x 1 y 2] ...)`, destructuring `(define [a b c] xs)`
 *   **Parameters:** default values `[x default]`, named arguments `(f :arg value)`, variadic `.. rest`
 *   **Primitives:** `+ - * / %`, `< > <= >= =`, `cons car cdr empty?`, `print println`, `str`, `map filter reduce partial compose identity`
 *   **Data types:** tuples `(tuple ...)`, named-tuples `(named-tuple [x 1] ...)`, arrays, dicts, enums with data
-*   **Control:** algebraic effects (`handle`/`perform`/`resume`), `try`/`catch`/`finally` (simplified), `with-open-file`, fibers & channels
+*   **Control:** algebraic effects (`handle`/`perform`/`resume`) for all errors, `with-open-file`, fibers & channels
 *   **Truthiness:** only `false` and `nothing` are falsy; numeric `0` and empty lists are truthy
 
 ## Planned Design (Not Yet Implemented)
