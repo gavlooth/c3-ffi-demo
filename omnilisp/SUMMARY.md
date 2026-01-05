@@ -13,7 +13,7 @@ See also:
 *   **Bindings:** list-style `(let ((x 1) (y 2)) ...)`, array-style `(let [x 1 y 2] ...)`, destructuring `(define [a b c] xs)`
 *   **Parameters:** default values `[x default]`, named arguments `(f :arg value)`, variadic `.. rest`
 *   **Primitives:** `+ - * / %`, `< > <= >= =`, `cons car cdr empty?`, `print println`, `str`, `map filter reduce partial compose identity`
-*   **Data types:** lists, arrays, dicts - keywords as getters `(:field obj)`, `op` vs `op!` mutation convention
+*   **Data types:** lists, arrays, dicts - dot notation `obj.field`, `op` vs `op!` mutation convention
 *   **Control:** algebraic effects (`handle`/`perform`/`resume`) for all errors, `with-open-file`, fibers & channels
 *   **Truthiness:** only `false` and `nothing` are falsy; numeric `0` and empty lists are truthy
 

@@ -120,7 +120,7 @@ Typed literals expand to constructor calls (e.g., `#uuid"..."` -> `(uuid "...")`
 ### 1.4 Collections
 *   **Lists:** Sequential linked lists. Use for ordered data and multiple return values.
 *   **Arrays:** Indexed sequential storage. `[]` literals produce arrays.
-*   **Dicts:** Key-value maps using `#{}` syntax. Keywords callable as getters: `(:name obj)`.
+*   **Dicts:** Key-value maps using `#{}` syntax. Dot notation for access: `obj.field`.
 
 All collections are mutable. Use naming convention for functional vs mutating operations:
 - `(sort xs)` → returns new sorted list
@@ -219,14 +219,16 @@ Use dicts for structured data with named fields:
 ```lisp
 (define person #{:name "Alice" :age 30 :active true})
 
-;; Access
-(get person :name)         ; -> "Alice"
-(:name person)             ; -> "Alice" (keyword as getter)
-person.name                ; -> "Alice" (dot syntax)
+;; Access with dot notation
+person.name                ; -> "Alice"
+person.age                 ; -> 30
 
-;; In higher-order functions
-(map :name users)          ; extract all names
-(filter :active users)     ; filter by field
+;; Or explicit get
+(get person :name)         ; -> "Alice"
+
+;; In higher-order functions (.field is a getter function)
+(map .name users)          ; extract all names
+(filter .active users)     ; filter by field
 ```
 
 ### 1.8.2 Mutation Convention
@@ -255,28 +257,33 @@ Operations follow a naming convention:
 ;; - Mutating for performance in tight loops
 ```
 
-### 1.8.3 Keywords as Getters
+### 1.8.3 Dot Notation Access
 
-Keywords (symbols starting with `:`) are callable as getter functions:
+Dot notation provides clean field access for dicts and nested structures:
 
 ```lisp
-;; Keyword extracts field from dict
-(:name person)             ; -> "Alice"
-(:age person)              ; -> 30
+;; Basic field access
+person.name                ; -> "Alice"
+person.age                 ; -> 30
+
+;; Chained access
+company.ceo.name           ; -> nested access
+
+;; Equivalent to:
+(get person :name)         ; explicit get
+
+;; Functional accessor (.field returns a function)
+.name                      ; -> (lambda (x) (get x :name))
 
 ;; Powerful with higher-order functions
 (define users [#{:name "Alice" :age 30}
                #{:name "Bob" :age 25}
                #{:name "Carol" :age 35}])
 
-(map :name users)          ; -> ("Alice" "Bob" "Carol")
-(map :age users)           ; -> (30 25 35)
-(filter :active users)     ; keep where :active is truthy
-(sort-by :age users)       ; sort by age field
-
-;; Compose with other operations
-(define get-names (partial map :name))
-(get-names users)          ; -> ("Alice" "Bob" "Carol")
+(map .name users)          ; -> ("Alice" "Bob" "Carol")
+(map .age users)           ; -> (30 25 35)
+(filter .active users)     ; keep where .active is truthy
+(sort-by .age users)       ; sort by age field
 ```
 
 ### 1.8.4 Partial Application

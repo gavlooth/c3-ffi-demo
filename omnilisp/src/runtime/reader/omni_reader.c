@@ -201,18 +201,18 @@ static Value* read_form(Reader* r) {
         return read_string(r);
     }
 
-    // :foo is a keyword symbol - self-evaluating symbol with : prefix
+    // :foo is sugar for 'foo (quoted symbol)
     if (c == ':') {
+        advance(r);  // skip the colon
         char buf[256];
         int len = 0;
-        buf[len++] = advance(r);  // include the colon
         while (is_sym_char(peek(r)) && len < 255) {
             buf[len++] = peek(r);
             advance(r);
         }
         buf[len] = '\0';
-        // Return as a symbol with : prefix - will be self-evaluating
-        return mk_sym(buf);
+        // Return (quote foo) - same as 'foo
+        return mk_cell(mk_sym("quote"), mk_cell(mk_sym(buf), mk_nil()));
     }
 
     // .field is sugar for (lambda (x) (get x 'field)) - getter function

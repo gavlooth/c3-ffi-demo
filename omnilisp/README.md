@@ -10,7 +10,7 @@ The repo currently ships a small C compiler/runtime subset. The rest of the lang
 *   **Bindings:** list-style `(let ((x 1) (y 2)) ...)`, array-style `(let [x 1 y 2] ...)`, destructuring `(define [a b c] xs)`
 *   **Default params:** `(define (f [x default]) ...)` with named arguments `(f :x value)`
 *   **Primitives:** `+ - * / %`, `< > <= >= =`, `cons car cdr empty?`, `print println`, `str`, `map filter reduce partial compose`
-*   **Data types:** lists, arrays `[1 2 3]`, dicts `#{:a 1}` - keywords as getters `(:name obj)`
+*   **Data types:** lists, arrays `[1 2 3]`, dicts `#{:a 1}` - dot notation `obj.field`
 *   **Control flow:** algebraic effects (`handle`/`perform`/`resume`) for all error handling, `with-open-file` auto-close
 *   **Truthiness:** only `false` and `nothing` are falsy; everything else is truthy (including numeric `0` and empty lists)
 

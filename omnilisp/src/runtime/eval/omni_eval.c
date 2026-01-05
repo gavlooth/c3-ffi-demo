@@ -522,7 +522,6 @@ static int is_special_form(Value* sym) {
         "with-fibers",  // Fiber scoped construct
         "with-open-file",  // File I/O with auto-close
         "|>", "pipe",  // Pipe/threading operator
-        "named-tuple",  // Named tuple literal
         NULL
     };
     for (int i = 0; forms[i]; i++) {
@@ -839,33 +838,7 @@ static Value* eval_special_form(Value* op, Value* args, Env* env) {
     // with-open-file
     if (strcmp(name, "with-open-file") == 0) return eval_with_open_file(args, env);
 
-    // named-tuple special form
-    if (strcmp(name, "named-tuple") == 0) {
-        // (named-tuple [x 1] [y 2]) -> (__named_tuple__ (x . 1) (y . 2))
-        Value* entries = mk_nil();
-        Value** tail = &entries;
-
-        while (!is_nil(args)) {
-            Value* item = car(args);
-            // item should be (array name value) form where [x 1] parses as (array x 1)
-            if (item && item->tag == T_CELL && car(item) && car(item)->tag == T_SYM &&
-                strcmp(car(item)->s, "array") == 0) {
-                Value* name_sym = car(cdr(item));
-                Value* value_expr = car(cdr(cdr(item)));
-                if (name_sym && name_sym->tag == T_SYM) {
-                    // Evaluate only the value, not the name
-                    Value* value = omni_eval(value_expr, env);
-                    if (is_error(value)) return value;
-                    // Create (name . value) pair
-                    *tail = mk_cell(mk_cell(name_sym, value), mk_nil());
-                    tail = &((*tail)->cell.cdr);
-                }
-            }
-            args = cdr(args);
-        }
-
-        return mk_cell(mk_sym("__named_tuple__"), entries);
-    }
+    // named-tuple removed - use dicts instead
 
     // Effect system (algebraic effects)
     if (strcmp(name, "defeffect") == 0) return eval_defeffect(args, env);
@@ -3541,112 +3514,7 @@ static Value* prim_array_slice(Value* args) {
     return mk_cell(mk_sym("__array__"), result);
 }
 
-// ===== Tuple primitives =====
-
-// Helper: check if value is a tuple (__tuple__ marker)
-static int is_tuple(Value* v) {
-    return v && v->tag == T_CELL && car(v) && car(v)->tag == T_SYM &&
-           strcmp(car(v)->s, "__tuple__") == 0;
-}
-
-// Helper: get tuple elements (skips __tuple__ marker)
-static Value* tuple_elements(Value* tuple) {
-    return is_tuple(tuple) ? cdr(tuple) : mk_nil();
-}
-
-static Value* prim_tuple(Value* args) {
-    // Build tuple from args: (tuple 1 2 3) -> (__tuple__ 1 2 3)
-    return mk_cell(mk_sym("__tuple__"), args);
-}
-
-static Value* prim_tuple_q(Value* args) {
-    return mk_sym(is_tuple(car(args)) ? "true" : "false");
-}
-
-static Value* prim_tuple_ref(Value* args) {
-    Value* tuple = car(args);
-    Value* idx = car(cdr(args));
-    if (!is_tuple(tuple)) return mk_error("tuple-ref: expected tuple");
-    if (!idx || idx->tag != T_INT) return mk_error("tuple-ref: expected integer index");
-
-    long i = idx->i;
-    if (i < 0) return mk_error("tuple-ref: negative index");
-
-    Value* elems = tuple_elements(tuple);
-    while (i > 0 && !is_nil(elems)) {
-        elems = cdr(elems);
-        i--;
-    }
-    if (is_nil(elems)) return mk_error("tuple-ref: index out of bounds");
-    return car(elems);
-}
-
-static Value* prim_tuple_length(Value* args) {
-    Value* tuple = car(args);
-    if (!is_tuple(tuple)) return mk_error("tuple-length: expected tuple");
-
-    long len = 0;
-    Value* elems = tuple_elements(tuple);
-    while (!is_nil(elems)) {
-        len++;
-        elems = cdr(elems);
-    }
-    return mk_int(len);
-}
-
-// ===== Named Tuple primitives =====
-
-// Helper: check if value is a named tuple (__named_tuple__ marker)
-static int is_named_tuple(Value* v) {
-    return v && v->tag == T_CELL && car(v) && car(v)->tag == T_SYM &&
-           strcmp(car(v)->s, "__named_tuple__") == 0;
-}
-
-static Value* prim_named_tuple(Value* args) {
-    // Build named tuple from args: (named-tuple [x 1] [y 2])
-    // Each [name value] parses as (array name value)
-    Value* entries = mk_nil();
-    Value** tail = &entries;
-
-    while (!is_nil(args)) {
-        Value* item = car(args);
-        // item should be (array name value) form
-        if (item && item->tag == T_CELL && car(item) && car(item)->tag == T_SYM &&
-            strcmp(car(item)->s, "array") == 0) {
-            Value* name = car(cdr(item));
-            Value* value = car(cdr(cdr(item)));
-            if (name && name->tag == T_SYM) {
-                // Create (name . value) pair
-                *tail = mk_cell(mk_cell(name, value), mk_nil());
-                tail = &((*tail)->cell.cdr);
-            }
-        }
-        args = cdr(args);
-    }
-
-    return mk_cell(mk_sym("__named_tuple__"), entries);
-}
-
-static Value* prim_named_tuple_q(Value* args) {
-    return mk_sym(is_named_tuple(car(args)) ? "true" : "false");
-}
-
-static Value* prim_named_tuple_ref(Value* args) {
-    Value* nt = car(args);
-    Value* key = car(cdr(args));
-    if (!is_named_tuple(nt)) return mk_error("named-tuple-ref: expected named-tuple");
-
-    Value* entries = cdr(nt);  // Skip marker
-    while (!is_nil(entries)) {
-        Value* pair = car(entries);
-        Value* k = car(pair);
-        if (k && key && k->tag == T_SYM && key->tag == T_SYM) {
-            if (strcmp(k->s, key->s) == 0) return cdr(pair);
-        }
-        entries = cdr(entries);
-    }
-    return mk_nothing();  // Key not found
-}
+// Tuples and named-tuples removed - use lists and dicts instead
 
 // ===== Partial Application =====
 
@@ -6028,16 +5896,7 @@ Env* omni_env_init(void) {
     register_primitive("array-set!", 3, prim_array_set);
     register_primitive("array-slice", -1, prim_array_slice);
 
-    // Tuple primitives
-    register_primitive("tuple", -1, prim_tuple);
-    register_primitive("tuple?", 1, prim_tuple_q);
-    register_primitive("tuple-ref", 2, prim_tuple_ref);
-    register_primitive("tuple-length", 1, prim_tuple_length);
-
-    // Named-tuple primitives
-    register_primitive("named-tuple", -1, prim_named_tuple);
-    register_primitive("named-tuple?", 1, prim_named_tuple_q);
-    register_primitive("named-tuple-ref", 2, prim_named_tuple_ref);
+    // Tuples and named-tuples removed - use lists and dicts
 
     // Functional primitives
     register_primitive("partial", -1, prim_partial);

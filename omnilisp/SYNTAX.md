@@ -131,11 +131,21 @@ data.items.(0)             ; nested dict then array access
 ```
 
 ### Symbols & Quote Sugar (Implemented)
+
+OmniLisp has **no separate keyword type**. The `:foo` syntax is purely reader
+sugar for `'foo` (a quoted symbol). They produce identical values:
+
 ```lisp
-;; :foo is sugar for 'foo (quoted symbol)
+;; :foo is sugar for 'foo - both produce the symbol foo
 :foo                       ; -> foo (the symbol)
 'foo                       ; -> foo (the symbol)
-(= :foo 'foo)              ; -> true
+(= :foo 'foo)              ; -> true (identical)
+
+;; This means dict keys and dot notation work uniformly:
+(define person #{:name "Alice" :age 30})
+person.name                ; -> "Alice" (dot notation)
+(get person :name)         ; -> "Alice" (explicit get with :key)
+(get person 'name)         ; -> "Alice" (equivalent - 'name = :name)
 
 ;; Symbols are self-evaluating when quoted
 (symbol? :foo)             ; -> true
@@ -309,20 +319,24 @@ data.items.(0)             ; nested dict then array access
 
 ;; Dicts - associative, key-value
 #{:name "Alice" :age 30}  ; Dict literal
-(get person :name)        ; -> "Alice"
-(:name person)            ; -> "Alice" (keyword as getter)
-person.name               ; -> "Alice" (dot syntax)
+person.name               ; -> "Alice" (dot notation)
+(get person :name)        ; -> "Alice" (explicit get)
 ```
 
-### Keywords as Getters (Implemented)
+### Dot Notation Access (Implemented)
 ```lisp
-;; Keywords are callable - extract field from dict
-(:name person)            ; -> "Alice"
+;; Dot notation for field access
+person.name               ; -> "Alice"
+person.age                ; -> 30
+company.ceo.name          ; Chained access
+
+;; .field is a getter function
+.name                     ; -> (lambda (x) (get x :name))
 
 ;; Powerful with map/filter
-(map :name users)         ; Extract all names
-(filter :active users)    ; Keep where :active is truthy
-(sort-by :age users)      ; Sort by age field
+(map .name users)         ; Extract all names
+(filter .active users)    ; Keep where .active is truthy
+(sort-by .age users)      ; Sort by age field
 ```
 
 ### Mutation Convention (Implemented)
