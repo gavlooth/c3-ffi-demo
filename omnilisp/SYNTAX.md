@@ -323,6 +323,8 @@ data.items.(0)             ; nested dict then array access
 ```
 
 ### try/catch/finally (Implemented)
+Simplified exception handling syntax. For full algebraic effects, see `handle`/`perform`/`resume`.
+
 ```lisp
 ;; Basic try/catch
 (try
@@ -331,7 +333,7 @@ data.items.(0)             ; nested dict then array access
     (println "Caught:" e)
     :default-value))
 
-;; With finally clause
+;; With finally clause (always runs)
 (try
   (do
     (open-resource)
@@ -343,6 +345,9 @@ data.items.(0)             ; nested dict then array access
 
 ;; Error signaling
 (error "something went wrong")
+
+;; Note: For resumable effects, use algebraic effects:
+;; (handle (perform my-effect payload) (my-effect (p k) (resume k result)))
 ```
 
 ### with-open-file (Implemented)
@@ -366,20 +371,19 @@ data.items.(0)             ; nested dict then array access
 (str x)                   ; Convert any value to string
 ```
 
-### Keyword Arguments (Implemented)
+### Named Arguments (Implemented)
 ```lisp
-;; Keywords are symbols starting with : (self-evaluating)
+;; Symbols starting with : are self-evaluating (used for named args)
 :foo                      ; -> :foo (not quoted)
-(keyword? :foo)           ; -> true
 
 ;; Functions with default parameters
 (define (greet name [greeting "Hello"])
   (str greeting ", " name "!"))
 
-;; Call with keyword argument
+;; Call with named argument - overrides default by parameter name
 (greet "Bob" :greeting "Hi")  ; -> "Hi, Bob!"
 
-;; Keywords override defaults by name
+;; Named arguments match parameter names
 (define (make-point [x 0] [y 0]) (list x y))
 (make-point :y 5)         ; -> (0 5)
 ```

@@ -144,7 +144,7 @@ of this document describes the intended language design.
 - List-style: `(let ((x 1) (y 2)) ...)`
 - Array-style: `(let [x 1 y 2] ...)` (used as a binding container)
 - Default parameters: `(define (f [x default]) ...)`
-- Keyword arguments: `(f :arg value)` - keywords are self-evaluating symbols
+- Named arguments: `(f :arg value)` - symbols starting with `:` are self-evaluating
 - Destructuring: `(define [a b c] (list 1 2 3))` and `(define [x .. rest] xs)`
 
 **Literals**
