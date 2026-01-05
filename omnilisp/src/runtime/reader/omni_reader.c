@@ -20,13 +20,19 @@ static void skip_comment(Reader* r);
 // Character predicates
 static int is_digit(char c) { return c >= '0' && c <= '9'; }
 static int is_alpha(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
+// Check if byte is part of a UTF-8 multibyte sequence (high bit set)
+// This allows Unicode identifiers like λ, π, α, etc.
+static int is_utf8_byte(unsigned char c) { return c >= 0x80; }
+
 static int is_sym_start(char c) {
     return is_alpha(c) || c == '_' || c == '+' || c == '-' || c == '*' ||
            c == '/' || c == '=' || c == '<' || c == '>' || c == '!' ||
-           c == '?' || c == '&' || c == '%' || c == '|' || c == '.';
+           c == '?' || c == '&' || c == '%' || c == '|' || c == '.' ||
+           is_utf8_byte((unsigned char)c);
 }
 static int is_sym_char(char c) {
-    return is_sym_start(c) || is_digit(c) || c == ':' || c == '\'';
+    return is_sym_start(c) || is_digit(c) || c == ':' || c == '\'' ||
+           is_utf8_byte((unsigned char)c);
 }
 static int is_whitespace(char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == ',';
@@ -195,12 +201,39 @@ static Value* read_form(Reader* r) {
         return read_string(r);
     }
 
-    // Keyword :foo
+    // :foo is sugar for 'foo (quoted symbol)
     if (c == ':') {
-        advance(r);
-        Value* sym = read_symbol(r);
-        if (is_error(sym)) return sym;
-        return mk_cell(mk_sym("quote"), mk_cell(sym, mk_nil()));
+        advance(r);  // skip the colon
+        char buf[256];
+        int len = 0;
+        while (is_sym_char(peek(r)) && len < 255) {
+            buf[len++] = peek(r);
+            advance(r);
+        }
+        buf[len] = '\0';
+        // (quote foo)
+        return mk_cell(mk_sym("quote"), mk_cell(mk_sym(buf), mk_nil()));
+    }
+
+    // .field is sugar for (lambda (x) (get x 'field)) - getter function
+    if (c == '.' && (is_alpha(peek_n(r, 1)) || peek_n(r, 1) == '_')) {
+        advance(r);  // skip the dot
+        char buf[256];
+        int len = 0;
+        while ((is_sym_char(peek(r)) && peek(r) != '.') && len < 255) {
+            buf[len++] = peek(r);
+            advance(r);
+        }
+        buf[len] = '\0';
+        // (lambda (__x__) (get __x__ 'field))
+        Value* param = mk_sym("__x__");
+        Value* field_quoted = mk_cell(mk_sym("quote"), mk_cell(mk_sym(buf), mk_nil()));
+        Value* get_call = mk_cell(mk_sym("get"),
+                         mk_cell(param,
+                         mk_cell(field_quoted, mk_nil())));
+        Value* body = get_call;
+        Value* params = mk_cell(param, mk_nil());
+        return mk_cell(mk_sym("lambda"), mk_cell(params, mk_cell(body, mk_nil())));
     }
 
     // Number
@@ -236,8 +269,21 @@ static Value* read_list(Reader* r, char close) {
             break;
         }
 
-        // Rest marker ..
-        if (c == '.' && peek_n(r, 1) == '.') {
+        // Ellipsis ... (three dots) - used in macro patterns
+        if (c == '.' && peek_n(r, 1) == '.' && peek_n(r, 2) == '.') {
+            // Check if followed by non-dot
+            char after = peek_n(r, 3);
+            if (after != '.') {
+                advance(r); advance(r); advance(r);
+                Value* cell = mk_cell(mk_sym("..."), mk_nil());
+                *tail = cell;
+                tail = &cell->cell.cdr;
+                continue;
+            }
+        }
+
+        // Rest marker .. (two dots followed by variable)
+        if (c == '.' && peek_n(r, 1) == '.' && peek_n(r, 2) != '.') {
             advance(r); advance(r);
             Value* rest = read_form(r);
             if (is_error(rest)) return rest;
@@ -282,7 +328,7 @@ static Value* read_string(Reader* r) {
             // Flush current string part
             if (ds_len(ds) > 0) {
                 char* s = ds_take(ds);
-                Value* str_part = mk_code(s);
+                Value* str_part = mk_string_cstr(s);
                 free(s);
                 Value* cell = mk_cell(str_part, mk_nil());
                 *tail = cell;
@@ -352,11 +398,11 @@ static Value* read_string(Reader* r) {
     if (ds_len(ds) > 0 || !has_interpolation) {
         char* s = ds_take(ds);
         if (has_interpolation) {
-            Value* cell = mk_cell(mk_code(s), mk_nil());
+            Value* cell = mk_cell(mk_string_cstr(s), mk_nil());
             free(s);
             *tail = cell;
         } else {
-            Value* result = mk_code(s);
+            Value* result = mk_string_cstr(s);
             free(s);
             return result;
         }
@@ -428,9 +474,8 @@ static Value* read_number(Reader* r) {
     Value* result;
 
     if (is_float) {
-        // Create float value - for now store as code
-        result = mk_code(s);
-        // TODO: Add T_FLOAT to types.h
+        double val = strtod(s, NULL);
+        result = mk_float(val);
     } else {
         long val;
         if (is_hex) {
@@ -447,12 +492,21 @@ static Value* read_number(Reader* r) {
     return result;
 }
 
-// Read symbol
+// Read symbol (possibly with dot accessors)
 static Value* read_symbol(Reader* r) {
     DString* ds = ds_new();
     if (!ds) return mk_error("OOM");
 
+    // Read the base symbol (stop at . if followed by accessor pattern)
     while (!at_end(r) && is_sym_char(peek(r))) {
+        char c = peek(r);
+        // Check for dot accessor patterns: .( .[ or .field
+        if (c == '.') {
+            char next = peek_n(r, 1);
+            if (next == '(' || next == '[' || is_alpha(next) || next == '_') {
+                break;  // Stop here, handle accessor separately
+            }
+        }
         ds_append_char(ds, advance(r));
     }
 
@@ -474,6 +528,69 @@ static Value* read_symbol(Reader* r) {
 
     Value* result = mk_sym(s);
     free(s);
+
+    // Check for dot accessors: obj.field, obj.(expr), obj.:key, obj.[slice]
+    // Supports chaining: a.b.c -> (get (get a :b) :c)
+    while (!at_end(r) && peek(r) == '.') {
+        char next = peek_n(r, 1);
+
+        // Computed key: obj.(expr) -> (get obj expr)
+        if (next == '(') {
+            advance(r);  // skip .
+            advance(r);  // skip (
+            Value* index_list = read_list(r, ')');
+            if (is_error(index_list)) return index_list;
+            // (get obj expr) - take first element of index_list
+            Value* index = is_nil(index_list) ? mk_int(0) : car(index_list);
+            result = mk_cell(mk_sym("get"),
+                           mk_cell(result,
+                           mk_cell(index, mk_nil())));
+        }
+        // Slice: obj.[start end] -> (array-slice obj start end)
+        else if (next == '[') {
+            advance(r);  // skip .
+            advance(r);  // skip [
+            Value* indices = read_list(r, ']');
+            if (is_error(indices)) return indices;
+            // (array-slice obj start end) if two elements
+            int len = 0;
+            Value* tmp = indices;
+            while (!is_nil(tmp)) { len++; tmp = cdr(tmp); }
+            if (len == 2) {
+                result = mk_cell(mk_sym("array-slice"),
+                               mk_cell(result, indices));
+            } else if (len == 1) {
+                // Single index in brackets - treat as get
+                result = mk_cell(mk_sym("get"),
+                               mk_cell(result,
+                               mk_cell(car(indices), mk_nil())));
+            } else {
+                return mk_error("Invalid slice syntax: expected [start end] or [index]");
+            }
+        }
+        // Bare field: obj.field -> (get obj 'field)
+        else if (is_alpha(next) || next == '_') {
+            advance(r);  // skip .
+            // Read the field name as a symbol
+            char buf[256];
+            int len = 0;
+            while ((is_sym_char(peek(r)) && peek(r) != '.') && len < 255) {
+                buf[len++] = peek(r);
+                advance(r);
+            }
+            buf[len] = '\0';
+            // (quote field)
+            Value* key = mk_cell(mk_sym("quote"), mk_cell(mk_sym(buf), mk_nil()));
+            // (get obj 'field)
+            result = mk_cell(mk_sym("get"),
+                           mk_cell(result,
+                           mk_cell(key, mk_nil())));
+        }
+        else {
+            break;  // Not a valid accessor, stop
+        }
+    }
+
     return result;
 }
 
@@ -515,11 +632,11 @@ static Value* read_dispatch(Reader* r) {
                 return mk_error("Unknown character name");
             }
             free(name);
-            return mk_cell(mk_sym("char"), mk_cell(mk_int(charval), mk_nil()));
+            return mk_char(charval);
         }
 
         long charval = advance(r);
-        return mk_cell(mk_sym("char"), mk_cell(mk_int(charval), mk_nil()));
+        return mk_char(charval);
     }
 
     // Lambda shorthand #(...)
@@ -687,21 +804,23 @@ static Value* read_metadata(Reader* r) {
 
     Value* meta;
     if (peek(r) == ':') {
-        // ^:keyword
+        // ^:keyword -> produces quoted symbol 'keyword
+        // This way ^:private -> (with-meta 'private form)
         advance(r);
         Value* sym = read_symbol(r);
         if (is_error(sym)) return sym;
-        meta = mk_cell(sym, mk_cell(mk_sym("true"), mk_nil()));
+        // Quote it so it evaluates to itself
+        meta = mk_cell(mk_sym("quote"), mk_cell(sym, mk_nil()));
     } else if (peek(r) == '"') {
-        // ^"docstring"
-        Value* doc = read_string(r);
-        if (is_error(doc)) return doc;
-        meta = mk_cell(mk_sym("doc"), mk_cell(doc, mk_nil()));
-    } else if (peek(r) == '{') {
-        // ^{:key val ...}
-        advance(r);
-        meta = read_list(r, '}');
+        // ^"docstring" - strings are self-evaluating
+        meta = read_string(r);
         if (is_error(meta)) return meta;
+    } else if (peek(r) == '{') {
+        // ^{:key val ...} - quote the whole map
+        advance(r);
+        Value* map_content = read_list(r, '}');
+        if (is_error(map_content)) return map_content;
+        meta = mk_cell(mk_sym("quote"), mk_cell(map_content, mk_nil()));
     } else {
         return mk_error("Expected :keyword, \"docstring\", or {map} after ^");
     }

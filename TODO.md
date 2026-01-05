@@ -108,6 +108,50 @@
 
 ---
 
+## Type System Features
+
+- [DONE] Label: T-enum-simple
+  Objective: Implement simple enum types (variants without data).
+  Where: `omnilisp/src/runtime/eval/omni_eval.c`
+  What to change:
+    - Parse `(define {enum Name} Var1 Var2 ...)` syntax.
+    - Create dict values for each variant with __enum__, __variant__, __index__ fields.
+    - Generate type predicate `Name?` and bind EnumName to variant list.
+  How to verify: `./omni '(do (define {enum Color} Red Green Blue) (Color? Red))'` => true
+  Acceptance:
+    - Simple enums work with predicates.
+    - Variants can be compared with `=`.
+
+- [DONE] Label: T-enum-data
+  Objective: Implement enums with data variants (algebraic data types).
+  Where: `omnilisp/src/runtime/eval/omni_eval.c`, `match_pattern` function
+  What to change:
+    - Parse data variants: `(define {enum Option} (Some [value]) None)`.
+    - Data variants become constructor functions that create dicts with data fields.
+    - Simple variants remain as dict values.
+    - Generate per-variant predicates: `Some?`, `None?`, etc.
+    - Update pattern matching to destructure enum dicts by __variant__ field.
+  How to verify: `./omni /tmp/test_enum_data.omni` with Option/Result tests passes.
+  Acceptance:
+    - `(Some 42)` creates enum value with data.
+    - `(match (Some 42) [(Some v) v])` extracts value.
+    - Both type (`Option?`) and variant (`Some?`) predicates work.
+
+- [DONE] Label: T-default-params
+  Objective: Add default parameter support for functions.
+  Where: `omnilisp/src/runtime/eval/omni_eval.c`, `omnilisp/src/runtime/types.{c,h}`
+  What to change:
+    - Extended lambda struct with `defaults` field.
+    - Parse `[param default]` in parameter lists.
+    - Added `fill_defaults` helper to substitute defaults at call time.
+    - Route `define` function definitions through `eval_lambda`.
+  How to verify: `./omni '(do (define (greet [name "Guest"]) name) (greet))'` => "Guest"
+  Acceptance:
+    - Functions with defaults work when called without args.
+    - Mixed required and optional parameters work.
+
+---
+
 ## Effects/Handlers and Recovery Protocols (Supersedes restarts)
 
 - [DONE] Label: T-eff-core-types

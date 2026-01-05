@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <setjmp.h>
+#include <math.h>
+#include <dlfcn.h>
 
 // Forward declarations
 static Value* eval_list(Value* exprs, Env* env);
@@ -44,6 +46,18 @@ static Value* eval_defeffect(Value* args, Env* env);
 static Value* eval_handle(Value* args, Env* env);
 static Value* eval_perform(Value* args, Env* env);
 static Value* eval_resume(Value* args, Env* env);
+
+// Effect type system - forward declarations for (define {effect ...})
+typedef enum {
+    RECOVERY_ONE_SHOT = 0,   // Can resume at most once (default)
+    RECOVERY_MULTI_SHOT,     // Can resume multiple times
+    RECOVERY_TAIL,           // Tail-resumptive (optimized)
+    RECOVERY_ABORT           // Never resumes (like exceptions)
+} RecoveryModeOmni;
+
+typedef struct EffectTypeDef EffectTypeDef;
+static EffectTypeDef* register_effect_type_full(const char* name, RecoveryModeOmni mode,
+                                                 Value* payload_type, Value* returns_type);
 // Restart compatibility via effects
 static Value* eval_with_restarts(Value* args, Env* env);
 static Value* eval_call_restart(Value* args, Env* env);
@@ -55,6 +69,16 @@ static Value* eval_call_stack(Value* args, Env* env);
 static Value* eval_stack_trace(Value* args, Env* env);
 // Fiber scoped construct
 static Value* eval_with_fibers(Value* args, Env* env);
+
+// Module system
+static Value* eval_module(Value* args, Env* env);
+static Value* eval_import(Value* args, Env* env);
+static Value* eval_export(Value* args, Env* env);
+
+// Macro expansion (hygienic syntax transformers)
+static Value* try_macro_expand(Value* expr, Env* env);
+static int syntax_match(Value* pattern, Value* input, Value* literals, Env* bindings);
+static Value* syntax_expand(Value* template, Env* bindings, int gensym_counter);
 
 // -- Logical Call Stack for Debugging --
 #define MAX_CALL_STACK 256
@@ -116,6 +140,107 @@ static struct {
     PrimitiveFn fn;
 } primitives[MAX_PRIMITIVES];
 static int num_primitives = 0;
+
+/* ============================================================
+ * Module Registry
+ * ============================================================
+ * Modules provide namespace isolation. Each module has its own
+ * environment and an export list of public symbols.
+ */
+#define MAX_MODULES 64
+
+typedef struct Module {
+    char* name;           // Module name (e.g., "math", "io")
+    Env* env;             // Module's environment with all definitions
+    Value* exports;       // List of exported symbol names
+    int loaded;           // Has body been evaluated?
+} Module;
+
+static Module module_registry[MAX_MODULES];
+static int num_modules = 0;
+static Module* current_module = NULL;  // Module being defined (for export)
+
+/* ============================================================
+ * Metadata Table
+ * ============================================================
+ * Associates values with their metadata. Uses a simple linear
+ * scan (could be upgraded to hash table for performance).
+ */
+#define MAX_METADATA_ENTRIES 4096
+
+typedef struct MetadataEntry {
+    Value* value;     // The value (key)
+    Value* metadata;  // The metadata (value)
+} MetadataEntry;
+
+static MetadataEntry metadata_table[MAX_METADATA_ENTRIES];
+static int num_metadata_entries = 0;
+
+// Set metadata for a value
+static void metadata_set(Value* val, Value* meta) {
+    if (!val || !meta) return;
+
+    // Check if already exists
+    for (int i = 0; i < num_metadata_entries; i++) {
+        if (metadata_table[i].value == val) {
+            metadata_table[i].metadata = meta;
+            return;
+        }
+    }
+
+    // Add new entry
+    if (num_metadata_entries < MAX_METADATA_ENTRIES) {
+        metadata_table[num_metadata_entries].value = val;
+        metadata_table[num_metadata_entries].metadata = meta;
+        num_metadata_entries++;
+    }
+}
+
+// Get metadata for a value
+static Value* metadata_get(Value* val) {
+    if (!val) return mk_nil();
+
+    for (int i = 0; i < num_metadata_entries; i++) {
+        if (metadata_table[i].value == val) {
+            return metadata_table[i].metadata;
+        }
+    }
+    return mk_nil();
+}
+
+// Find module by name
+static Module* find_module(const char* name) {
+    for (int i = 0; i < num_modules; i++) {
+        if (strcmp(module_registry[i].name, name) == 0) {
+            return &module_registry[i];
+        }
+    }
+    return NULL;
+}
+
+// Register a new module
+static Module* register_module(const char* name, Env* parent_env) {
+    if (num_modules >= MAX_MODULES) return NULL;
+    Module* m = &module_registry[num_modules++];
+    m->name = strdup(name);
+    m->env = env_new(parent_env);  // Inherit from parent (for primitives)
+    m->exports = mk_nil();
+    m->loaded = 0;
+    return m;
+}
+
+// Check if symbol is exported from module
+static int is_exported(Module* m, const char* sym_name) {
+    Value* exports = m->exports;
+    while (!is_nil(exports)) {
+        Value* exp = car(exports);
+        if (exp && exp->tag == T_SYM && strcmp(exp->s, sym_name) == 0) {
+            return 1;
+        }
+        exports = cdr(exports);
+    }
+    return 0;
+}
 
 /* ============================================================
  * Symbol Suggestions ("did you mean?")
@@ -283,12 +408,25 @@ Env* env_extend(Env* env, Value* names, Value* values) {
                 name = car(names);
                 env_define(new_env, name, values);
             }
-            break;
+            return new_env;  // Rest param handled, done
         }
 
         env_define(new_env, name, value);
         names = cdr(names);
         values = cdr(values);
+    }
+
+    // Handle rest parameter when no values remain
+    // e.g., (define (f .. args) ...) called as (f)
+    if (!is_nil(names)) {
+        Value* name = car(names);
+        if (name && name->tag == T_SYM && strcmp(name->s, "..") == 0) {
+            names = cdr(names);
+            if (!is_nil(names)) {
+                name = car(names);
+                env_define(new_env, name, mk_nil());  // Bind to empty list
+            }
+        }
     }
 
     return new_env;
@@ -367,7 +505,7 @@ void env_set(Env* env, Value* name, Value* value) {
 static int is_special_form(Value* sym) {
     if (!sym || sym->tag != T_SYM) return 0;
     const char* forms[] = {
-        "if", "let", "define", "lambda", "fn", "do", "begin",
+        "if", "let", "define", "lambda", "fn", "λ", "do", "begin",
         "quote", "set!", "match", "cond", "when", "unless",
         "array", "dict", "type", "for", "foreach", "->",
         "quasiquote", "with-meta", "module", "import", "export",
@@ -379,6 +517,7 @@ static int is_special_form(Value* sym) {
         "effect-trace", "effect-stack",  // Effect debugging
         "call-stack", "stack-trace",  // Call stack debugging
         "with-fibers",  // Fiber scoped construct
+        "|>", "pipe",  // Pipe/threading operator
         NULL
     };
     for (int i = 0; forms[i]; i++) {
@@ -433,11 +572,19 @@ Value* omni_eval(Value* expr, Env* env) {
             Value* op = car(expr);
             Value* args = cdr(expr);
 
-            // Special forms
+            // Special forms (checked first, before macro expansion)
             if (op && op->tag == T_SYM) {
                 if (is_special_form(op)) {
                     return eval_special_form(op, args, env);
                 }
+            }
+
+            // Try macro expansion
+            Value* expanded = try_macro_expand(expr, env);
+            if (expanded) {
+                if (is_error(expanded)) return expanded;
+                // Recursively evaluate the expanded form
+                return omni_eval(expanded, env);
             }
 
             // Function application
@@ -477,6 +624,113 @@ static Value* eval_list(Value* exprs, Env* env) {
     return result;
 }
 
+// Helper: substitute placeholder in expression with value
+// Supports both "it" and "_" as placeholders
+static int is_placeholder(Value* expr) {
+    return expr && expr->tag == T_SYM &&
+           (strcmp(expr->s, "it") == 0 || strcmp(expr->s, "_") == 0);
+}
+
+static Value* subst_placeholder(Value* expr, Value* val) {
+    if (!expr) return expr;
+
+    // If it's a placeholder symbol, replace with val
+    if (is_placeholder(expr)) {
+        return val;
+    }
+
+    // If it's a list, recursively substitute
+    if (expr->tag == T_CELL) {
+        Value* new_car = subst_placeholder(car(expr), val);
+        Value* new_cdr = subst_placeholder(cdr(expr), val);
+        return mk_cell(new_car, new_cdr);
+    }
+
+    // Otherwise return as-is
+    return expr;
+}
+
+// Check if expression contains placeholder (it or _)
+static int has_placeholder(Value* expr) {
+    if (!expr) return 0;
+
+    if (is_placeholder(expr)) {
+        return 1;
+    }
+
+    if (expr->tag == T_CELL) {
+        return has_placeholder(car(expr)) || has_placeholder(cdr(expr));
+    }
+
+    return 0;
+}
+
+/*
+ * Pipe operator: (|> value (f arg) (g arg) ...)
+ * Threads value through function calls.
+ * - By default, inserts value as first argument: (|> x (f a)) -> (f x a)
+ * - With 'it' or '_' placeholder, substitutes there: (|> x (f a it)) -> (f a x)
+ */
+static Value* eval_pipe(Value* args, Env* env) {
+    if (is_nil(args)) {
+        return mk_error("|>: expected at least one argument");
+    }
+
+    // Evaluate the initial value
+    Value* val = omni_eval(car(args), env);
+    if (is_error(val)) return val;
+
+    // Create a temporary binding for the piped value
+    // This avoids re-evaluation issues when substituting
+    static int pipe_counter = 0;
+    char temp_name[32];
+    snprintf(temp_name, sizeof(temp_name), "__pipe_val_%d__", pipe_counter++);
+    Value* temp_sym = mk_sym(temp_name);
+
+    // Process each subsequent form
+    Value* forms = cdr(args);
+    while (!is_nil(forms)) {
+        Value* form = car(forms);
+
+        // Bind current value to temp variable
+        Env* pipe_env = env_new(env);
+        env_define(pipe_env, temp_sym, val);
+
+        // Build the call expression
+        Value* call_expr;
+
+        if (form->tag == T_CELL) {
+            // It's a function call form
+            if (has_placeholder(form)) {
+                // Substitute placeholder with temp symbol reference
+                call_expr = subst_placeholder(form, temp_sym);
+            } else {
+                // Insert temp symbol as first argument
+                // (f a b) -> (f temp a b)
+                Value* fn = car(form);
+                Value* orig_args = cdr(form);
+                call_expr = mk_cell(fn, mk_cell(temp_sym, orig_args));
+            }
+        } else if (form->tag == T_SYM) {
+            // Just a function name - call it with temp symbol as sole argument
+            call_expr = mk_cell(form, mk_cell(temp_sym, mk_nil()));
+        } else {
+            env_free(pipe_env);
+            return mk_error("|>: expected function call or symbol");
+        }
+
+        // Evaluate the call in the extended environment
+        val = omni_eval(call_expr, pipe_env);
+        env_free(pipe_env);
+
+        if (is_error(val)) return val;
+
+        forms = cdr(forms);
+    }
+
+    return val;
+}
+
 // Special form dispatch
 static Value* eval_special_form(Value* op, Value* args, Env* env) {
     const char* name = op->s;
@@ -484,7 +738,7 @@ static Value* eval_special_form(Value* op, Value* args, Env* env) {
     if (strcmp(name, "if") == 0) return eval_if(args, env);
     if (strcmp(name, "let") == 0) return eval_let(args, env);
     if (strcmp(name, "define") == 0) return eval_define(args, env);
-    if (strcmp(name, "lambda") == 0 || strcmp(name, "fn") == 0) return eval_lambda(args, env);
+    if (strcmp(name, "lambda") == 0 || strcmp(name, "fn") == 0 || strcmp(name, "λ") == 0) return eval_lambda(args, env);
     if (strcmp(name, "do") == 0 || strcmp(name, "begin") == 0) return eval_do(args, env);
     if (strcmp(name, "quote") == 0) return eval_quote(args, env);
     if (strcmp(name, "set!") == 0) return eval_set(args, env);
@@ -542,11 +796,16 @@ static Value* eval_special_form(Value* op, Value* args, Env* env) {
 
     // with-meta - metadata application
     if (strcmp(name, "with-meta") == 0) {
-        // For now, just evaluate the form ignoring metadata
-        Value* meta = car(args);
+        // Evaluate the metadata and form, then attach
+        Value* meta = omni_eval(car(args), env);
+        if (is_error(meta)) return meta;
         Value* form = car(cdr(args));
-        (void)meta; // TODO: attach metadata
-        return omni_eval(form, env);
+        Value* result = omni_eval(form, env);
+        if (is_error(result)) return result;
+
+        // Attach metadata to the result
+        metadata_set(result, meta);
+        return result;
     }
 
     // quasiquote
@@ -586,6 +845,15 @@ static Value* eval_special_form(Value* op, Value* args, Env* env) {
 
     // Fiber scoped construct
     if (strcmp(name, "with-fibers") == 0) return eval_with_fibers(args, env);
+
+    // Module system
+    if (strcmp(name, "module") == 0) return eval_module(args, env);
+    if (strcmp(name, "import") == 0) return eval_import(args, env);
+    if (strcmp(name, "export") == 0) return eval_export(args, env);
+
+    // Pipe operator: (|> value (f arg) (g arg) ...)
+    if (strcmp(name, "|>") == 0) return eval_pipe(args, env);
+    if (strcmp(name, "pipe") == 0) return eval_pipe(args, env);  // Alias
 
     char msg[128];
     snprintf(msg, sizeof(msg), "Unknown special form: %s", name);
@@ -731,7 +999,17 @@ static Value* eval_let(Value* args, Env* env) {
 
         Value* evaled = sequential ? omni_eval(value, let_env) : omni_eval(value, env);
         if (is_error(evaled)) return evaled;
-        env_define(let_env, name, evaled);
+
+        // Support destructuring: if name is a pattern, destructure
+        // Simple case: name is a symbol - just bind it
+        if (name && name->tag == T_SYM) {
+            env_define(let_env, name, evaled);
+        } else {
+            // Pattern matching for destructuring
+            if (!match_pattern(name, evaled, let_env)) {
+                return mk_error("let: destructuring pattern does not match value");
+            }
+        }
     }
 
     // Evaluate body
@@ -747,18 +1025,513 @@ static Value* eval_let(Value* args, Env* env) {
 static Value* eval_define(Value* args, Env* env) {
     Value* first = car(args);
 
+    // Handle metadata: (define ^:meta name value) -> (define (with-meta :meta name) value)
+    // Extract metadata and unwrap
+    Value* define_metadata = NULL;
+    if (first && first->tag == T_CELL) {
+        Value* maybe_with_meta = car(first);
+        if (maybe_with_meta && maybe_with_meta->tag == T_SYM &&
+            strcmp(maybe_with_meta->s, "with-meta") == 0) {
+            // Extract: (with-meta meta-expr name)
+            Value* meta_expr = car(cdr(first));
+            Value* actual_name = car(cdr(cdr(first)));
+
+            // Evaluate the metadata expression
+            define_metadata = omni_eval(meta_expr, env);
+            if (is_error(define_metadata)) return define_metadata;
+
+            // Replace first with the actual name
+            first = actual_name;
+        }
+    }
+
     // Function definition: (define (name params...) body)
     if (first && first->tag == T_CELL) {
-        Value* name = car(first);
-        Value* params = cdr(first);
-        Value* body = car(cdr(args));
+        Value* head = car(first);
 
-        // Wrap body in do if multiple expressions
-        if (!is_nil(cdr(cdr(args)))) {
-            body = mk_cell(mk_sym("do"), cdr(args));
+        // Check for syntax definition: (define [syntax name] ...)
+        // [syntax name] parses as (array syntax name)
+        if (head && head->tag == T_SYM && strcmp(head->s, "array") == 0) {
+            Value* arr_contents = cdr(first);
+            if (!is_nil(arr_contents) && car(arr_contents) &&
+                car(arr_contents)->tag == T_SYM &&
+                strcmp(car(arr_contents)->s, "syntax") == 0) {
+                // It's a syntax definition!
+                Value* name = car(cdr(arr_contents));
+                if (!name || name->tag != T_SYM) {
+                    return mk_error("define [syntax ...]: expected name");
+                }
+
+                // Parse optional #literals and collect rules
+                Value* rest = cdr(args);
+                Value* literals = mk_nil();
+                Value* rules = mk_nil();
+                Value** rules_tail = &rules;
+
+                // Check for #literals declaration (symbol starting with #literals)
+                // Since we don't have reader macros yet, accept (literals ...) form too
+                while (!is_nil(rest)) {
+                    Value* item = car(rest);
+
+                    // Check for #literals (...) - but we'll accept a symbol #literals
+                    // followed by a list, or (literals ...) form
+                    if (item && item->tag == T_SYM &&
+                        (strcmp(item->s, "#literals") == 0 ||
+                         strcmp(item->s, "literals") == 0)) {
+                        // Next item should be the literals list
+                        rest = cdr(rest);
+                        if (!is_nil(rest)) {
+                            Value* lit_list = car(rest);
+                            // Handle array wrapper
+                            if (lit_list && lit_list->tag == T_CELL &&
+                                car(lit_list) && car(lit_list)->tag == T_SYM &&
+                                strcmp(car(lit_list)->s, "array") == 0) {
+                                literals = cdr(lit_list);
+                            } else {
+                                literals = lit_list;
+                            }
+                            rest = cdr(rest);
+                        }
+                        continue;
+                    }
+
+                    // Check for (literals ...) or [literals ...] form
+                    if (item && item->tag == T_CELL) {
+                        Value* item_head = car(item);
+                        if (item_head && item_head->tag == T_SYM) {
+                            // Skip array wrapper
+                            if (strcmp(item_head->s, "array") == 0) {
+                                Value* inner = cdr(item);
+                                if (!is_nil(inner) && car(inner) &&
+                                    car(inner)->tag == T_SYM &&
+                                    strcmp(car(inner)->s, "literals") == 0) {
+                                    literals = cdr(inner);
+                                    rest = cdr(rest);
+                                    continue;
+                                }
+                            } else if (strcmp(item_head->s, "literals") == 0) {
+                                literals = cdr(item);
+                                rest = cdr(rest);
+                                continue;
+                            }
+                        }
+                    }
+
+                    // Otherwise, it's a rule: (pattern template) or [pattern template]
+                    // Each rule is stored as (pattern . (template . nil))
+                    Value* rule = item;
+                    // Handle array wrapper
+                    if (rule && rule->tag == T_CELL && car(rule) &&
+                        car(rule)->tag == T_SYM &&
+                        strcmp(car(rule)->s, "array") == 0) {
+                        rule = cdr(rule);
+                    }
+
+                    if (rule && rule->tag == T_CELL) {
+                        Value* pattern = car(rule);
+                        Value* template = car(cdr(rule));
+
+                        // Store as ((pattern template))
+                        Value* rule_pair = mk_cell(pattern, mk_cell(template, mk_nil()));
+                        *rules_tail = mk_cell(rule_pair, mk_nil());
+                        rules_tail = &((*rules_tail)->cell.cdr);
+                    }
+
+                    rest = cdr(rest);
+                }
+
+                // Create the syntax transformer
+                Value* syntax = mk_syntax(name->s, literals, rules, env_to_value(env));
+                env_define(env, name, syntax);
+                return name;
+            }
         }
 
-        Value* lambda = mk_lambda(params, body, env_to_value(env));
+        // Check for struct definition: (define {struct Name} [field1] [field2] ...)
+        // {struct Name} parses as (type struct Name)
+        if (head && head->tag == T_SYM && strcmp(head->s, "type") == 0) {
+            Value* type_contents = cdr(first);
+            if (!is_nil(type_contents) && car(type_contents) &&
+                car(type_contents)->tag == T_SYM &&
+                strcmp(car(type_contents)->s, "struct") == 0) {
+                // It's a struct definition!
+                Value* struct_name = car(cdr(type_contents));
+                if (!struct_name || struct_name->tag != T_SYM) {
+                    return mk_error("define {struct ...}: expected name");
+                }
+                const char* name_str = struct_name->s;
+
+                // Collect field names from [field] forms
+                Value* fields = mk_nil();
+                Value** fields_tail = &fields;
+                int field_count = 0;
+
+                Value* rest = cdr(args);
+                while (!is_nil(rest)) {
+                    Value* field_form = car(rest);
+                    // [field] parses as (array field)
+                    if (field_form && field_form->tag == T_CELL) {
+                        Value* fhead = car(field_form);
+                        if (fhead && fhead->tag == T_SYM && strcmp(fhead->s, "array") == 0) {
+                            Value* field_name = car(cdr(field_form));
+                            if (field_name && field_name->tag == T_SYM) {
+                                *fields_tail = mk_cell(field_name, mk_nil());
+                                fields_tail = &((*fields_tail)->cell.cdr);
+                                field_count++;
+                            }
+                        }
+                    }
+                    rest = cdr(rest);
+                }
+
+                // Create constructor: (lambda (f1 f2 ...) (dict '__struct__ 'Name 'f1 f1 'f2 f2 ...))
+                // Build the dict call
+                Value* dict_args = mk_nil();
+                Value** dict_tail = &dict_args;
+
+                // Add __struct__ field
+                *dict_tail = mk_cell(mk_cell(mk_sym("quote"), mk_cell(mk_sym("__struct__"), mk_nil())), mk_nil());
+                dict_tail = &((*dict_tail)->cell.cdr);
+                *dict_tail = mk_cell(mk_cell(mk_sym("quote"), mk_cell(struct_name, mk_nil())), mk_nil());
+                dict_tail = &((*dict_tail)->cell.cdr);
+
+                // Add fields
+                Value* f = fields;
+                while (!is_nil(f)) {
+                    Value* fname = car(f);
+                    // Quoted field name as key
+                    *dict_tail = mk_cell(mk_cell(mk_sym("quote"), mk_cell(fname, mk_nil())), mk_nil());
+                    dict_tail = &((*dict_tail)->cell.cdr);
+                    // Field value (just the symbol, will be parameter)
+                    *dict_tail = mk_cell(fname, mk_nil());
+                    dict_tail = &((*dict_tail)->cell.cdr);
+                    f = cdr(f);
+                }
+
+                Value* dict_call = mk_cell(mk_sym("dict"), dict_args);
+                Value* constructor = mk_lambda(fields, dict_call, env_to_value(env));
+                env_define(env, struct_name, constructor);
+
+                // Create predicate: Name? checks if dict and __struct__ == 'Name
+                // (lambda (x) (if (dict? x) (= (get x '__struct__) 'Name) false))
+                char pred_name[256];
+                snprintf(pred_name, sizeof(pred_name), "%s?", name_str);
+                Value* pred_param = mk_sym("__x__");
+                Value* dict_check = mk_cell(mk_sym("dict?"), mk_cell(pred_param, mk_nil()));
+                Value* get_struct = mk_cell(mk_sym("get"),
+                                   mk_cell(pred_param,
+                                   mk_cell(mk_cell(mk_sym("quote"),
+                                          mk_cell(mk_sym("__struct__"), mk_nil())), mk_nil())));
+                Value* quoted_name = mk_cell(mk_sym("quote"), mk_cell(struct_name, mk_nil()));
+                Value* eq_check = mk_cell(mk_sym("="),
+                                 mk_cell(get_struct,
+                                 mk_cell(quoted_name, mk_nil())));
+                // (if (dict? x) (= ...) false)
+                Value* if_check = mk_cell(mk_sym("if"),
+                                 mk_cell(dict_check,
+                                 mk_cell(eq_check,
+                                 mk_cell(mk_sym("false"), mk_nil()))));
+                Value* predicate = mk_lambda(mk_cell(pred_param, mk_nil()), if_check, env_to_value(env));
+                env_define(env, mk_sym(pred_name), predicate);
+
+                return struct_name;
+            }
+
+            // Check for enum definition: (define {enum Name} Val1 Val2 ...)
+            // or with data: (define {enum Option} (Some [value]) None)
+            // {enum Name} parses as (type enum Name)
+            // {enum Option T} parses as (type enum Option T) with type params
+            if (car(type_contents)->tag == T_SYM &&
+                strcmp(car(type_contents)->s, "enum") == 0) {
+                // It's an enum definition!
+                Value* enum_name = car(cdr(type_contents));
+                if (!enum_name || enum_name->tag != T_SYM) {
+                    return mk_error("define {enum ...}: expected name");
+                }
+                const char* name_str = enum_name->s;
+
+                // Collect type parameters (optional): {enum Option T} -> T is param
+                Value* type_params = cdr(cdr(type_contents));  // May be nil
+
+                // Process variants from remaining args
+                Value* variant_names = mk_nil();
+                Value** names_tail = &variant_names;
+                int variant_count = 0;
+
+                Value* rest = cdr(args);
+                int index = 0;
+                while (!is_nil(rest)) {
+                    Value* variant = car(rest);
+
+                    if (variant && variant->tag == T_SYM) {
+                        // Simple variant: None, True, False, etc.
+                        // Create: (dict '__enum__ 'EnumName '__variant__ 'VariantName '__index__ idx)
+                        Value* variant_dict = mk_cell(mk_sym("dict"),
+                            mk_cell(mk_cell(mk_sym("quote"), mk_cell(mk_sym("__enum__"), mk_nil())),
+                            mk_cell(mk_cell(mk_sym("quote"), mk_cell(enum_name, mk_nil())),
+                            mk_cell(mk_cell(mk_sym("quote"), mk_cell(mk_sym("__variant__"), mk_nil())),
+                            mk_cell(mk_cell(mk_sym("quote"), mk_cell(variant, mk_nil())),
+                            mk_cell(mk_cell(mk_sym("quote"), mk_cell(mk_sym("__index__"), mk_nil())),
+                            mk_cell(mk_int(index), mk_nil())))))));
+                        Value* variant_val = omni_eval(variant_dict, env);
+                        if (is_error(variant_val)) return variant_val;
+                        env_define(env, variant, variant_val);
+
+                        // Add to variant names list
+                        *names_tail = mk_cell(variant, mk_nil());
+                        names_tail = &((*names_tail)->cell.cdr);
+                        variant_count++;
+                        index++;
+
+                    } else if (variant && variant->tag == T_CELL) {
+                        // Data variant: (Some [value]) or (Point [x] [y])
+                        Value* var_head = car(variant);
+                        if (!var_head || var_head->tag != T_SYM) {
+                            rest = cdr(rest);
+                            continue;
+                        }
+                        Value* var_name = var_head;
+                        const char* var_name_str = var_name->s;
+
+                        // Collect field names from [field] forms
+                        // [field] parses as (array field) or (array field (type T))
+                        Value* fields = mk_nil();
+                        Value** fields_tail = &fields;
+                        int field_count = 0;
+
+                        Value* var_rest = cdr(variant);
+                        while (!is_nil(var_rest)) {
+                            Value* field_form = car(var_rest);
+                            if (field_form && field_form->tag == T_CELL) {
+                                Value* arr_head = car(field_form);
+                                if (arr_head && arr_head->tag == T_SYM &&
+                                    strcmp(arr_head->s, "array") == 0) {
+                                    // Extract field name
+                                    Value* field_name = car(cdr(field_form));
+                                    if (field_name && field_name->tag == T_SYM) {
+                                        *fields_tail = mk_cell(field_name, mk_nil());
+                                        fields_tail = &((*fields_tail)->cell.cdr);
+                                        field_count++;
+                                    }
+                                }
+                            }
+                            var_rest = cdr(var_rest);
+                        }
+
+                        if (field_count > 0) {
+                            // Create constructor function for data variant
+                            // (fn (field1 field2 ...) (dict '__enum__ 'Enum ...))
+                            // Build dict expression with all fields
+                            Value* dict_args = mk_nil();
+                            Value** dict_tail = &dict_args;
+
+                            // __enum__
+                            *dict_tail = mk_cell(mk_cell(mk_sym("quote"), mk_cell(mk_sym("__enum__"), mk_nil())), mk_nil());
+                            dict_tail = &((*dict_tail)->cell.cdr);
+                            *dict_tail = mk_cell(mk_cell(mk_sym("quote"), mk_cell(enum_name, mk_nil())), mk_nil());
+                            dict_tail = &((*dict_tail)->cell.cdr);
+
+                            // __variant__
+                            *dict_tail = mk_cell(mk_cell(mk_sym("quote"), mk_cell(mk_sym("__variant__"), mk_nil())), mk_nil());
+                            dict_tail = &((*dict_tail)->cell.cdr);
+                            *dict_tail = mk_cell(mk_cell(mk_sym("quote"), mk_cell(var_name, mk_nil())), mk_nil());
+                            dict_tail = &((*dict_tail)->cell.cdr);
+
+                            // __index__
+                            *dict_tail = mk_cell(mk_cell(mk_sym("quote"), mk_cell(mk_sym("__index__"), mk_nil())), mk_nil());
+                            dict_tail = &((*dict_tail)->cell.cdr);
+                            *dict_tail = mk_cell(mk_int(index), mk_nil());
+                            dict_tail = &((*dict_tail)->cell.cdr);
+
+                            // Add each data field
+                            Value* f = fields;
+                            while (!is_nil(f)) {
+                                Value* fname = car(f);
+                                *dict_tail = mk_cell(mk_cell(mk_sym("quote"), mk_cell(fname, mk_nil())), mk_nil());
+                                dict_tail = &((*dict_tail)->cell.cdr);
+                                *dict_tail = mk_cell(fname, mk_nil());  // Reference to param
+                                dict_tail = &((*dict_tail)->cell.cdr);
+                                f = cdr(f);
+                            }
+
+                            Value* dict_expr = mk_cell(mk_sym("dict"), dict_args);
+                            Value* constructor = mk_lambda(fields, dict_expr, env_to_value(env));
+                            env_define(env, var_name, constructor);
+                        } else {
+                            // No fields - simple variant but written as (Name)
+                            Value* variant_dict = mk_cell(mk_sym("dict"),
+                                mk_cell(mk_cell(mk_sym("quote"), mk_cell(mk_sym("__enum__"), mk_nil())),
+                                mk_cell(mk_cell(mk_sym("quote"), mk_cell(enum_name, mk_nil())),
+                                mk_cell(mk_cell(mk_sym("quote"), mk_cell(mk_sym("__variant__"), mk_nil())),
+                                mk_cell(mk_cell(mk_sym("quote"), mk_cell(var_name, mk_nil())),
+                                mk_cell(mk_cell(mk_sym("quote"), mk_cell(mk_sym("__index__"), mk_nil())),
+                                mk_cell(mk_int(index), mk_nil())))))));
+                            Value* variant_val = omni_eval(variant_dict, env);
+                            if (is_error(variant_val)) return variant_val;
+                            env_define(env, var_name, variant_val);
+                        }
+
+                        // Add to variant names list
+                        *names_tail = mk_cell(var_name, mk_nil());
+                        names_tail = &((*names_tail)->cell.cdr);
+                        variant_count++;
+                        index++;
+                    }
+
+                    rest = cdr(rest);
+                }
+
+                if (variant_count == 0) {
+                    return mk_error("define {enum ...}: expected at least one variant");
+                }
+
+                // Create predicate: EnumName? checks if dict and __enum__ == 'EnumName
+                char pred_name[256];
+                snprintf(pred_name, sizeof(pred_name), "%s?", name_str);
+                Value* pred_param = mk_sym("__x__");
+                Value* dict_check = mk_cell(mk_sym("dict?"), mk_cell(pred_param, mk_nil()));
+                Value* get_enum = mk_cell(mk_sym("get"),
+                                   mk_cell(pred_param,
+                                   mk_cell(mk_cell(mk_sym("quote"),
+                                          mk_cell(mk_sym("__enum__"), mk_nil())), mk_nil())));
+                Value* quoted_name = mk_cell(mk_sym("quote"), mk_cell(enum_name, mk_nil()));
+                Value* eq_check = mk_cell(mk_sym("="),
+                                 mk_cell(get_enum,
+                                 mk_cell(quoted_name, mk_nil())));
+                Value* if_check = mk_cell(mk_sym("if"),
+                                 mk_cell(dict_check,
+                                 mk_cell(eq_check,
+                                 mk_cell(mk_sym("false"), mk_nil()))));
+                Value* predicate = mk_lambda(mk_cell(pred_param, mk_nil()), if_check, env_to_value(env));
+                env_define(env, mk_sym(pred_name), predicate);
+
+                // Create per-variant predicates: Some? None? etc.
+                Value* vn = variant_names;
+                while (!is_nil(vn)) {
+                    Value* vname = car(vn);
+                    char var_pred_name[256];
+                    snprintf(var_pred_name, sizeof(var_pred_name), "%s?", vname->s);
+
+                    Value* vparam = mk_sym("__x__");
+                    Value* vdict_check = mk_cell(mk_sym("dict?"), mk_cell(vparam, mk_nil()));
+                    Value* vget_variant = mk_cell(mk_sym("get"),
+                                       mk_cell(vparam,
+                                       mk_cell(mk_cell(mk_sym("quote"),
+                                              mk_cell(mk_sym("__variant__"), mk_nil())), mk_nil())));
+                    Value* vquoted_name = mk_cell(mk_sym("quote"), mk_cell(vname, mk_nil()));
+                    Value* veq_check = mk_cell(mk_sym("="),
+                                     mk_cell(vget_variant,
+                                     mk_cell(vquoted_name, mk_nil())));
+                    Value* vif_check = mk_cell(mk_sym("if"),
+                                     mk_cell(vdict_check,
+                                     mk_cell(veq_check,
+                                     mk_cell(mk_sym("false"), mk_nil()))));
+                    Value* vpredicate = mk_lambda(mk_cell(vparam, mk_nil()), vif_check, env_to_value(env));
+                    env_define(env, mk_sym(var_pred_name), vpredicate);
+
+                    vn = cdr(vn);
+                }
+
+                // Also define EnumName as a list of all variant names for iteration
+                env_define(env, enum_name, variant_names);
+
+                return enum_name;
+            }
+
+            // Check for effect definition: (define {effect Name} mode ...)
+            // {effect Name} parses as (type effect Name)
+            if (car(type_contents)->tag == T_SYM &&
+                strcmp(car(type_contents)->s, "effect") == 0) {
+                // It's an effect definition!
+                Value* effect_name = car(cdr(type_contents));
+                if (!effect_name || effect_name->tag != T_SYM) {
+                    return mk_error("define {effect ...}: expected name");
+                }
+
+                // Parse mode from next arg (required)
+                Value* rest = cdr(args);
+                if (is_nil(rest)) {
+                    return mk_error("define {effect ...}: expected mode (:one-shot, :multi-shot, :abort, :tail)");
+                }
+
+                Value* mode_arg = car(rest);
+                RecoveryModeOmni mode = RECOVERY_ONE_SHOT;  // default
+
+                // Extract mode string - handle symbol or quoted form
+                const char* mode_str = NULL;
+                if (mode_arg && mode_arg->tag == T_SYM) {
+                    mode_str = mode_arg->s;
+                } else if (mode_arg && mode_arg->tag == T_CELL) {
+                    // Handle (quote sym) form from :keyword syntax
+                    Value* head = car(mode_arg);
+                    if (head && head->tag == T_SYM && strcmp(head->s, "quote") == 0) {
+                        Value* sym = car(cdr(mode_arg));
+                        if (sym && sym->tag == T_SYM) {
+                            mode_str = sym->s;
+                        }
+                    }
+                }
+
+                if (mode_str) {
+                    if (strcmp(mode_str, "one-shot") == 0) {
+                        mode = RECOVERY_ONE_SHOT;
+                    } else if (strcmp(mode_str, "multi-shot") == 0) {
+                        mode = RECOVERY_MULTI_SHOT;
+                    } else if (strcmp(mode_str, "abort") == 0) {
+                        mode = RECOVERY_ABORT;
+                    } else if (strcmp(mode_str, "tail") == 0) {
+                        mode = RECOVERY_TAIL;
+                    } else {
+                        char msg[256];
+                        snprintf(msg, sizeof(msg), "define {effect ...}: unknown mode '%s'", mode_str);
+                        return mk_error(msg);
+                    }
+                }
+
+                // Parse optional (payload X) and (returns Y) forms
+                Value* payload_type = NULL;
+                Value* returns_type = NULL;
+
+                rest = cdr(rest);  // Move past mode
+                while (!is_nil(rest)) {
+                    Value* form = car(rest);
+                    if (form && form->tag == T_CELL) {
+                        Value* form_head = car(form);
+                        if (form_head && form_head->tag == T_SYM) {
+                            if (strcmp(form_head->s, "payload") == 0) {
+                                // (payload Type) - store the type expression
+                                payload_type = car(cdr(form));
+                            } else if (strcmp(form_head->s, "returns") == 0) {
+                                // (returns Type) - store the type expression
+                                returns_type = car(cdr(form));
+                            }
+                        }
+                    }
+                    rest = cdr(rest);
+                }
+
+                // Register the effect type with full info
+                register_effect_type_full(effect_name->s, mode, payload_type, returns_type);
+
+                // Return the effect name symbol
+                return effect_name;
+            }
+        }
+
+        // Regular function definition
+        Value* name = head;
+        Value* params = cdr(first);
+
+        // Build lambda args and call eval_lambda to handle defaults
+        // eval_lambda expects (params body...) and handles multi-body wrapping
+        Value* lambda_args = mk_cell(params, cdr(args));
+        Value* lambda = eval_lambda(lambda_args, env);
+        if (is_error(lambda)) return lambda;
+
+        // Attach metadata if present
+        if (define_metadata) {
+            metadata_set(lambda, define_metadata);
+        }
         env_define(env, name, lambda);
         return name;
     }
@@ -767,6 +1540,10 @@ static Value* eval_define(Value* args, Env* env) {
     Value* name = first;
     Value* value = omni_eval(car(cdr(args)), env);
     if (is_error(value)) return value;
+    // Attach metadata if present
+    if (define_metadata) {
+        metadata_set(value, define_metadata);
+    }
     env_define(env, name, value);
     return name;
 }
@@ -781,12 +1558,53 @@ static Value* eval_lambda(Value* args, Env* env) {
         params = cdr(params);
     }
 
+    // Process params to extract defaults
+    // [name default] parses as (array name default)
+    Value* processed_params = mk_nil();
+    Value** params_tail = &processed_params;
+    Value* defaults = mk_nil();
+    Value** defaults_tail = &defaults;
+    int has_defaults = 0;
+
+    Value* p = params;
+    while (!is_nil(p)) {
+        Value* param = car(p);
+
+        if (param && param->tag == T_CELL) {
+            Value* head = car(param);
+            if (head && head->tag == T_SYM && strcmp(head->s, "array") == 0) {
+                // [name default] form - extract name and default
+                Value* name = car(cdr(param));
+                Value* default_expr = car(cdr(cdr(param)));
+                *params_tail = mk_cell(name, mk_nil());
+                params_tail = &((*params_tail)->cell.cdr);
+                *defaults_tail = mk_cell(default_expr, mk_nil());
+                defaults_tail = &((*defaults_tail)->cell.cdr);
+                has_defaults = 1;
+                p = cdr(p);
+                continue;
+            }
+        }
+
+        // Plain param (symbol) or rest marker (..)
+        *params_tail = mk_cell(param, mk_nil());
+        params_tail = &((*params_tail)->cell.cdr);
+        // Use NOTHING as marker for "no default" (distinguishes from NIL which is valid default)
+        *defaults_tail = mk_cell(mk_nothing(), mk_nil());
+        defaults_tail = &((*defaults_tail)->cell.cdr);
+        p = cdr(p);
+    }
+
     // Wrap body in do if multiple expressions
     if (!is_nil(cdr(cdr(args)))) {
         body = mk_cell(mk_sym("do"), cdr(args));
     }
 
-    return mk_lambda(params, body, env_to_value(env));
+    if (has_defaults) {
+        return mk_lambda_with_defaults(processed_params, body, env_to_value(env), defaults);
+    } else {
+        return mk_lambda(processed_params, body, env_to_value(env));
+    }
 }
 
 static Value* eval_do(Value* args, Env* env) {
@@ -985,8 +1803,68 @@ static int match_pattern(Value* pattern, Value* subject, Env* env) {
         }
 
         // Constructor pattern: (Some v) or (Point x y)
+        // First try enum dict matching (subject is dict with __variant__)
         if (op && op->tag == T_SYM) {
-            // Check if subject has same constructor
+            // Check if subject is an enum dict (has __dict__ marker and __variant__ field)
+            if (subject && subject->tag == T_CELL &&
+                car(subject) && car(subject)->tag == T_SYM &&
+                strcmp(car(subject)->s, "__dict__") == 0) {
+                // It's a dict - check if it's an enum with matching variant
+                Value* entries = cdr(subject);
+                Value* variant_name = NULL;
+
+                // Find __variant__ field
+                Value* e = entries;
+                while (!is_nil(e)) {
+                    Value* pair = car(e);
+                    if (pair && pair->tag == T_CELL) {
+                        Value* k = car(pair);
+                        if (k && k->tag == T_SYM && strcmp(k->s, "__variant__") == 0) {
+                            variant_name = cdr(pair);
+                            if (variant_name && variant_name->tag == T_CELL) {
+                                variant_name = car(variant_name);  // Get actual value from (key . (value))
+                            }
+                            break;
+                        }
+                    }
+                    e = cdr(e);
+                }
+
+                // Check if variant matches pattern
+                if (variant_name && variant_name->tag == T_SYM &&
+                    strcmp(variant_name->s, op->s) == 0) {
+                    // Variant matches! Now bind pattern variables to data fields
+                    Value* pat_vars = cdr(pattern);  // Variables in pattern (Some x) -> x
+
+                    // Get field names from enum data (skip __enum__, __variant__, __index__)
+                    Value* field_values = mk_nil();
+                    Value** fv_tail = &field_values;
+                    e = entries;
+                    while (!is_nil(e)) {
+                        Value* pair = car(e);
+                        if (pair && pair->tag == T_CELL) {
+                            Value* k = car(pair);
+                            if (k && k->tag == T_SYM &&
+                                strcmp(k->s, "__enum__") != 0 &&
+                                strcmp(k->s, "__variant__") != 0 &&
+                                strcmp(k->s, "__index__") != 0) {
+                                // This is a data field - extract value
+                                Value* v = cdr(pair);
+                                if (v && v->tag == T_CELL) v = car(v);
+                                *fv_tail = mk_cell(v, mk_nil());
+                                fv_tail = &((*fv_tail)->cell.cdr);
+                            }
+                        }
+                        e = cdr(e);
+                    }
+
+                    // Match pattern variables to field values
+                    return match_list_pattern(pat_vars, field_values, env);
+                }
+                return 0;  // Variant didn't match
+            }
+
+            // Fall back to tagged list pattern: (Some value) as literal list
             if (subject && subject->tag == T_CELL &&
                 car(subject) && car(subject)->tag == T_SYM &&
                 strcmp(car(subject)->s, op->s) == 0) {
@@ -1019,6 +1897,358 @@ static int match_list_pattern(Value* patterns, Value* items, Env* env) {
     }
 
     return is_nil(patterns) && is_nil(items);
+}
+
+/* ============================================================
+ * Hygienic Macro Expansion (syntax-rules style)
+ * ============================================================
+ *
+ * Design: Position-based semantics (Proposal A)
+ *   - Bare identifiers in patterns are bindings
+ *   - Same identifiers in templates are references
+ *   - #literals (...) declares literal matches
+ *   - (literal ...) in templates protects from further expansion
+ *   - ... for ellipsis/repetition
+ */
+
+// Gensym counter for hygiene
+static int gensym_counter = 0;
+
+// Check if symbol is in the literals list
+static int is_literal_sym(Value* sym, Value* literals) {
+    if (!sym || sym->tag != T_SYM) return 0;
+    while (!is_nil(literals)) {
+        Value* lit = car(literals);
+        if (lit && lit->tag == T_SYM && strcmp(lit->s, sym->s) == 0) {
+            return 1;
+        }
+        literals = cdr(literals);
+    }
+    return 0;
+}
+
+// Check if a symbol is the ellipsis marker
+static int is_ellipsis(Value* v) {
+    return v && v->tag == T_SYM && strcmp(v->s, "...") == 0;
+}
+
+// Count how many elements in a list
+static int list_length(Value* list) {
+    int len = 0;
+    while (!is_nil(list)) {
+        len++;
+        list = cdr(list);
+    }
+    return len;
+}
+
+// Get nth element of a list (0-indexed)
+static Value* list_ref(Value* list, int n) {
+    while (n > 0 && !is_nil(list)) {
+        list = cdr(list);
+        n--;
+    }
+    return is_nil(list) ? mk_nil() : car(list);
+}
+
+// Debug flag for syntax matching
+static int syntax_debug = 0;
+
+// Syntax pattern matching
+// bindings is an Env where we store pattern variable -> value mappings
+// For ellipsis patterns, we store pattern variable -> list of values
+static int syntax_match(Value* pattern, Value* input, Value* literals, Env* bindings) {
+    if (!pattern) return input == NULL;
+
+    if (syntax_debug) {
+        char* ps = val_to_str(pattern);
+        char* is = val_to_str(input);
+        fprintf(stderr, "syntax_match: pattern=%s input=%s\n", ps, is);
+        free(ps);
+        free(is);
+    }
+
+    // Literal nil matches nil
+    if (is_nil(pattern)) {
+        return is_nil(input);
+    }
+
+    // Wildcard _ matches anything
+    if (pattern->tag == T_SYM && strcmp(pattern->s, "_") == 0) {
+        return 1;
+    }
+
+    // Literal symbols (declared in #literals) match exactly
+    if (pattern->tag == T_SYM && is_literal_sym(pattern, literals)) {
+        return input && input->tag == T_SYM && strcmp(input->s, pattern->s) == 0;
+    }
+
+    // Keywords (:foo) match literally
+    if (pattern->tag == T_SYM && pattern->s[0] == ':') {
+        return input && input->tag == T_SYM && strcmp(input->s, pattern->s) == 0;
+    }
+
+    // Pattern variable (bare identifier) - bind it
+    if (pattern->tag == T_SYM) {
+        env_define(bindings, pattern, input);
+        return 1;
+    }
+
+    // Literal int matches exact int
+    if (pattern->tag == T_INT) {
+        return input && input->tag == T_INT && input->i == pattern->i;
+    }
+
+    // Literal string matches exact string
+    if (pattern->tag == T_STRING) {
+        return input && input->tag == T_STRING &&
+               pattern->str.len == input->str.len &&
+               memcmp(pattern->str.data, input->str.data, pattern->str.len) == 0;
+    }
+
+    // List pattern
+    if (pattern->tag == T_CELL) {
+        // Handle array wrapper in pattern
+        Value* pat_items = pattern;
+        if (car(pattern) && car(pattern)->tag == T_SYM &&
+            strcmp(car(pattern)->s, "array") == 0) {
+            pat_items = cdr(pattern);
+        }
+
+        // Input must be a list
+        if (!input || (input->tag != T_CELL && !is_nil(input))) return 0;
+
+        // Handle array wrapper in input
+        Value* inp_items = input;
+        if (input && input->tag == T_CELL && car(input) &&
+            car(input)->tag == T_SYM && strcmp(car(input)->s, "array") == 0) {
+            inp_items = cdr(input);
+        }
+
+        // Match list elements with ellipsis support
+        while (!is_nil(pat_items)) {
+            Value* pat_elem = car(pat_items);
+            Value* next_pat = cdr(pat_items);
+
+            // Check if next element is ellipsis
+            if (syntax_debug) {
+                char* pe = val_to_str(pat_elem);
+                char* np = val_to_str(next_pat);
+                fprintf(stderr, "  pat_elem=%s next_pat=%s is_ellipsis=%d\n",
+                        pe, np, !is_nil(next_pat) && is_ellipsis(car(next_pat)));
+                free(pe);
+                free(np);
+            }
+            if (!is_nil(next_pat) && is_ellipsis(car(next_pat))) {
+                if (syntax_debug) fprintf(stderr, "  -> ELLIPSIS match!\n");
+                // Ellipsis pattern: match zero or more
+                // Collect all remaining matches for this pattern
+                Value* matches = mk_nil();
+                Value** match_tail = &matches;
+
+                // Figure out how many elements to consume
+                // Count required elements after the ellipsis
+                int required_after = 0;
+                Value* after = cdr(next_pat);  // skip the ellipsis
+                while (!is_nil(after)) {
+                    if (!is_ellipsis(car(after))) required_after++;
+                    after = cdr(after);
+                }
+
+                // Consume inp_items until we have exactly required_after left
+                while (list_length(inp_items) > required_after) {
+                    // Try to match pat_elem against current input
+                    Env* sub_bindings = env_new(NULL);
+                    if (!syntax_match(pat_elem, car(inp_items), literals, sub_bindings)) {
+                        env_free(sub_bindings);
+                        return 0;
+                    }
+
+                    // Collect the matched values
+                    // For each binding in sub_bindings, append to the corresponding list
+                    *match_tail = mk_cell(car(inp_items), mk_nil());
+                    match_tail = &((*match_tail)->cell.cdr);
+
+                    // Also track individual variable bindings for ellipsis
+                    // We need to collect all bindings from sub_bindings
+                    // For simplicity, just store the whole match
+                    env_free(sub_bindings);
+                    inp_items = cdr(inp_items);
+                }
+
+                // Store the matches under the pattern variable
+                // For simple pattern like x ..., store list under x
+                if (pat_elem->tag == T_SYM && !is_literal_sym(pat_elem, literals)) {
+                    env_define(bindings, pat_elem, matches);
+                }
+
+                // Skip ellipsis in pattern
+                pat_items = cdr(next_pat);
+                continue;
+            }
+
+            // Regular (non-ellipsis) match
+            if (is_nil(inp_items)) return 0;  // Not enough input
+
+            if (!syntax_match(pat_elem, car(inp_items), literals, bindings)) {
+                return 0;
+            }
+
+            pat_items = cdr(pat_items);
+            inp_items = cdr(inp_items);
+        }
+
+        // All pattern elements consumed; input should be exhausted too
+        return is_nil(inp_items);
+    }
+
+    return 0;
+}
+
+// Generate a fresh hygienically renamed symbol
+static Value* gensym(const char* base, int counter) {
+    char buf[256];
+    snprintf(buf, sizeof(buf), "%s##%d", base, counter);
+    return mk_sym(buf);
+}
+
+// Syntax template expansion
+// Replaces pattern variables with their bound values
+// Handles ellipsis by repeating the sub-template
+static Value* syntax_expand(Value* template, Env* bindings, int counter) {
+    if (!template) return mk_nil();
+
+    // Literal values pass through
+    if (template->tag == T_INT || template->tag == T_STRING ||
+        template->tag == T_CHAR || template->tag == T_FLOAT) {
+        return template;
+    }
+
+    // Nil passes through
+    if (is_nil(template)) return template;
+
+    // Symbol: look up in bindings, or return as-is (possibly renamed for hygiene)
+    if (template->tag == T_SYM) {
+        Value* bound = env_lookup(bindings, template);
+        if (bound) {
+            return bound;
+        }
+        // Not bound - return as-is (macro-introduced identifier)
+        // For full hygiene, we'd rename it, but for now return as-is
+        return template;
+    }
+
+    // List: process recursively, handling ellipsis
+    if (template->tag == T_CELL) {
+        // Check for (literal ...) escape
+        if (car(template) && car(template)->tag == T_SYM &&
+            strcmp(car(template)->s, "literal") == 0) {
+            // Return the contents without expansion
+            return car(cdr(template));
+        }
+
+        // Handle array wrapper
+        int is_array = car(template) && car(template)->tag == T_SYM &&
+                       strcmp(car(template)->s, "array") == 0;
+        Value* items = is_array ? cdr(template) : template;
+
+        Value* result = mk_nil();
+        Value** result_tail = &result;
+
+        while (!is_nil(items)) {
+            Value* elem = car(items);
+            Value* next = cdr(items);
+
+            // Check if followed by ellipsis
+            if (!is_nil(next) && is_ellipsis(car(next))) {
+                // Ellipsis expansion: repeat elem for each element in the bound list
+                // The elem should contain a pattern variable that was bound to a list
+                // Find which variable in elem was bound to a list
+                if (elem->tag == T_SYM) {
+                    Value* bound_list = env_lookup(bindings, elem);
+                    if (bound_list && bound_list->tag == T_CELL) {
+                        // Splice in each element
+                        while (!is_nil(bound_list)) {
+                            *result_tail = mk_cell(car(bound_list), mk_nil());
+                            result_tail = &((*result_tail)->cell.cdr);
+                            bound_list = cdr(bound_list);
+                        }
+                    }
+                } else {
+                    // Complex ellipsis pattern - need to iterate
+                    // For now, just expand once
+                    Value* expanded = syntax_expand(elem, bindings, counter);
+                    *result_tail = mk_cell(expanded, mk_nil());
+                    result_tail = &((*result_tail)->cell.cdr);
+                }
+                items = cdr(next);  // skip ellipsis
+                continue;
+            }
+
+            // Regular expansion
+            Value* expanded = syntax_expand(elem, bindings, counter);
+            *result_tail = mk_cell(expanded, mk_nil());
+            result_tail = &((*result_tail)->cell.cdr);
+            items = cdr(items);
+        }
+
+        if (is_array) {
+            return mk_cell(mk_sym("array"), result);
+        }
+        return result;
+    }
+
+    return template;
+}
+
+// Try to expand a form as a macro
+// Returns NULL if not a macro call, expanded form otherwise
+static Value* try_macro_expand(Value* expr, Env* env) {
+    if (!expr || expr->tag != T_CELL) return NULL;
+    if (is_nil(expr)) return NULL;
+
+    Value* head = car(expr);
+    if (!head || head->tag != T_SYM) return NULL;
+
+    // Look up head in environment
+    Value* macro_val = env_lookup(env, head);
+    if (!macro_val || !is_syntax(macro_val)) return NULL;
+
+    // It's a macro! Try to match and expand
+    Value* literals = macro_val->syntax.literals;
+    Value* rules = macro_val->syntax.rules;
+
+    // The macro name is always treated as a literal (matched exactly)
+    // Add it to the literals list for matching
+    Value* literals_with_name = mk_cell(head, literals);
+
+    // Try each rule in order
+    while (!is_nil(rules)) {
+        Value* rule = car(rules);
+        Value* pattern = car(rule);
+        Value* template = car(cdr(rule));
+
+        // Create fresh bindings environment for this match attempt
+        Env* bindings = env_new(NULL);
+
+        // Pattern should be (macro-name arg1 arg2 ...)
+        // Match against the full expr
+        if (syntax_match(pattern, expr, literals_with_name, bindings)) {
+            // Match succeeded! Expand the template
+            gensym_counter++;
+            Value* expanded = syntax_expand(template, bindings, gensym_counter);
+            env_free(bindings);
+            return expanded;
+        }
+
+        env_free(bindings);
+        rules = cdr(rules);
+    }
+
+    // No rule matched - error
+    char msg[256];
+    snprintf(msg, sizeof(msg), "syntax error: no matching clause for macro %s", head->s);
+    return mk_error(msg);
 }
 
 // cond expands to chained match: each [test result] matches test against true
@@ -1085,7 +2315,8 @@ static Value* eval_dict(Value* args, Env* env) {
     Value** tail = &result;
 
     while (!is_nil(args)) {
-        Value* key = car(args);
+        Value* key = omni_eval(car(args), env);  // Evaluate keys too
+        if (is_error(key)) return key;
         args = cdr(args);
         if (is_nil(args)) break;
 
@@ -1367,53 +2598,110 @@ void register_primitive(const char* name, int arity, PrimitiveFn fn) {
 }
 
 // Built-in primitives
-static Value* prim_add(Value* args) {
-    long result = 0;
+// Helper to check if any arg in list is a float
+static int has_float(Value* args) {
     while (!is_nil(args)) {
         Value* v = car(args);
-        if (v && v->tag == T_INT) result += v->i;
+        if (v && v->tag == T_FLOAT) return 1;
         args = cdr(args);
     }
-    return mk_int(result);
+    return 0;
+}
+
+static Value* prim_add(Value* args) {
+    if (has_float(args)) {
+        double result = 0.0;
+        while (!is_nil(args)) {
+            Value* v = car(args);
+            if (is_numeric(v)) result += to_double(v);
+            args = cdr(args);
+        }
+        return mk_float(result);
+    } else {
+        long result = 0;
+        while (!is_nil(args)) {
+            Value* v = car(args);
+            if (v && v->tag == T_INT) result += v->i;
+            args = cdr(args);
+        }
+        return mk_int(result);
+    }
 }
 
 static Value* prim_sub(Value* args) {
     if (is_nil(args)) return mk_int(0);
     Value* first = car(args);
-    if (!first || first->tag != T_INT) return mk_error("- requires integers");
-    long result = first->i;
-    args = cdr(args);
-    if (is_nil(args)) return mk_int(-result);
-    while (!is_nil(args)) {
-        Value* v = car(args);
-        if (v && v->tag == T_INT) result -= v->i;
+    if (!is_numeric(first)) return mk_error("- requires numbers");
+
+    if (has_float(args)) {
+        double result = to_double(first);
         args = cdr(args);
+        if (is_nil(args)) return mk_float(-result);
+        while (!is_nil(args)) {
+            Value* v = car(args);
+            if (is_numeric(v)) result -= to_double(v);
+            args = cdr(args);
+        }
+        return mk_float(result);
+    } else {
+        long result = first->i;
+        args = cdr(args);
+        if (is_nil(args)) return mk_int(-result);
+        while (!is_nil(args)) {
+            Value* v = car(args);
+            if (v && v->tag == T_INT) result -= v->i;
+            args = cdr(args);
+        }
+        return mk_int(result);
     }
-    return mk_int(result);
 }
 
 static Value* prim_mul(Value* args) {
-    long result = 1;
-    while (!is_nil(args)) {
-        Value* v = car(args);
-        if (v && v->tag == T_INT) result *= v->i;
-        args = cdr(args);
+    if (has_float(args)) {
+        double result = 1.0;
+        while (!is_nil(args)) {
+            Value* v = car(args);
+            if (is_numeric(v)) result *= to_double(v);
+            args = cdr(args);
+        }
+        return mk_float(result);
+    } else {
+        long result = 1;
+        while (!is_nil(args)) {
+            Value* v = car(args);
+            if (v && v->tag == T_INT) result *= v->i;
+            args = cdr(args);
+        }
+        return mk_int(result);
     }
-    return mk_int(result);
 }
 
 static Value* prim_div(Value* args) {
     if (is_nil(args)) return mk_int(1);
     Value* first = car(args);
-    if (!first || first->tag != T_INT) return mk_error("/ requires integers");
-    long result = first->i;
+    if (!is_numeric(first)) return mk_error("/ requires numbers");
+
+    // Division always returns float if there are multiple args
+    double result = to_double(first);
     args = cdr(args);
+    if (is_nil(args)) {
+        // Single argument: return reciprocal
+        return mk_float(1.0 / result);
+    }
     while (!is_nil(args)) {
         Value* v = car(args);
-        if (v && v->tag == T_INT && v->i != 0) result /= v->i;
+        if (is_numeric(v)) {
+            double d = to_double(v);
+            if (d == 0.0) return mk_error("Division by zero");
+            result /= d;
+        }
         args = cdr(args);
     }
-    return mk_int(result);
+    // Return int if result is whole number and no floats in args
+    if (!has_float(args) && result == (long)result) {
+        return mk_int((long)result);
+    }
+    return mk_float(result);
 }
 
 static Value* prim_mod(Value* args) {
@@ -1428,44 +2716,52 @@ static Value* prim_mod(Value* args) {
 static Value* prim_lt(Value* args) {
     Value* a = car(args);
     Value* b = car(cdr(args));
-    if (!a || !b || a->tag != T_INT || b->tag != T_INT)
-        return mk_error("< requires two integers");
-    return mk_sym(a->i < b->i ? "true" : "false");
+    if (!is_numeric(a) || !is_numeric(b))
+        return mk_error("< requires two numbers");
+    return mk_sym(to_double(a) < to_double(b) ? "true" : "false");
 }
 
 static Value* prim_gt(Value* args) {
     Value* a = car(args);
     Value* b = car(cdr(args));
-    if (!a || !b || a->tag != T_INT || b->tag != T_INT)
-        return mk_error("> requires two integers");
-    return mk_sym(a->i > b->i ? "true" : "false");
+    if (!is_numeric(a) || !is_numeric(b))
+        return mk_error("> requires two numbers");
+    return mk_sym(to_double(a) > to_double(b) ? "true" : "false");
 }
 
 static Value* prim_le(Value* args) {
     Value* a = car(args);
     Value* b = car(cdr(args));
-    if (!a || !b || a->tag != T_INT || b->tag != T_INT)
-        return mk_error("<= requires two integers");
-    return mk_sym(a->i <= b->i ? "true" : "false");
+    if (!is_numeric(a) || !is_numeric(b))
+        return mk_error("<= requires two numbers");
+    return mk_sym(to_double(a) <= to_double(b) ? "true" : "false");
 }
 
 static Value* prim_ge(Value* args) {
     Value* a = car(args);
     Value* b = car(cdr(args));
-    if (!a || !b || a->tag != T_INT || b->tag != T_INT)
-        return mk_error(">= requires two integers");
-    return mk_sym(a->i >= b->i ? "true" : "false");
+    if (!is_numeric(a) || !is_numeric(b))
+        return mk_error(">= requires two numbers");
+    return mk_sym(to_double(a) >= to_double(b) ? "true" : "false");
 }
 
 static Value* prim_eq(Value* args) {
     Value* a = car(args);
     Value* b = car(cdr(args));
     if (!a || !b) return mk_sym("false");
+    // Allow int/float comparison
+    if (is_numeric(a) && is_numeric(b)) {
+        return mk_sym(to_double(a) == to_double(b) ? "true" : "false");
+    }
     if (a->tag != b->tag) return mk_sym("false");
     switch (a->tag) {
         case T_INT: return mk_sym(a->i == b->i ? "true" : "false");
+        case T_FLOAT: return mk_sym(a->f == b->f ? "true" : "false");
         case T_SYM:
         case T_CODE: return mk_sym(strcmp(a->s, b->s) == 0 ? "true" : "false");
+        case T_STRING: return mk_sym(a->str.len == b->str.len &&
+                                     memcmp(a->str.data, b->str.data, a->str.len) == 0 ? "true" : "false");
+        case T_CHAR: return mk_sym(a->codepoint == b->codepoint ? "true" : "false");
         case T_NIL: return mk_sym("true");
         case T_NOTHING: return mk_sym("true");
         default: return mk_sym(a == b ? "true" : "false");
@@ -1496,6 +2792,312 @@ static Value* prim_null(Value* args) {
 static Value* prim_nothing(Value* args) {
     Value* v = car(args);
     return mk_sym((v && v->tag == T_NOTHING) ? "true" : "false");
+}
+
+// empty? - returns true for empty list or empty string
+static Value* prim_empty(Value* args) {
+    Value* v = car(args);
+    if (is_nil(v)) return mk_sym("true");
+    if (is_string(v) && string_len(v) == 0) return mk_sym("true");
+    return mk_sym("false");
+}
+
+// String primitives
+static Value* prim_string_q(Value* args) {
+    return mk_sym(is_string(car(args)) ? "true" : "false");
+}
+
+static Value* prim_char_q(Value* args) {
+    return mk_sym(is_char(car(args)) ? "true" : "false");
+}
+
+static Value* prim_symbol_q(Value* args) {
+    Value* v = car(args);
+    return mk_sym((v && v->tag == T_SYM) ? "true" : "false");
+}
+
+static Value* prim_string_length(Value* args) {
+    Value* s = car(args);
+    if (!is_string(s)) return mk_error("string-length: expected string");
+    return mk_int((long)string_len(s));
+}
+
+static Value* prim_string_append(Value* args) {
+    // Collect all strings and append
+    DString* ds = ds_new();
+    if (!ds) return mk_error("OOM");
+
+    while (!is_nil(args)) {
+        Value* s = car(args);
+        if (is_string(s)) {
+            ds_append_len(ds, string_data(s), string_len(s));
+        } else if (s && s->tag == T_CHAR) {
+            // Convert char to string
+            char buf[8] = {0};
+            if (s->codepoint < 128) {
+                buf[0] = (char)s->codepoint;
+                ds_append(ds, buf);
+            } else {
+                // Simple UTF-8 encoding (up to 3 bytes for now)
+                if (s->codepoint < 0x800) {
+                    buf[0] = 0xC0 | (s->codepoint >> 6);
+                    buf[1] = 0x80 | (s->codepoint & 0x3F);
+                } else {
+                    buf[0] = 0xE0 | (s->codepoint >> 12);
+                    buf[1] = 0x80 | ((s->codepoint >> 6) & 0x3F);
+                    buf[2] = 0x80 | (s->codepoint & 0x3F);
+                }
+                ds_append(ds, buf);
+            }
+        } else {
+            ds_free(ds);
+            return mk_error("string-append: expected string or char");
+        }
+        args = cdr(args);
+    }
+
+    size_t len = ds_len(ds);
+    char* data = ds_take(ds);
+    Value* result = mk_string(data, len);
+    free(data);
+    return result;
+}
+
+static Value* prim_string_ref(Value* args) {
+    Value* s = car(args);
+    Value* idx = car(cdr(args));
+    if (!is_string(s)) return mk_error("string-ref: expected string");
+    if (!idx || idx->tag != T_INT) return mk_error("string-ref: expected integer index");
+
+    size_t i = (size_t)idx->i;
+    if (i >= string_len(s)) return mk_error("string-ref: index out of bounds");
+
+    // For now, return byte as char (TODO: proper UTF-8)
+    return mk_char((unsigned char)string_data(s)[i]);
+}
+
+static Value* prim_substring(Value* args) {
+    Value* s = car(args);
+    Value* start_v = car(cdr(args));
+    Value* end_v = car(cdr(cdr(args)));
+
+    if (!is_string(s)) return mk_error("substring: expected string");
+    if (!start_v || start_v->tag != T_INT) return mk_error("substring: expected start index");
+    if (!end_v || end_v->tag != T_INT) return mk_error("substring: expected end index");
+
+    size_t start = (size_t)start_v->i;
+    size_t end = (size_t)end_v->i;
+
+    return substring(s, start, end);
+}
+
+static Value* prim_string_to_list(Value* args) {
+    Value* s = car(args);
+    if (!is_string(s)) return mk_error("string->list: expected string");
+
+    Value* result = mk_nil();
+    Value** tail = &result;
+
+    // For now, treat as bytes (TODO: proper UTF-8)
+    for (size_t i = 0; i < string_len(s); i++) {
+        Value* ch = mk_char((unsigned char)string_data(s)[i]);
+        Value* cell = mk_cell(ch, mk_nil());
+        *tail = cell;
+        tail = &cell->cell.cdr;
+    }
+
+    return result;
+}
+
+static Value* prim_list_to_string(Value* args) {
+    Value* lst = car(args);
+
+    DString* ds = ds_new();
+    if (!ds) return mk_error("OOM");
+
+    while (!is_nil(lst)) {
+        Value* ch = car(lst);
+        if (!is_char(ch)) {
+            ds_free(ds);
+            return mk_error("list->string: expected list of chars");
+        }
+        if (ch->codepoint < 128) {
+            ds_append_char(ds, (char)ch->codepoint);
+        } else {
+            // UTF-8 encoding
+            char buf[4] = {0};
+            if (ch->codepoint < 0x800) {
+                buf[0] = 0xC0 | (ch->codepoint >> 6);
+                buf[1] = 0x80 | (ch->codepoint & 0x3F);
+            } else {
+                buf[0] = 0xE0 | (ch->codepoint >> 12);
+                buf[1] = 0x80 | ((ch->codepoint >> 6) & 0x3F);
+                buf[2] = 0x80 | (ch->codepoint & 0x3F);
+            }
+            ds_append(ds, buf);
+        }
+        lst = cdr(lst);
+    }
+
+    size_t len = ds_len(ds);
+    char* data = ds_take(ds);
+    Value* result = mk_string(data, len);
+    free(data);
+    return result;
+}
+
+// Math primitives
+static Value* prim_float_q(Value* args) {
+    return mk_sym(is_float(car(args)) ? "true" : "false");
+}
+
+static Value* prim_int_q(Value* args) {
+    Value* v = car(args);
+    return mk_sym(v && v->tag == T_INT ? "true" : "false");
+}
+
+static Value* prim_number_q(Value* args) {
+    return mk_sym(is_numeric(car(args)) ? "true" : "false");
+}
+
+static Value* prim_sin(Value* args) {
+    Value* v = car(args);
+    if (!is_numeric(v)) return mk_error("sin: expected number");
+    return mk_float(sin(to_double(v)));
+}
+
+static Value* prim_cos(Value* args) {
+    Value* v = car(args);
+    if (!is_numeric(v)) return mk_error("cos: expected number");
+    return mk_float(cos(to_double(v)));
+}
+
+static Value* prim_tan(Value* args) {
+    Value* v = car(args);
+    if (!is_numeric(v)) return mk_error("tan: expected number");
+    return mk_float(tan(to_double(v)));
+}
+
+static Value* prim_asin(Value* args) {
+    Value* v = car(args);
+    if (!is_numeric(v)) return mk_error("asin: expected number");
+    return mk_float(asin(to_double(v)));
+}
+
+static Value* prim_acos(Value* args) {
+    Value* v = car(args);
+    if (!is_numeric(v)) return mk_error("acos: expected number");
+    return mk_float(acos(to_double(v)));
+}
+
+static Value* prim_atan(Value* args) {
+    Value* v = car(args);
+    if (!is_numeric(v)) return mk_error("atan: expected number");
+    return mk_float(atan(to_double(v)));
+}
+
+static Value* prim_atan2(Value* args) {
+    Value* y = car(args);
+    Value* x = car(cdr(args));
+    if (!is_numeric(y) || !is_numeric(x)) return mk_error("atan2: expected two numbers");
+    return mk_float(atan2(to_double(y), to_double(x)));
+}
+
+static Value* prim_exp(Value* args) {
+    Value* v = car(args);
+    if (!is_numeric(v)) return mk_error("exp: expected number");
+    return mk_float(exp(to_double(v)));
+}
+
+static Value* prim_log(Value* args) {
+    Value* v = car(args);
+    if (!is_numeric(v)) return mk_error("log: expected number");
+    double d = to_double(v);
+    if (d <= 0) return mk_error("log: domain error");
+    return mk_float(log(d));
+}
+
+static Value* prim_log10(Value* args) {
+    Value* v = car(args);
+    if (!is_numeric(v)) return mk_error("log10: expected number");
+    double d = to_double(v);
+    if (d <= 0) return mk_error("log10: domain error");
+    return mk_float(log10(d));
+}
+
+static Value* prim_sqrt(Value* args) {
+    Value* v = car(args);
+    if (!is_numeric(v)) return mk_error("sqrt: expected number");
+    double d = to_double(v);
+    if (d < 0) return mk_error("sqrt: domain error");
+    return mk_float(sqrt(d));
+}
+
+static Value* prim_pow(Value* args) {
+    Value* base = car(args);
+    Value* exp = car(cdr(args));
+    if (!is_numeric(base) || !is_numeric(exp)) return mk_error("pow: expected two numbers");
+    return mk_float(pow(to_double(base), to_double(exp)));
+}
+
+static Value* prim_abs(Value* args) {
+    Value* v = car(args);
+    if (!is_numeric(v)) return mk_error("abs: expected number");
+    if (v->tag == T_INT) {
+        return mk_int(v->i < 0 ? -v->i : v->i);
+    }
+    return mk_float(fabs(v->f));
+}
+
+static Value* prim_floor(Value* args) {
+    Value* v = car(args);
+    if (!is_numeric(v)) return mk_error("floor: expected number");
+    return mk_float(floor(to_double(v)));
+}
+
+static Value* prim_ceil(Value* args) {
+    Value* v = car(args);
+    if (!is_numeric(v)) return mk_error("ceil: expected number");
+    return mk_float(ceil(to_double(v)));
+}
+
+static Value* prim_round(Value* args) {
+    Value* v = car(args);
+    if (!is_numeric(v)) return mk_error("round: expected number");
+    return mk_float(round(to_double(v)));
+}
+
+static Value* prim_truncate(Value* args) {
+    Value* v = car(args);
+    if (!is_numeric(v)) return mk_error("truncate: expected number");
+    return mk_float(trunc(to_double(v)));
+}
+
+static Value* prim_to_int(Value* args) {
+    Value* v = car(args);
+    if (!is_numeric(v)) return mk_error("->int: expected number");
+    return mk_int((long)to_double(v));
+}
+
+static Value* prim_to_float(Value* args) {
+    Value* v = car(args);
+    if (!is_numeric(v)) return mk_error("->float: expected number");
+    return mk_float(to_double(v));
+}
+
+// Constants
+// Note: pi, e, inf, nan are defined as constants in init_env(), not as primitives
+
+static Value* prim_nan_q(Value* args) {
+    Value* v = car(args);
+    if (!is_float(v)) return mk_sym("false");
+    return mk_sym(isnan(v->f) ? "true" : "false");
+}
+
+static Value* prim_inf_q(Value* args) {
+    Value* v = car(args);
+    if (!is_float(v)) return mk_sym("false");
+    return mk_sym(isinf(v->f) ? "true" : "false");
 }
 
 static Value* prim_list(Value* args) {
@@ -1631,6 +3233,478 @@ static Value* prim_length(Value* args) {
     return mk_int(len);
 }
 
+// ===== Array primitives =====
+
+// Helper: check if value is an array (__array__ marker)
+static int is_array(Value* v) {
+    return v && v->tag == T_CELL && car(v) && car(v)->tag == T_SYM &&
+           strcmp(car(v)->s, "__array__") == 0;
+}
+
+// Helper: get array elements (skips __array__ marker)
+static Value* array_elements(Value* arr) {
+    return is_array(arr) ? cdr(arr) : mk_nil();
+}
+
+static Value* prim_array_q(Value* args) {
+    return mk_sym(is_array(car(args)) ? "true" : "false");
+}
+
+static Value* prim_array_length(Value* args) {
+    Value* arr = car(args);
+    if (!is_array(arr)) return mk_error("array-length: expected array");
+    Value* elems = array_elements(arr);
+    long len = 0;
+    while (!is_nil(elems)) {
+        len++;
+        elems = cdr(elems);
+    }
+    return mk_int(len);
+}
+
+static Value* prim_array_ref(Value* args) {
+    Value* arr = car(args);
+    Value* idx = car(cdr(args));
+    if (!is_array(arr)) return mk_error("array-ref: expected array");
+    if (!idx || idx->tag != T_INT) return mk_error("array-ref: expected integer index");
+
+    long i = idx->i;
+    if (i < 0) return mk_error("array-ref: negative index");
+
+    Value* elems = array_elements(arr);
+    while (i > 0 && !is_nil(elems)) {
+        elems = cdr(elems);
+        i--;
+    }
+    if (is_nil(elems)) return mk_error("array-ref: index out of bounds");
+    return car(elems);
+}
+
+static Value* prim_array_set(Value* args) {
+    Value* arr = car(args);
+    Value* idx = car(cdr(args));
+    Value* val = car(cdr(cdr(args)));
+    if (!is_array(arr)) return mk_error("array-set!: expected array");
+    if (!idx || idx->tag != T_INT) return mk_error("array-set!: expected integer index");
+
+    long i = idx->i;
+    if (i < 0) return mk_error("array-set!: negative index");
+
+    Value* elems = array_elements(arr);
+    while (i > 0 && !is_nil(elems)) {
+        elems = cdr(elems);
+        i--;
+    }
+    if (is_nil(elems)) return mk_error("array-set!: index out of bounds");
+
+    // Mutate the car of this cell
+    elems->cell.car = val;
+    return val;
+}
+
+static Value* prim_array_slice(Value* args) {
+    Value* arr = car(args);
+    Value* start_v = car(cdr(args));
+    Value* end_v = car(cdr(cdr(args)));
+
+    if (!is_array(arr)) return mk_error("array-slice: expected array");
+    if (!start_v || start_v->tag != T_INT) return mk_error("array-slice: expected integer start");
+
+    long start = start_v->i;
+    long end = -1;  // -1 means to end
+    if (end_v && end_v->tag == T_INT) {
+        end = end_v->i;
+    }
+
+    if (start < 0) return mk_error("array-slice: negative start");
+
+    Value* elems = array_elements(arr);
+
+    // Skip to start
+    long pos = 0;
+    while (pos < start && !is_nil(elems)) {
+        elems = cdr(elems);
+        pos++;
+    }
+
+    // Collect elements until end
+    Value* result = mk_nil();
+    Value** tail = &result;
+    while (!is_nil(elems) && (end < 0 || pos < end)) {
+        Value* cell = mk_cell(car(elems), mk_nil());
+        *tail = cell;
+        tail = &cell->cell.cdr;
+        elems = cdr(elems);
+        pos++;
+    }
+
+    return mk_cell(mk_sym("__array__"), result);
+}
+
+// ===== Dict primitives =====
+
+// Helper: check if value is a dict (__dict__ marker)
+static int is_dict(Value* v) {
+    return v && v->tag == T_CELL && car(v) && car(v)->tag == T_SYM &&
+           strcmp(car(v)->s, "__dict__") == 0;
+}
+
+// Helper: get dict entries (skips __dict__ marker)
+static Value* dict_entries(Value* dict) {
+    return is_dict(dict) ? cdr(dict) : mk_nil();
+}
+
+static Value* prim_dict_q(Value* args) {
+    return mk_sym(is_dict(car(args)) ? "true" : "false");
+}
+
+static Value* prim_dict_ref(Value* args) {
+    Value* dict = car(args);
+    Value* key = car(cdr(args));
+    if (!is_dict(dict)) return mk_error("dict-ref: expected dict");
+
+    Value* entries = dict_entries(dict);
+    while (!is_nil(entries)) {
+        Value* pair = car(entries);
+        Value* k = car(pair);
+        // Compare keys (symbols by string, others by identity)
+        if (k && key && k->tag == T_SYM && key->tag == T_SYM) {
+            if (strcmp(k->s, key->s) == 0) return cdr(pair);
+        } else if (k == key) {
+            return cdr(pair);
+        }
+        entries = cdr(entries);
+    }
+    return mk_nothing();  // Key not found
+}
+
+static Value* prim_dict_set(Value* args) {
+    Value* dict = car(args);
+    Value* key = car(cdr(args));
+    Value* val = car(cdr(cdr(args)));
+    if (!is_dict(dict)) return mk_error("dict-set!: expected dict");
+
+    Value* entries = dict_entries(dict);
+    while (!is_nil(entries)) {
+        Value* pair = car(entries);
+        Value* k = car(pair);
+        if (k && key && k->tag == T_SYM && key->tag == T_SYM) {
+            if (strcmp(k->s, key->s) == 0) {
+                pair->cell.cdr = val;  // Mutate existing
+                return val;
+            }
+        } else if (k == key) {
+            pair->cell.cdr = val;
+            return val;
+        }
+        entries = cdr(entries);
+    }
+
+    // Key not found, add new entry at end
+    Value* new_pair = mk_cell(key, val);
+    Value* new_entry = mk_cell(new_pair, mk_nil());
+
+    // Find end of entries list
+    Value* tail = cdr(dict);
+    if (is_nil(tail)) {
+        dict->cell.cdr = new_entry;
+    } else {
+        while (!is_nil(cdr(tail))) {
+            tail = cdr(tail);
+        }
+        tail->cell.cdr = new_entry;
+    }
+    return val;
+}
+
+static Value* prim_keys(Value* args) {
+    Value* dict = car(args);
+    if (!is_dict(dict)) return mk_error("keys: expected dict");
+
+    Value* entries = dict_entries(dict);
+    Value* result = mk_nil();
+    Value** tail = &result;
+
+    while (!is_nil(entries)) {
+        Value* pair = car(entries);
+        Value* cell = mk_cell(car(pair), mk_nil());
+        *tail = cell;
+        tail = &cell->cell.cdr;
+        entries = cdr(entries);
+    }
+    return result;
+}
+
+static Value* prim_values(Value* args) {
+    Value* dict = car(args);
+    if (!is_dict(dict)) return mk_error("values: expected dict");
+
+    Value* entries = dict_entries(dict);
+    Value* result = mk_nil();
+    Value** tail = &result;
+
+    while (!is_nil(entries)) {
+        Value* pair = car(entries);
+        Value* cell = mk_cell(cdr(pair), mk_nil());
+        *tail = cell;
+        tail = &cell->cell.cdr;
+        entries = cdr(entries);
+    }
+    return result;
+}
+
+static Value* prim_dict_contains(Value* args) {
+    Value* dict = car(args);
+    Value* key = car(cdr(args));
+    if (!is_dict(dict)) return mk_error("dict-contains?: expected dict");
+
+    Value* entries = dict_entries(dict);
+    while (!is_nil(entries)) {
+        Value* pair = car(entries);
+        Value* k = car(pair);
+        if (k && key && k->tag == T_SYM && key->tag == T_SYM) {
+            if (strcmp(k->s, key->s) == 0) return mk_sym("true");
+        } else if (k == key) {
+            return mk_sym("true");
+        }
+        entries = cdr(entries);
+    }
+    return mk_sym("false");
+}
+
+/**
+ * (get obj key)
+ * Generic accessor that works on both arrays and dicts.
+ * For arrays: key must be an integer index
+ * For dicts: key can be any value (typically keyword/symbol)
+ */
+static Value* prim_get(Value* args) {
+    Value* obj = car(args);
+    Value* key = car(cdr(args));
+
+    if (!obj) return mk_error("get: nil object");
+
+    // Array access
+    if (is_array(obj)) {
+        if (!key || key->tag != T_INT) {
+            return mk_error("get: array access requires integer index");
+        }
+        long i = key->i;
+        if (i < 0) return mk_error("get: negative index");
+
+        Value* elems = array_elements(obj);
+        while (i > 0 && !is_nil(elems)) {
+            elems = cdr(elems);
+            i--;
+        }
+        if (is_nil(elems)) return mk_error("get: index out of bounds");
+        return car(elems);
+    }
+
+    // Dict access
+    if (is_dict(obj)) {
+        Value* entries = dict_entries(obj);
+        while (!is_nil(entries)) {
+            Value* pair = car(entries);
+            Value* k = car(pair);
+            // Compare keys
+            if (k && key) {
+                if (k->tag == T_SYM && key->tag == T_SYM) {
+                    if (strcmp(k->s, key->s) == 0) return cdr(pair);
+                } else if (k->tag == T_INT && key->tag == T_INT) {
+                    if (k->i == key->i) return cdr(pair);
+                } else if (k->tag == T_STRING && key->tag == T_STRING) {
+                    if (k->str.len == key->str.len &&
+                        memcmp(k->str.data, key->str.data, k->str.len) == 0) {
+                        return cdr(pair);
+                    }
+                } else if (k == key) {
+                    return cdr(pair);
+                }
+            }
+            entries = cdr(entries);
+        }
+        return mk_nothing();  // Key not found
+    }
+
+    // String character access
+    if (is_string(obj)) {
+        if (!key || key->tag != T_INT) {
+            return mk_error("get: string access requires integer index");
+        }
+        long i = key->i;
+        if (i < 0 || (size_t)i >= string_len(obj)) {
+            return mk_error("get: string index out of bounds");
+        }
+        return mk_char((unsigned char)string_data(obj)[i]);
+    }
+
+    return mk_error("get: expected array, dict, or string");
+}
+
+// ===== File I/O primitives =====
+
+static Value* prim_open(Value* args) {
+    Value* filename = car(args);
+    Value* mode = car(cdr(args));
+
+    if (!is_string(filename)) return mk_error("open: expected string filename");
+
+    const char* fname = string_data(filename);
+    const char* fmode = "r";
+    int modenum = 0;
+
+    if (mode && mode->tag == T_SYM) {
+        const char* ms = mode->s;
+        // Skip leading colon for keywords
+        if (ms[0] == ':') ms++;
+
+        if (strcmp(ms, "read") == 0 || strcmp(ms, "r") == 0) {
+            fmode = "r";
+            modenum = 0;
+        } else if (strcmp(ms, "write") == 0 || strcmp(ms, "w") == 0) {
+            fmode = "w";
+            modenum = 1;
+        } else if (strcmp(ms, "append") == 0 || strcmp(ms, "a") == 0) {
+            fmode = "a";
+            modenum = 2;
+        } else {
+            return mk_error("open: unknown mode (use :read, :write, or :append)");
+        }
+    }
+
+    FILE* fp = fopen(fname, fmode);
+    if (!fp) return mk_error("open: cannot open file");
+
+    return mk_port(fp, fname, modenum);
+}
+
+static Value* prim_close(Value* args) {
+    Value* port = car(args);
+    if (!is_port(port)) return mk_error("close: expected port");
+    if (port->port.closed) return mk_nothing();
+
+    if (port->port.fp) {
+        fclose(port->port.fp);
+        port->port.fp = NULL;
+    }
+    port->port.closed = 1;
+    return mk_nothing();
+}
+
+static Value* prim_read_line(Value* args) {
+    Value* port = car(args);
+    if (!is_port(port)) return mk_error("read-line: expected port");
+    if (port->port.closed) return mk_error("read-line: port is closed");
+    if (!port->port.fp) return mk_error("read-line: invalid port");
+
+    char* line = NULL;
+    size_t len = 0;
+    ssize_t nread = getline(&line, &len, port->port.fp);
+
+    if (nread == -1) {
+        free(line);
+        return mk_nothing();  // EOF
+    }
+
+    // Remove trailing newline
+    if (nread > 0 && line[nread - 1] == '\n') {
+        line[nread - 1] = '\0';
+        nread--;
+    }
+
+    Value* result = mk_string(line, (size_t)nread);
+    free(line);
+    return result;
+}
+
+static Value* prim_read_all(Value* args) {
+    Value* port = car(args);
+    if (!is_port(port)) return mk_error("read-all: expected port");
+    if (port->port.closed) return mk_error("read-all: port is closed");
+    if (!port->port.fp) return mk_error("read-all: invalid port");
+
+    // Get file size
+    long start = ftell(port->port.fp);
+    fseek(port->port.fp, 0, SEEK_END);
+    long end = ftell(port->port.fp);
+    fseek(port->port.fp, start, SEEK_SET);
+
+    size_t size = (size_t)(end - start);
+    char* buf = malloc(size + 1);
+    if (!buf) return mk_error("read-all: out of memory");
+
+    size_t nread = fread(buf, 1, size, port->port.fp);
+    buf[nread] = '\0';
+
+    Value* result = mk_string(buf, nread);
+    free(buf);
+    return result;
+}
+
+static Value* prim_write_string(Value* args) {
+    Value* port = car(args);
+    Value* str = car(cdr(args));
+
+    if (!is_port(port)) return mk_error("write-string: expected port");
+    if (port->port.closed) return mk_error("write-string: port is closed");
+    if (!port->port.fp) return mk_error("write-string: invalid port");
+    if (!is_string(str)) return mk_error("write-string: expected string");
+
+    size_t len = string_len(str);
+    const char* data = string_data(str);
+    size_t written = fwrite(data, 1, len, port->port.fp);
+
+    return mk_int((long)written);
+}
+
+static Value* prim_write_line(Value* args) {
+    Value* port = car(args);
+    Value* str = car(cdr(args));
+
+    if (!is_port(port)) return mk_error("write-line: expected port");
+    if (port->port.closed) return mk_error("write-line: port is closed");
+    if (!port->port.fp) return mk_error("write-line: invalid port");
+    if (!is_string(str)) return mk_error("write-line: expected string");
+
+    size_t len = string_len(str);
+    const char* data = string_data(str);
+    fwrite(data, 1, len, port->port.fp);
+    fputc('\n', port->port.fp);
+
+    return mk_int((long)(len + 1));
+}
+
+static Value* prim_flush(Value* args) {
+    Value* port = car(args);
+    if (!is_port(port)) return mk_error("flush: expected port");
+    if (port->port.closed) return mk_error("flush: port is closed");
+    if (port->port.fp) fflush(port->port.fp);
+    return mk_nothing();
+}
+
+static Value* prim_port_q(Value* args) {
+    return mk_sym(is_port(car(args)) ? "true" : "false");
+}
+
+static Value* prim_eof_q(Value* args) {
+    Value* port = car(args);
+    if (!is_port(port)) return mk_error("eof?: expected port");
+    if (port->port.closed || !port->port.fp) return mk_sym("true");
+    return mk_sym(feof(port->port.fp) ? "true" : "false");
+}
+
+static Value* prim_file_exists(Value* args) {
+    Value* filename = car(args);
+    if (!is_string(filename)) return mk_error("file-exists?: expected string");
+    FILE* fp = fopen(string_data(filename), "r");
+    if (fp) {
+        fclose(fp);
+        return mk_sym("true");
+    }
+    return mk_sym("false");
+}
+
 static Value* prim_not(Value* args) {
     return mk_sym(is_truthy(car(args)) ? "false" : "true");
 }
@@ -1685,6 +3759,14 @@ static Value* prim_type_of(Value* args) {
         case T_CHAN:    return mk_sym("channel");
         case T_PROCESS: return mk_sym("process");
         case T_BOUNCE:  return mk_sym("bounce");
+        case T_STRING:  return mk_sym("string");
+        case T_CHAR:    return mk_sym("char");
+        case T_FLOAT:   return mk_sym("float");
+        case T_PORT:    return mk_sym("port");
+        case T_SYNTAX:  return mk_sym("syntax");
+        case T_FFI_LIB: return mk_sym("ffi-lib");
+        case T_FFI_PTR: return mk_sym("ffi-ptr");
+        case T_THREAD:  return mk_sym("thread");
         default:        return mk_sym("unknown");
     }
 }
@@ -2609,6 +4691,925 @@ static Value* prim_chan_q(Value* args) {
     return mk_sym((v && v->tag == T_CHAN) ? "true" : "false");
 }
 
+/* ============================================================
+ * FFI Primitives
+ * ============================================================ */
+
+/*
+ * (ffi/load "library.so")
+ * Load a shared library and return a handle.
+ */
+static Value* prim_ffi_load(Value* args) {
+    Value* name_arg = car(args);
+    if (!name_arg) return mk_error("ffi/load: expected library name");
+
+    const char* name;
+    if (name_arg->tag == T_STRING) {
+        name = name_arg->str.data;
+    } else if (name_arg->tag == T_SYM) {
+        name = name_arg->s;
+    } else {
+        return mk_error("ffi/load: expected string or symbol for library name");
+    }
+
+    // Try to load the library
+    void* handle = dlopen(name, RTLD_NOW | RTLD_LOCAL);
+    if (!handle) {
+        char errbuf[512];
+        snprintf(errbuf, sizeof(errbuf), "ffi/load: %s", dlerror());
+        return mk_error(errbuf);
+    }
+
+    return mk_ffi_lib(handle, name);
+}
+
+/*
+ * (ffi/close lib)
+ * Close a library handle.
+ */
+static Value* prim_ffi_close(Value* args) {
+    Value* lib = car(args);
+    if (!lib || lib->tag != T_FFI_LIB) {
+        return mk_error("ffi/close: expected ffi-lib");
+    }
+
+    if (lib->ffi_lib.handle) {
+        dlclose(lib->ffi_lib.handle);
+        lib->ffi_lib.handle = NULL;
+    }
+
+    return mk_nothing();
+}
+
+/*
+ * (ffi/symbol lib "name")
+ * Get a symbol from a library.
+ */
+static Value* prim_ffi_symbol(Value* args) {
+    Value* lib = car(args);
+    Value* name_arg = car(cdr(args));
+
+    if (!lib || lib->tag != T_FFI_LIB) {
+        return mk_error("ffi/symbol: first argument must be ffi-lib");
+    }
+    if (!lib->ffi_lib.handle) {
+        return mk_error("ffi/symbol: library handle is closed");
+    }
+
+    const char* name;
+    if (!name_arg) {
+        return mk_error("ffi/symbol: expected symbol name");
+    } else if (name_arg->tag == T_STRING) {
+        name = name_arg->str.data;
+    } else if (name_arg->tag == T_SYM) {
+        name = name_arg->s;
+    } else {
+        return mk_error("ffi/symbol: expected string or symbol for name");
+    }
+
+    dlerror();  // Clear any existing error
+    void* sym = dlsym(lib->ffi_lib.handle, name);
+    char* err = dlerror();
+    if (err) {
+        char errbuf[512];
+        snprintf(errbuf, sizeof(errbuf), "ffi/symbol: %s", err);
+        return mk_error(errbuf);
+    }
+
+    return mk_ffi_ptr(sym, name, 0);
+}
+
+/*
+ * (ffi/call ptr signature arg ...)
+ * Call a foreign function with the given signature.
+ *
+ * Signature is a list like: (-> arg-types... return-type)
+ * Supported types: 'int 'double 'void 'ptr 'string
+ *
+ * Example: (ffi/call sin-fn '(-> double double) 3.14159)
+ */
+static Value* prim_ffi_call(Value* args) {
+    Value* fn_ptr = car(args);
+    Value* sig = car(cdr(args));
+    Value* call_args = cdr(cdr(args));
+
+    if (!fn_ptr || fn_ptr->tag != T_FFI_PTR) {
+        return mk_error("ffi/call: first argument must be ffi-ptr");
+    }
+    if (!fn_ptr->ffi_ptr.ptr) {
+        return mk_error("ffi/call: null function pointer");
+    }
+    if (!sig || sig->tag != T_CELL) {
+        return mk_error("ffi/call: expected signature list (-> arg-types return-type)");
+    }
+
+    // Parse signature: (-> arg-type... return-type)
+    if (!car(sig) || car(sig)->tag != T_SYM || strcmp(car(sig)->s, "->") != 0) {
+        return mk_error("ffi/call: signature must start with '->'");
+    }
+
+    // Count args and get return type
+    Value* sig_rest = cdr(sig);
+    int sig_len = 0;
+    Value* sig_iter = sig_rest;
+    while (!is_nil(sig_iter)) {
+        sig_len++;
+        sig_iter = cdr(sig_iter);
+    }
+
+    if (sig_len < 1) {
+        return mk_error("ffi/call: signature must have at least a return type");
+    }
+
+    // Last element is return type
+    Value* return_type = NULL;
+    sig_iter = sig_rest;
+    for (int i = 0; i < sig_len - 1; i++) {
+        sig_iter = cdr(sig_iter);
+    }
+    return_type = car(sig_iter);
+
+    // Collect argument types (all but last)
+    int num_arg_types = sig_len - 1;
+
+    // Validate return type
+    if (!return_type || return_type->tag != T_SYM) {
+        return mk_error("ffi/call: return type must be a symbol");
+    }
+    const char* ret_type_str = return_type->s;
+
+    // Now we need to call the function. Without libffi, we handle common signatures
+    // by casting the function pointer to the appropriate type.
+    void* fn = fn_ptr->ffi_ptr.ptr;
+
+    // Handle common function signatures
+    if (num_arg_types == 0) {
+        // No arguments
+        if (strcmp(ret_type_str, "void") == 0) {
+            ((void (*)(void))fn)();
+            return mk_nothing();
+        } else if (strcmp(ret_type_str, "int") == 0) {
+            int result = ((int (*)(void))fn)();
+            return mk_int(result);
+        } else if (strcmp(ret_type_str, "double") == 0) {
+            double result = ((double (*)(void))fn)();
+            return mk_float(result);
+        } else if (strcmp(ret_type_str, "ptr") == 0) {
+            void* result = ((void* (*)(void))fn)();
+            return mk_ffi_ptr(result, NULL, 0);
+        }
+    } else if (num_arg_types == 1) {
+        // One argument
+        Value* arg1_type = car(sig_rest);
+        if (!arg1_type || arg1_type->tag != T_SYM) {
+            return mk_error("ffi/call: argument type must be a symbol");
+        }
+        Value* arg1 = car(call_args);
+
+        // Convert argument
+        if (strcmp(arg1_type->s, "double") == 0) {
+            double a1 = 0.0;
+            if (arg1 && arg1->tag == T_FLOAT) a1 = arg1->f;
+            else if (arg1 && arg1->tag == T_INT) a1 = (double)arg1->i;
+            else return mk_error("ffi/call: expected numeric argument for double");
+
+            if (strcmp(ret_type_str, "double") == 0) {
+                double result = ((double (*)(double))fn)(a1);
+                return mk_float(result);
+            } else if (strcmp(ret_type_str, "int") == 0) {
+                int result = ((int (*)(double))fn)(a1);
+                return mk_int(result);
+            } else if (strcmp(ret_type_str, "void") == 0) {
+                ((void (*)(double))fn)(a1);
+                return mk_nothing();
+            }
+        } else if (strcmp(arg1_type->s, "int") == 0) {
+            long a1 = 0;
+            if (arg1 && arg1->tag == T_INT) a1 = arg1->i;
+            else if (arg1 && arg1->tag == T_FLOAT) a1 = (long)arg1->f;
+            else return mk_error("ffi/call: expected numeric argument for int");
+
+            if (strcmp(ret_type_str, "int") == 0) {
+                int result = ((int (*)(int))fn)((int)a1);
+                return mk_int(result);
+            } else if (strcmp(ret_type_str, "double") == 0) {
+                double result = ((double (*)(int))fn)((int)a1);
+                return mk_float(result);
+            } else if (strcmp(ret_type_str, "void") == 0) {
+                ((void (*)(int))fn)((int)a1);
+                return mk_nothing();
+            } else if (strcmp(ret_type_str, "ptr") == 0) {
+                void* result = ((void* (*)(int))fn)((int)a1);
+                return mk_ffi_ptr(result, NULL, 0);
+            }
+        } else if (strcmp(arg1_type->s, "ptr") == 0) {
+            void* a1 = NULL;
+            if (arg1 && arg1->tag == T_FFI_PTR) a1 = arg1->ffi_ptr.ptr;
+            else if (is_nil(arg1) || is_nothing(arg1)) a1 = NULL;
+            else return mk_error("ffi/call: expected ffi-ptr for ptr argument");
+
+            if (strcmp(ret_type_str, "void") == 0) {
+                ((void (*)(void*))fn)(a1);
+                return mk_nothing();
+            } else if (strcmp(ret_type_str, "int") == 0) {
+                int result = ((int (*)(void*))fn)(a1);
+                return mk_int(result);
+            } else if (strcmp(ret_type_str, "ptr") == 0) {
+                void* result = ((void* (*)(void*))fn)(a1);
+                return mk_ffi_ptr(result, NULL, 0);
+            }
+        } else if (strcmp(arg1_type->s, "string") == 0) {
+            const char* a1 = "";
+            if (arg1 && arg1->tag == T_STRING) a1 = arg1->str.data;
+            else if (arg1 && arg1->tag == T_SYM) a1 = arg1->s;
+            else return mk_error("ffi/call: expected string argument");
+
+            if (strcmp(ret_type_str, "int") == 0) {
+                int result = ((int (*)(const char*))fn)(a1);
+                return mk_int(result);
+            } else if (strcmp(ret_type_str, "void") == 0) {
+                ((void (*)(const char*))fn)(a1);
+                return mk_nothing();
+            } else if (strcmp(ret_type_str, "ptr") == 0) {
+                void* result = ((void* (*)(const char*))fn)(a1);
+                return mk_ffi_ptr(result, NULL, 0);
+            }
+        }
+    } else if (num_arg_types == 2) {
+        // Two arguments
+        Value* arg1_type = car(sig_rest);
+        Value* arg2_type = car(cdr(sig_rest));
+        Value* arg1 = car(call_args);
+        Value* arg2 = car(cdr(call_args));
+
+        if (!arg1_type || arg1_type->tag != T_SYM ||
+            !arg2_type || arg2_type->tag != T_SYM) {
+            return mk_error("ffi/call: argument types must be symbols");
+        }
+
+        // Handle common two-argument signatures
+        if (strcmp(arg1_type->s, "double") == 0 && strcmp(arg2_type->s, "double") == 0) {
+            double a1 = arg1 && is_numeric(arg1) ? to_double(arg1) : 0.0;
+            double a2 = arg2 && is_numeric(arg2) ? to_double(arg2) : 0.0;
+
+            if (strcmp(ret_type_str, "double") == 0) {
+                double result = ((double (*)(double, double))fn)(a1, a2);
+                return mk_float(result);
+            } else if (strcmp(ret_type_str, "int") == 0) {
+                int result = ((int (*)(double, double))fn)(a1, a2);
+                return mk_int(result);
+            }
+        } else if (strcmp(arg1_type->s, "int") == 0 && strcmp(arg2_type->s, "int") == 0) {
+            long a1 = arg1 && arg1->tag == T_INT ? arg1->i : 0;
+            long a2 = arg2 && arg2->tag == T_INT ? arg2->i : 0;
+
+            if (strcmp(ret_type_str, "int") == 0) {
+                int result = ((int (*)(int, int))fn)((int)a1, (int)a2);
+                return mk_int(result);
+            } else if (strcmp(ret_type_str, "ptr") == 0) {
+                void* result = ((void* (*)(int, int))fn)((int)a1, (int)a2);
+                return mk_ffi_ptr(result, NULL, 0);
+            }
+        } else if (strcmp(arg1_type->s, "ptr") == 0 && strcmp(arg2_type->s, "int") == 0) {
+            void* a1 = arg1 && arg1->tag == T_FFI_PTR ? arg1->ffi_ptr.ptr : NULL;
+            long a2 = arg2 && arg2->tag == T_INT ? arg2->i : 0;
+
+            if (strcmp(ret_type_str, "int") == 0) {
+                int result = ((int (*)(void*, int))fn)(a1, (int)a2);
+                return mk_int(result);
+            } else if (strcmp(ret_type_str, "ptr") == 0) {
+                void* result = ((void* (*)(void*, int))fn)(a1, (int)a2);
+                return mk_ffi_ptr(result, NULL, 0);
+            }
+        } else if (strcmp(arg1_type->s, "string") == 0 && strcmp(arg2_type->s, "string") == 0) {
+            const char* a1 = arg1 && arg1->tag == T_STRING ? arg1->str.data : "";
+            const char* a2 = arg2 && arg2->tag == T_STRING ? arg2->str.data : "";
+
+            if (strcmp(ret_type_str, "int") == 0) {
+                int result = ((int (*)(const char*, const char*))fn)(a1, a2);
+                return mk_int(result);
+            } else if (strcmp(ret_type_str, "ptr") == 0) {
+                void* result = ((void* (*)(const char*, const char*))fn)(a1, a2);
+                return mk_ffi_ptr(result, NULL, 0);
+            }
+        }
+    }
+
+    return mk_error("ffi/call: unsupported signature (use libffi for more complex signatures)");
+}
+
+/*
+ * (ffi/lib? x)
+ * Returns true if x is an FFI library handle.
+ */
+static Value* prim_ffi_lib_q(Value* args) {
+    Value* v = car(args);
+    return mk_sym((v && v->tag == T_FFI_LIB) ? "true" : "false");
+}
+
+/*
+ * (ffi/ptr? x)
+ * Returns true if x is an FFI pointer.
+ */
+static Value* prim_ffi_ptr_q(Value* args) {
+    Value* v = car(args);
+    return mk_sym((v && v->tag == T_FFI_PTR) ? "true" : "false");
+}
+
+/*
+ * (ffi/null? ptr)
+ * Returns true if the pointer is null.
+ */
+static Value* prim_ffi_null_q(Value* args) {
+    Value* v = car(args);
+    if (!v) return mk_sym("true");
+    if (v->tag == T_FFI_PTR) {
+        return mk_sym(v->ffi_ptr.ptr == NULL ? "true" : "false");
+    }
+    return mk_sym("false");
+}
+
+/*
+ * (ffi/null)
+ * Returns a null pointer.
+ */
+static Value* prim_ffi_null(Value* args) {
+    (void)args;
+    return mk_ffi_ptr(NULL, "null", 0);
+}
+
+/*
+ * (ffi/ptr-address ptr)
+ * Returns the raw address as an integer (for debugging).
+ */
+static Value* prim_ffi_ptr_address(Value* args) {
+    Value* v = car(args);
+    if (!v || v->tag != T_FFI_PTR) {
+        return mk_error("ffi/ptr-address: expected ffi-ptr");
+    }
+    return mk_int((long)(intptr_t)v->ffi_ptr.ptr);
+}
+
+/*
+ * (ffi/malloc size)
+ * Allocate memory via malloc.
+ */
+static Value* prim_ffi_malloc(Value* args) {
+    Value* size_arg = car(args);
+    if (!size_arg || size_arg->tag != T_INT) {
+        return mk_error("ffi/malloc: expected integer size");
+    }
+
+    void* ptr = malloc((size_t)size_arg->i);
+    if (!ptr) {
+        return mk_error("ffi/malloc: allocation failed");
+    }
+
+    return mk_ffi_ptr(ptr, "malloc", 1);  // owned = 1
+}
+
+/*
+ * (ffi/free ptr)
+ * Free memory allocated by ffi/malloc.
+ */
+static Value* prim_ffi_free(Value* args) {
+    Value* ptr_arg = car(args);
+    if (!ptr_arg || ptr_arg->tag != T_FFI_PTR) {
+        return mk_error("ffi/free: expected ffi-ptr");
+    }
+
+    if (ptr_arg->ffi_ptr.ptr) {
+        free(ptr_arg->ffi_ptr.ptr);
+        ptr_arg->ffi_ptr.ptr = NULL;
+        ptr_arg->ffi_ptr.owned = 0;
+    }
+
+    return mk_nothing();
+}
+
+/*
+ * (ffi/ptr-read-int ptr)
+ * Read an int from a pointer location.
+ */
+static Value* prim_ffi_ptr_read_int(Value* args) {
+    Value* ptr_arg = car(args);
+    if (!ptr_arg || ptr_arg->tag != T_FFI_PTR) {
+        return mk_error("ffi/ptr-read-int: expected ffi-ptr");
+    }
+    if (!ptr_arg->ffi_ptr.ptr) {
+        return mk_error("ffi/ptr-read-int: null pointer");
+    }
+
+    int value = *((int*)ptr_arg->ffi_ptr.ptr);
+    return mk_int(value);
+}
+
+/*
+ * (ffi/ptr-write-int ptr value)
+ * Write an int to a pointer location.
+ */
+static Value* prim_ffi_ptr_write_int(Value* args) {
+    Value* ptr_arg = car(args);
+    Value* val_arg = car(cdr(args));
+
+    if (!ptr_arg || ptr_arg->tag != T_FFI_PTR) {
+        return mk_error("ffi/ptr-write-int: expected ffi-ptr");
+    }
+    if (!ptr_arg->ffi_ptr.ptr) {
+        return mk_error("ffi/ptr-write-int: null pointer");
+    }
+    if (!val_arg || val_arg->tag != T_INT) {
+        return mk_error("ffi/ptr-write-int: expected integer value");
+    }
+
+    *((int*)ptr_arg->ffi_ptr.ptr) = (int)val_arg->i;
+    return mk_nothing();
+}
+
+/*
+ * (ffi/ptr-read-double ptr)
+ * Read a double from a pointer location.
+ */
+static Value* prim_ffi_ptr_read_double(Value* args) {
+    Value* ptr_arg = car(args);
+    if (!ptr_arg || ptr_arg->tag != T_FFI_PTR) {
+        return mk_error("ffi/ptr-read-double: expected ffi-ptr");
+    }
+    if (!ptr_arg->ffi_ptr.ptr) {
+        return mk_error("ffi/ptr-read-double: null pointer");
+    }
+
+    double value = *((double*)ptr_arg->ffi_ptr.ptr);
+    return mk_float(value);
+}
+
+/*
+ * (ffi/ptr-write-double ptr value)
+ * Write a double to a pointer location.
+ */
+static Value* prim_ffi_ptr_write_double(Value* args) {
+    Value* ptr_arg = car(args);
+    Value* val_arg = car(cdr(args));
+
+    if (!ptr_arg || ptr_arg->tag != T_FFI_PTR) {
+        return mk_error("ffi/ptr-write-double: expected ffi-ptr");
+    }
+    if (!ptr_arg->ffi_ptr.ptr) {
+        return mk_error("ffi/ptr-write-double: null pointer");
+    }
+    if (!val_arg || !is_numeric(val_arg)) {
+        return mk_error("ffi/ptr-write-double: expected numeric value");
+    }
+
+    *((double*)ptr_arg->ffi_ptr.ptr) = to_double(val_arg);
+    return mk_nothing();
+}
+
+/*
+ * (ffi/ptr-read-string ptr)
+ * Read a null-terminated string from a pointer.
+ */
+static Value* prim_ffi_ptr_read_string(Value* args) {
+    Value* ptr_arg = car(args);
+    if (!ptr_arg || ptr_arg->tag != T_FFI_PTR) {
+        return mk_error("ffi/ptr-read-string: expected ffi-ptr");
+    }
+    if (!ptr_arg->ffi_ptr.ptr) {
+        return mk_error("ffi/ptr-read-string: null pointer");
+    }
+
+    const char* str = (const char*)ptr_arg->ffi_ptr.ptr;
+    return mk_string_cstr(str);
+}
+
+/* ============================================================
+ * Metadata Primitives
+ * ============================================================ */
+
+/*
+ * (meta x)
+ * Returns the metadata attached to x, or nil if none.
+ */
+static Value* prim_meta(Value* args) {
+    Value* v = car(args);
+    return metadata_get(v);
+}
+
+/*
+ * (set-meta! x meta)
+ * Sets the metadata of x to meta. Returns x.
+ */
+static Value* prim_set_meta(Value* args) {
+    Value* v = car(args);
+    Value* meta = car(cdr(args));
+    if (!v) return mk_error("set-meta!: expected value");
+    metadata_set(v, meta);
+    return v;
+}
+
+/*
+ * (has-meta? x key)
+ * Returns true if x has metadata with the given key (for dict metadata).
+ */
+static Value* prim_has_meta_q(Value* args) {
+    Value* v = car(args);
+    Value* key = car(cdr(args));
+    Value* meta = metadata_get(v);
+
+    if (is_nil(meta)) return mk_sym("false");
+
+    // If metadata is a dict (T_CELL with :__dict__ marker), check for key
+    if (meta->tag == T_CELL) {
+        Value* iter = meta;
+        while (!is_nil(iter)) {
+            Value* entry = car(iter);
+            if (entry && entry->tag == T_CELL) {
+                Value* k = car(entry);
+                // Compare keys (symbols)
+                if (k && k->tag == T_SYM && key && key->tag == T_SYM) {
+                    if (strcmp(k->s, key->s) == 0) {
+                        return mk_sym("true");
+                    }
+                }
+            }
+            iter = cdr(iter);
+        }
+    }
+
+    // If metadata is a single symbol (like :private), compare directly
+    if (meta->tag == T_SYM && key && key->tag == T_SYM) {
+        return mk_sym(strcmp(meta->s, key->s) == 0 ? "true" : "false");
+    }
+
+    return mk_sym("false");
+}
+
+/*
+ * (get-meta x key [default])
+ * Gets a specific metadata key from x's metadata dict.
+ */
+static Value* prim_get_meta(Value* args) {
+    Value* v = car(args);
+    Value* key = car(cdr(args));
+    Value* def = car(cdr(cdr(args)));
+    Value* meta = metadata_get(v);
+
+    if (is_nil(meta)) return def ? def : mk_nil();
+
+    // If metadata is a dict, search for key
+    if (meta->tag == T_CELL) {
+        Value* iter = meta;
+        while (!is_nil(iter)) {
+            Value* entry = car(iter);
+            if (entry && entry->tag == T_CELL) {
+                Value* k = car(entry);
+                if (k && k->tag == T_SYM && key && key->tag == T_SYM) {
+                    if (strcmp(k->s, key->s) == 0) {
+                        return cdr(entry) ? car(cdr(entry)) : mk_sym("true");
+                    }
+                }
+            }
+            iter = cdr(iter);
+        }
+    }
+
+    // If metadata is a single symbol matching key, return true
+    if (meta->tag == T_SYM && key && key->tag == T_SYM) {
+        if (strcmp(meta->s, key->s) == 0) {
+            return mk_sym("true");
+        }
+    }
+
+    return def ? def : mk_nil();
+}
+
+/*
+ * (private? x)
+ * Returns true if x has ^:private metadata.
+ */
+static Value* prim_private_q(Value* args) {
+    Value* v = car(args);
+    Value* meta = metadata_get(v);
+
+    if (is_nil(meta)) return mk_sym("false");
+
+    // Check if meta is :private symbol
+    if (meta->tag == T_SYM && strcmp(meta->s, "private") == 0) {
+        return mk_sym("true");
+    }
+
+    return mk_sym("false");
+}
+
+/*
+ * (deprecated? x)
+ * Returns true if x has ^:deprecated metadata.
+ */
+static Value* prim_deprecated_q(Value* args) {
+    Value* v = car(args);
+    Value* meta = metadata_get(v);
+
+    if (is_nil(meta)) return mk_sym("false");
+
+    // Check if meta is :deprecated symbol
+    if (meta->tag == T_SYM && strcmp(meta->s, "deprecated") == 0) {
+        return mk_sym("true");
+    }
+
+    return mk_sym("false");
+}
+
+/*
+ * (doc x)
+ * Returns the docstring from x's metadata, or nil if none.
+ */
+static Value* prim_doc(Value* args) {
+    Value* v = car(args);
+    Value* meta = metadata_get(v);
+
+    if (is_nil(meta)) return mk_nil();
+
+    // If meta is a string, it's the docstring
+    if (meta->tag == T_STRING) {
+        return meta;
+    }
+
+    return mk_nil();
+}
+
+// ============================================================
+// Box Primitives (mutable reference cells)
+// ============================================================
+
+/*
+ * (box value) -> box
+ * Creates a mutable reference cell containing value.
+ */
+static Value* prim_box(Value* args) {
+    Value* val = car(args);
+    return mk_box(val);
+}
+
+/*
+ * (box? x) -> bool
+ * Returns true if x is a box.
+ */
+static Value* prim_box_q(Value* args) {
+    return is_box(car(args)) ? mk_sym("true") : mk_sym("false");
+}
+
+/*
+ * (box-ref box) -> value
+ * Returns the current value in the box.
+ */
+static Value* prim_box_ref(Value* args) {
+    Value* b = car(args);
+    if (!is_box(b)) {
+        return mk_error("box-ref: expected box");
+    }
+    Value* v = box_get(b);
+    return v ? v : mk_nil();
+}
+
+/*
+ * (box-set! box value) -> value
+ * Sets the box to contain value, returns value.
+ */
+static Value* prim_box_set(Value* args) {
+    Value* b = car(args);
+    Value* val = car(cdr(args));
+    if (!is_box(b)) {
+        return mk_error("box-set!: expected box");
+    }
+    box_set(b, val);
+    return val;
+}
+
+// ============================================================
+// Thread Primitives
+// ============================================================
+
+// Thread entry point - wrapper function for pthread_create
+typedef struct ThreadArgs {
+    Value* thunk;
+    Value* thread_val;
+} ThreadArgs;
+
+static void* thread_entry(void* arg) {
+    ThreadArgs* ta = (ThreadArgs*)arg;
+    Value* thunk = ta->thunk;
+    Value* thread_val = ta->thread_val;
+    free(ta);
+
+    // Call the thunk with no arguments
+    Value* result = omni_apply(thunk, mk_nil(), global_env);
+
+    // Store result and mark as done
+    thread_val->thread.result = result;
+    thread_val->thread.done = 1;
+
+    return NULL;
+}
+
+/*
+ * (thread thunk) -> thread
+ * Creates a new system thread that will execute thunk.
+ * The thread starts immediately upon creation.
+ */
+static Value* prim_thread(Value* args) {
+    Value* thunk = car(args);
+    if (!thunk || (thunk->tag != T_LAMBDA && thunk->tag != T_PRIM)) {
+        return mk_error("thread: expected function");
+    }
+
+    Value* t = mk_thread(thunk);
+    if (!t) return mk_error("thread: allocation failed");
+
+    // Allocate thread args
+    ThreadArgs* ta = malloc(sizeof(ThreadArgs));
+    if (!ta) return mk_error("thread: allocation failed");
+    ta->thunk = thunk;
+    ta->thread_val = t;
+
+    // Create and start the thread
+    int err = pthread_create(&t->thread.tid, NULL, thread_entry, ta);
+    if (err != 0) {
+        free(ta);
+        return mk_error("thread: pthread_create failed");
+    }
+    t->thread.started = 1;
+
+    return t;
+}
+
+/*
+ * (thread-join t) -> result
+ * Waits for thread t to complete and returns its result.
+ */
+static Value* prim_thread_join(Value* args) {
+    Value* t = car(args);
+    if (!is_thread(t)) {
+        return mk_error("thread-join: expected thread");
+    }
+
+    if (!t->thread.started) {
+        return mk_error("thread-join: thread not started");
+    }
+
+    if (t->thread.joined) {
+        // Already joined, just return result
+        return t->thread.result ? t->thread.result : mk_nil();
+    }
+
+    // Wait for thread to complete
+    pthread_join(t->thread.tid, NULL);
+    t->thread.joined = 1;
+
+    return t->thread.result ? t->thread.result : mk_nil();
+}
+
+/*
+ * (thread? x) -> bool
+ * Returns true if x is a thread.
+ */
+static Value* prim_thread_q(Value* args) {
+    return is_thread(car(args)) ? mk_sym("true") : mk_sym("false");
+}
+
+/*
+ * (thread-done? t) -> bool
+ * Returns true if thread t has finished executing.
+ */
+static Value* prim_thread_done_q(Value* args) {
+    Value* t = car(args);
+    if (!is_thread(t)) {
+        return mk_error("thread-done?: expected thread");
+    }
+    return t->thread.done ? mk_sym("true") : mk_sym("false");
+}
+
+/*
+ * (thread-result t) -> result
+ * Returns the result of a completed thread without blocking.
+ * Returns nothing if thread is not done.
+ */
+static Value* prim_thread_result(Value* args) {
+    Value* t = car(args);
+    if (!is_thread(t)) {
+        return mk_error("thread-result: expected thread");
+    }
+    if (!t->thread.done) {
+        return mk_nothing();
+    }
+    return t->thread.result ? t->thread.result : mk_nil();
+}
+
+// ============================================================
+// Atomic Operations (using boxes for simplicity)
+// ============================================================
+
+// Simple mutex for atomic operations
+static pthread_mutex_t atomic_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+/*
+ * (atomic-ref box) -> value
+ * Atomically reads the value in a box.
+ */
+static Value* prim_atomic_ref(Value* args) {
+    Value* box = car(args);
+    if (!is_box(box)) {
+        return mk_error("atomic-ref: expected box");
+    }
+
+    pthread_mutex_lock(&atomic_mutex);
+    Value* result = box_get(box);
+    pthread_mutex_unlock(&atomic_mutex);
+
+    return result ? result : mk_nil();
+}
+
+/*
+ * (atomic-set! box value) -> value
+ * Atomically sets the value in a box.
+ */
+static Value* prim_atomic_set(Value* args) {
+    Value* box = car(args);
+    Value* val = car(cdr(args));
+    if (!is_box(box)) {
+        return mk_error("atomic-set!: expected box");
+    }
+
+    pthread_mutex_lock(&atomic_mutex);
+    box_set(box, val);
+    pthread_mutex_unlock(&atomic_mutex);
+
+    return val;
+}
+
+/*
+ * (atomic-cas! box expected new) -> bool
+ * Atomically compares box contents with expected value,
+ * and if equal, sets to new value. Returns true if swap occurred.
+ */
+static Value* prim_atomic_cas(Value* args) {
+    Value* box = car(args);
+    Value* expected = car(cdr(args));
+    Value* new_val = car(cdr(cdr(args)));
+
+    if (!is_box(box)) {
+        return mk_error("atomic-cas!: expected box");
+    }
+
+    pthread_mutex_lock(&atomic_mutex);
+    Value* current = box_get(box);
+
+    // Simple equality check (pointer equality for now, value equality for ints/floats)
+    int eq = 0;
+    if (current == expected) {
+        eq = 1;
+    } else if (current && expected && current->tag == T_INT && expected->tag == T_INT) {
+        eq = (current->i == expected->i);
+    } else if (current && expected && current->tag == T_FLOAT && expected->tag == T_FLOAT) {
+        eq = (current->f == expected->f);
+    } else if (current && expected && current->tag == T_SYM && expected->tag == T_SYM) {
+        eq = (strcmp(current->s, expected->s) == 0);
+    }
+
+    if (eq) {
+        box_set(box, new_val);
+    }
+    pthread_mutex_unlock(&atomic_mutex);
+
+    return eq ? mk_sym("true") : mk_sym("false");
+}
+
+/*
+ * (atomic-swap! box fn) -> new-value
+ * Atomically applies fn to the box contents and stores the result.
+ * Returns the new value.
+ */
+static Value* prim_atomic_swap(Value* args) {
+    Value* box = car(args);
+    Value* fn = car(cdr(args));
+
+    if (!is_box(box)) {
+        return mk_error("atomic-swap!: expected box");
+    }
+    if (!fn || (fn->tag != T_LAMBDA && fn->tag != T_PRIM)) {
+        return mk_error("atomic-swap!: expected function");
+    }
+
+    pthread_mutex_lock(&atomic_mutex);
+    Value* current = box_get(box);
+    Value* new_val = omni_apply(fn, mk_cell(current, mk_nil()), global_env);
+    if (!is_error(new_val)) {
+        box_set(box, new_val);
+    }
+    pthread_mutex_unlock(&atomic_mutex);
+
+    return new_val;
+}
+
 // Initialize environment with builtins
 Env* omni_env_init(void) {
     if (global_env) return global_env;
@@ -2631,7 +5632,47 @@ Env* omni_env_init(void) {
     register_primitive("cdr", 1, prim_cdr);
     register_primitive("null?", 1, prim_null);
     register_primitive("nothing?", 1, prim_nothing);
+    register_primitive("empty?", 1, prim_empty);
     register_primitive("list", -1, prim_list);
+
+    // String primitives
+    register_primitive("string?", 1, prim_string_q);
+    register_primitive("char?", 1, prim_char_q);
+    register_primitive("symbol?", 1, prim_symbol_q);
+    register_primitive("string-length", 1, prim_string_length);
+    register_primitive("string-append", -1, prim_string_append);
+    register_primitive("string-ref", 2, prim_string_ref);
+    register_primitive("substring", 3, prim_substring);
+    register_primitive("string->list", 1, prim_string_to_list);
+    register_primitive("list->string", 1, prim_list_to_string);
+
+    // Math primitives
+    register_primitive("float?", 1, prim_float_q);
+    register_primitive("int?", 1, prim_int_q);
+    register_primitive("number?", 1, prim_number_q);
+    register_primitive("sin", 1, prim_sin);
+    register_primitive("cos", 1, prim_cos);
+    register_primitive("tan", 1, prim_tan);
+    register_primitive("asin", 1, prim_asin);
+    register_primitive("acos", 1, prim_acos);
+    register_primitive("atan", 1, prim_atan);
+    register_primitive("atan2", 2, prim_atan2);
+    register_primitive("exp", 1, prim_exp);
+    register_primitive("log", 1, prim_log);
+    register_primitive("log10", 1, prim_log10);
+    register_primitive("sqrt", 1, prim_sqrt);
+    register_primitive("pow", 2, prim_pow);
+    register_primitive("abs", 1, prim_abs);
+    register_primitive("floor", 1, prim_floor);
+    register_primitive("ceil", 1, prim_ceil);
+    register_primitive("round", 1, prim_round);
+    register_primitive("truncate", 1, prim_truncate);
+    register_primitive("->int", 1, prim_to_int);
+    register_primitive("->float", 1, prim_to_float);
+    // Math constants (pi, e, inf, nan) are defined as direct values below
+    register_primitive("nan?", 1, prim_nan_q);
+    register_primitive("inf?", 1, prim_inf_q);
+
     register_primitive("print", -1, prim_print);
     register_primitive("println", -1, prim_println);
     register_primitive("range", -1, prim_range);
@@ -2639,6 +5680,37 @@ Env* omni_env_init(void) {
     register_primitive("map", 2, prim_map);
     register_primitive("filter", 2, prim_filter);
     register_primitive("length", 1, prim_length);
+
+    // Array primitives
+    register_primitive("array?", 1, prim_array_q);
+    register_primitive("array-length", 1, prim_array_length);
+    register_primitive("array-ref", 2, prim_array_ref);
+    register_primitive("array-set!", 3, prim_array_set);
+    register_primitive("array-slice", -1, prim_array_slice);
+
+    // Dict primitives
+    register_primitive("dict?", 1, prim_dict_q);
+    register_primitive("dict-ref", 2, prim_dict_ref);
+    register_primitive("dict-set!", 3, prim_dict_set);
+    register_primitive("dict-contains?", 2, prim_dict_contains);
+    register_primitive("keys", 1, prim_keys);
+    register_primitive("values", 1, prim_values);
+
+    // Generic accessor (works on arrays, dicts, strings)
+    register_primitive("get", 2, prim_get);
+
+    // File I/O primitives
+    register_primitive("open", 2, prim_open);
+    register_primitive("close", 1, prim_close);
+    register_primitive("read-line", 1, prim_read_line);
+    register_primitive("read-all", 1, prim_read_all);
+    register_primitive("write-string", 2, prim_write_string);
+    register_primitive("write-line", 2, prim_write_line);
+    register_primitive("flush", 1, prim_flush);
+    register_primitive("port?", 1, prim_port_q);
+    register_primitive("eof?", 1, prim_eof_q);
+    register_primitive("file-exists?", 1, prim_file_exists);
+
     register_primitive("not", 1, prim_not);
     register_primitive("identity", 1, prim_identity);
     register_primitive("and", -1, prim_and);
@@ -2672,6 +5744,52 @@ Env* omni_env_init(void) {
     register_primitive("chan-close", 1, prim_chan_close);
     register_primitive("chan?", 1, prim_chan_q);
 
+    // FFI primitives
+    register_primitive("ffi/load", 1, prim_ffi_load);
+    register_primitive("ffi/close", 1, prim_ffi_close);
+    register_primitive("ffi/symbol", 2, prim_ffi_symbol);
+    register_primitive("ffi/call", -1, prim_ffi_call);
+    register_primitive("ffi/lib?", 1, prim_ffi_lib_q);
+    register_primitive("ffi/ptr?", 1, prim_ffi_ptr_q);
+    register_primitive("ffi/null?", 1, prim_ffi_null_q);
+    register_primitive("ffi/null", 0, prim_ffi_null);
+    register_primitive("ffi/ptr-address", 1, prim_ffi_ptr_address);
+    register_primitive("ffi/malloc", 1, prim_ffi_malloc);
+    register_primitive("ffi/free", 1, prim_ffi_free);
+    register_primitive("ffi/ptr-read-int", 1, prim_ffi_ptr_read_int);
+    register_primitive("ffi/ptr-write-int", 2, prim_ffi_ptr_write_int);
+    register_primitive("ffi/ptr-read-double", 1, prim_ffi_ptr_read_double);
+    register_primitive("ffi/ptr-write-double", 2, prim_ffi_ptr_write_double);
+    register_primitive("ffi/ptr-read-string", 1, prim_ffi_ptr_read_string);
+
+    // Metadata primitives
+    register_primitive("meta", 1, prim_meta);
+    register_primitive("set-meta!", 2, prim_set_meta);
+    register_primitive("has-meta?", 2, prim_has_meta_q);
+    register_primitive("get-meta", -1, prim_get_meta);
+    register_primitive("private?", 1, prim_private_q);
+    register_primitive("deprecated?", 1, prim_deprecated_q);
+    register_primitive("doc", 1, prim_doc);
+
+    // Box primitives (mutable reference cells)
+    register_primitive("box", 1, prim_box);
+    register_primitive("box?", 1, prim_box_q);
+    register_primitive("box-ref", 1, prim_box_ref);
+    register_primitive("box-set!", 2, prim_box_set);
+
+    // Thread primitives
+    register_primitive("thread", 1, prim_thread);
+    register_primitive("thread-join", 1, prim_thread_join);
+    register_primitive("thread?", 1, prim_thread_q);
+    register_primitive("thread-done?", 1, prim_thread_done_q);
+    register_primitive("thread-result", 1, prim_thread_result);
+
+    // Atomic operations
+    register_primitive("atomic-ref", 1, prim_atomic_ref);
+    register_primitive("atomic-set!", 2, prim_atomic_set);
+    register_primitive("atomic-cas!", 3, prim_atomic_cas);
+    register_primitive("atomic-swap!", 2, prim_atomic_swap);
+
     // Define primitive functions in environment
     for (int i = 0; i < num_primitives; i++) {
         // Create wrapper lambda for primitives
@@ -2682,7 +5800,53 @@ Env* omni_env_init(void) {
         env_define(global_env, mk_sym(primitives[i].name), prim_val);
     }
 
+    // Define math constants as direct float values (not functions)
+    env_define(global_env, mk_sym("pi"), mk_float(3.14159265358979323846));
+    env_define(global_env, mk_sym("e"), mk_float(2.71828182845904523536));
+    env_define(global_env, mk_sym("inf"), mk_float(1.0 / 0.0));  // +Infinity
+    env_define(global_env, mk_sym("nan"), mk_float(0.0 / 0.0));  // NaN
+
     return global_env;
+}
+
+// Fill in default values for missing arguments
+// Returns a new args list with defaults filled in
+static Value* fill_defaults(Value* params, Value* args, Value* defaults, Env* def_env) {
+    Value* result = mk_nil();
+    Value** tail = &result;
+
+    while (!is_nil(params)) {
+        Value* param = car(params);
+        Value* default_expr = car(defaults);
+
+        // Handle rest parameter ..
+        if (param && param->tag == T_SYM && strcmp(param->s, "..") == 0) {
+            // Rest params get remaining args (no defaults apply)
+            *tail = args;
+            break;
+        }
+
+        if (!is_nil(args)) {
+            // Argument provided - use it
+            *tail = mk_cell(car(args), mk_nil());
+            tail = &((*tail)->cell.cdr);
+            args = cdr(args);
+        } else if (!is_nothing(default_expr)) {
+            // No argument but has default - evaluate default in definition env
+            Value* default_val = omni_eval(default_expr, def_env);
+            if (is_error(default_val)) return default_val;
+            *tail = mk_cell(default_val, mk_nil());
+            tail = &((*tail)->cell.cdr);
+        } else {
+            // No argument and no default - this is an error, but let env_extend handle it
+            break;
+        }
+
+        params = cdr(params);
+        defaults = cdr(defaults);
+    }
+
+    return result;
 }
 
 // Override apply to handle primitives
@@ -2714,7 +5878,18 @@ Value* omni_apply(Value* fn, Value* args, Env* env) {
         } else {
             closure_env = global_env;
         }
-        Env* call_env = env_extend(closure_env, fn->lam.params, args);
+
+        // Fill in defaults for missing arguments
+        Value* effective_args = args;
+        if (fn->lam.defaults) {
+            effective_args = fill_defaults(fn->lam.params, args, fn->lam.defaults, closure_env);
+            if (is_error(effective_args)) {
+                call_stack_pop();
+                return effective_args;
+            }
+        }
+
+        Env* call_env = env_extend(closure_env, fn->lam.params, effective_args);
         if (!call_env) {
             call_stack_pop();
             return mk_error("OOM in apply");
@@ -3212,30 +6387,28 @@ static Value* eval_find_restart(Value* args, Env* env) {
  *   => 43
  */
 
-// Recovery modes for effects
-typedef enum {
-    RECOVERY_ONE_SHOT = 0,   // Can resume at most once (default)
-    RECOVERY_MULTI_SHOT,     // Can resume multiple times
-    RECOVERY_TAIL,           // Tail-resumptive (optimized)
-    RECOVERY_ABORT           // Never resumes (like exceptions)
-} RecoveryModeOmni;
-
-// Effect type definition
-typedef struct EffectTypeDef {
+// Effect type definition (RecoveryModeOmni is forward declared near top of file)
+struct EffectTypeDef {
     const char* name;
     RecoveryModeOmni mode;
+    Value* payload_type;   // Type of value passed to perform (default: Nothing)
+    Value* returns_type;   // Type of value returned by resume (default: Nothing)
     struct EffectTypeDef* next;
-} EffectTypeDef;
+};
 
 // Effect type registry
 static EffectTypeDef* effect_type_registry = NULL;
 
 // Register or find an effect type
-static EffectTypeDef* register_effect_type(const char* name, RecoveryModeOmni mode) {
+// payload_type and returns_type can be NULL (defaults to Nothing)
+static EffectTypeDef* register_effect_type_full(const char* name, RecoveryModeOmni mode,
+                                                 Value* payload_type, Value* returns_type) {
     // Check if already exists
     for (EffectTypeDef* t = effect_type_registry; t; t = t->next) {
         if (strcmp(t->name, name) == 0) {
             t->mode = mode;  // Update mode if already registered
+            t->payload_type = payload_type;
+            t->returns_type = returns_type;
             return t;
         }
     }
@@ -3243,9 +6416,16 @@ static EffectTypeDef* register_effect_type(const char* name, RecoveryModeOmni mo
     EffectTypeDef* t = malloc(sizeof(EffectTypeDef));
     t->name = strdup(name);
     t->mode = mode;
+    t->payload_type = payload_type;
+    t->returns_type = returns_type;
     t->next = effect_type_registry;
     effect_type_registry = t;
     return t;
+}
+
+// Backwards-compatible wrapper (defaults to Nothing/Nothing)
+static EffectTypeDef* register_effect_type(const char* name, RecoveryModeOmni mode) {
+    return register_effect_type_full(name, mode, NULL, NULL);
 }
 
 static EffectTypeDef* find_effect_type(const char* name) {
@@ -4010,4 +7190,224 @@ static Value* eval_stack_trace(Value* args, Env* env) {
     fprintf(stderr, "%s", buffer);
 
     return mk_code(buffer);
+}
+
+/* ============================================================
+ * Module System Implementation
+ * ============================================================
+ *
+ * (module name
+ *   (export sym1 sym2 ...)
+ *   body...)
+ *
+ * (import module-name)
+ * (import module-name :only (sym1 sym2))
+ * (import module-name :as alias)
+ *
+ * (export sym1 sym2 ...)  ; within a module definition
+ */
+
+/**
+ * (module name body...)
+ *
+ * Creates a new module with the given name. The body is evaluated
+ * in a fresh environment that inherits from global. Export forms
+ * within the body specify which symbols are public.
+ */
+static Value* eval_module(Value* args, Env* env) {
+    if (is_nil(args)) return mk_error("module: missing name");
+
+    Value* name = car(args);
+    if (!name || name->tag != T_SYM) {
+        return mk_error("module: name must be a symbol");
+    }
+
+    // Check if module already exists
+    Module* existing = find_module(name->s);
+    if (existing && existing->loaded) {
+        return mk_error("module: already defined");
+    }
+
+    // Create or get module
+    Module* m = existing ? existing : register_module(name->s, env);
+    if (!m) return mk_error("module: registry full");
+
+    // Save current module and set this one
+    Module* prev_module = current_module;
+    current_module = m;
+
+    // Evaluate body in module's environment
+    Value* body = cdr(args);
+    Value* result = mk_nothing();
+
+    while (!is_nil(body)) {
+        result = omni_eval(car(body), m->env);
+        if (is_error(result)) {
+            current_module = prev_module;
+            return result;
+        }
+        body = cdr(body);
+    }
+
+    m->loaded = 1;
+    current_module = prev_module;
+
+    // Return the module name
+    return name;
+}
+
+/**
+ * (export sym1 sym2 ...)
+ *
+ * Within a module, declares which symbols are exported (public).
+ * Can only be used inside a module definition.
+ */
+static Value* eval_export(Value* args, Env* env) {
+    (void)env;
+
+    if (!current_module) {
+        return mk_error("export: must be used inside a module");
+    }
+
+    // Add each symbol to the exports list
+    while (!is_nil(args)) {
+        Value* sym = car(args);
+        if (!sym || sym->tag != T_SYM) {
+            return mk_error("export: expected symbols");
+        }
+
+        // Add to exports if not already there
+        if (!is_exported(current_module, sym->s)) {
+            current_module->exports = mk_cell(sym, current_module->exports);
+        }
+
+        args = cdr(args);
+    }
+
+    return mk_sym("ok");
+}
+
+/**
+ * (import module-name)
+ * (import module-name :only (sym1 sym2))
+ * (import module-name :as alias)
+ *
+ * Imports symbols from a module into the current environment.
+ */
+static Value* eval_import(Value* args, Env* env) {
+    if (is_nil(args)) return mk_error("import: missing module name");
+
+    Value* mod_name = car(args);
+    if (!mod_name || mod_name->tag != T_SYM) {
+        return mk_error("import: module name must be a symbol");
+    }
+
+    // Find the module
+    Module* m = find_module(mod_name->s);
+    if (!m) {
+        char msg[128];
+        snprintf(msg, sizeof(msg), "import: module '%s' not found", mod_name->s);
+        return mk_error(msg);
+    }
+
+    if (!m->loaded) {
+        char msg[128];
+        snprintf(msg, sizeof(msg), "import: module '%s' not loaded", mod_name->s);
+        return mk_error(msg);
+    }
+
+    // Parse import options
+    Value* options = cdr(args);
+    Value* only_syms = NULL;
+    const char* alias = NULL;
+
+    while (!is_nil(options)) {
+        Value* opt = car(options);
+        if (opt && opt->tag == T_SYM) {
+            const char* opt_name = opt->s;
+            // Handle keywords (skip leading colon)
+            if (opt_name[0] == ':') opt_name++;
+
+            if (strcmp(opt_name, "only") == 0) {
+                options = cdr(options);
+                if (!is_nil(options)) {
+                    only_syms = car(options);
+                    // Handle array wrapper
+                    if (only_syms && only_syms->tag == T_CELL &&
+                        car(only_syms) && car(only_syms)->tag == T_SYM &&
+                        strcmp(car(only_syms)->s, "array") == 0) {
+                        only_syms = cdr(only_syms);
+                    }
+                }
+            } else if (strcmp(opt_name, "as") == 0) {
+                options = cdr(options);
+                if (!is_nil(options)) {
+                    Value* alias_sym = car(options);
+                    if (alias_sym && alias_sym->tag == T_SYM) {
+                        alias = alias_sym->s;
+                    }
+                }
+            }
+        }
+        options = cdr(options);
+    }
+
+    // Import symbols
+    if (alias) {
+        // Import entire module as namespace: alias.symbol
+        // For now, just bind module name to a dict-like structure
+        Value* mod_dict = mk_cell(mk_sym("__module__"), mk_nil());
+        Value** tail = &mod_dict->cell.cdr;
+
+        Value* exports = m->exports;
+        while (!is_nil(exports)) {
+            Value* sym = car(exports);
+            if (sym && sym->tag == T_SYM) {
+                Value* val = env_lookup(m->env, sym);
+                if (val) {
+                    Value* pair = mk_cell(sym, val);
+                    *tail = mk_cell(pair, mk_nil());
+                    tail = &(*tail)->cell.cdr;
+                }
+            }
+            exports = cdr(exports);
+        }
+
+        env_define(env, mk_sym(alias), mod_dict);
+    } else if (only_syms) {
+        // Import only specified symbols
+        while (!is_nil(only_syms)) {
+            Value* sym = car(only_syms);
+            if (sym && sym->tag == T_SYM) {
+                if (!is_exported(m, sym->s)) {
+                    char msg[128];
+                    snprintf(msg, sizeof(msg),
+                             "import: '%s' is not exported from '%s'",
+                             sym->s, mod_name->s);
+                    return mk_error(msg);
+                }
+
+                Value* val = env_lookup(m->env, sym);
+                if (val) {
+                    env_define(env, sym, val);
+                }
+            }
+            only_syms = cdr(only_syms);
+        }
+    } else {
+        // Import all exported symbols
+        Value* exports = m->exports;
+        while (!is_nil(exports)) {
+            Value* sym = car(exports);
+            if (sym && sym->tag == T_SYM) {
+                Value* val = env_lookup(m->env, sym);
+                if (val) {
+                    env_define(env, sym, val);
+                }
+            }
+            exports = cdr(exports);
+        }
+    }
+
+    return mk_sym("ok");
 }

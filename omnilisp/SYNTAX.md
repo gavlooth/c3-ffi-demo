@@ -21,6 +21,17 @@ foo              ; Symbol
 ()               ; Empty list
 ```
 
+### Unicode Identifiers
+```lisp
+;; Greek letters and other Unicode characters work in identifiers
+(define π 3.14159)
+(define α 0.5)
+(define (Δ a b) (- a b))
+
+;; Greek lambda is an alias for lambda
+(λ (x) (* x x))
+```
+
 ### Lists, Quote, and Function Calls
 ```lisp
 (+ 1 2)           ; Function application (prefix)
@@ -38,6 +49,7 @@ foo              ; Symbol
 
 (lambda (x) (* x x))
 (fn (x) (* x x))        ; Alias for lambda
+(λ (x) (* x x))         ; Greek lambda also works
 
 (let ((x 1) (y 2)) (+ x y))   ; List-style bindings
 (let [x 1 y 2] (+ x y))       ; Array-style bindings
@@ -62,8 +74,223 @@ foo              ; Symbol
 ```lisp
 ; Arithmetic: + - * / %
 ; Comparison: < > <= >= =
-; Lists: cons car cdr null?
-; I/O: display print newline
+; Lists: cons car cdr empty? list length
+; Strings: string? char? string-length string-append string-ref substring string->list list->string
+; Math: float? int? number? sin cos tan asin acos atan atan2 exp log log10 sqrt pow abs floor ceil round truncate ->int ->float pi e inf nan nan? inf?
+; Arrays: array? array-ref array-set! array-length array-slice
+; Dicts: dict? dict-ref dict-set! dict-contains? keys values
+; File I/O: open close read-line read-all write-string write-line flush port? eof? file-exists?
+; Higher-order: map filter reduce range
+; I/O: print println
+; Introspection: type-of describe keyword?
+```
+
+### Arrays & Dicts (Implemented)
+```lisp
+(array 1 2 3)              ; Create array
+[1 2 3]                    ; Array literal
+(array? arr)               ; Type predicate
+(array-ref arr 0)          ; Get element at index
+(array-set! arr 0 val)     ; Set element at index
+(array-length arr)         ; Get length
+(array-slice arr 1 4)      ; Slice [1:4]
+
+(dict :a 1 :b 2)           ; Create dict with keyword keys
+(dict? d)                  ; Type predicate
+(dict-ref d :a)            ; Get value for key
+(dict-set! d :a val)       ; Set value for key
+(dict-contains? d :a)      ; Check if key exists
+(keys d)                   ; Get all keys as list
+(values d)                 ; Get all values as list
+```
+
+### Dot Access Syntax (Implemented)
+```lisp
+;; Field access: obj.field -> (get obj :field)
+person.name                ; -> (get person :name)
+person.age                 ; -> (get person :age)
+
+;; Chained access: a.b.c -> (get (get a :b) :c)
+company.ceo.name           ; -> (get (get company :ceo) :name)
+
+;; Computed key: obj.(expr) -> (get obj expr)
+arr.(0)                    ; array index
+arr.(idx)                  ; variable as index
+data.("string-key")        ; string key
+obj.(:key)                 ; explicit keyword (same as obj.key)
+
+;; Slicing: arr.[start end] -> (array-slice arr start end)
+arr.[1 4]                  ; -> (array-slice arr 1 4)
+
+;; Mixed access
+data.items.(0)             ; nested dict then array access
+
+;; Works on arrays, dicts, and strings
+"hello".(0)                ; -> #\h (first character)
+```
+
+### Symbols & Quote Sugar (Implemented)
+```lisp
+;; :foo is sugar for 'foo (quoted symbol)
+:foo                       ; -> foo (the symbol)
+'foo                       ; -> foo (the symbol)
+(= :foo 'foo)              ; -> true
+
+;; Symbols are self-evaluating when quoted
+(symbol? :foo)             ; -> true
+(symbol? 'bar)             ; -> true
+(symbol? 42)               ; -> false
+
+;; .field is a getter function: (lambda (x) (get x 'field))
+(map .name people)         ; extract names from list of dicts
+(map .age people)          ; extract ages
+(filter .active? items)    ; filter by field
+```
+
+### File I/O (Implemented)
+```lisp
+(open "file.txt" :read)    ; Open for reading
+(open "file.txt" :write)   ; Open for writing
+(open "file.txt" :append)  ; Open for appending
+(read-line port)           ; Read line (returns nothing at EOF)
+(read-all port)            ; Read entire file as string
+(write-string port "data") ; Write string
+(write-line port "data")   ; Write line with newline
+(flush port)               ; Flush output buffer
+(close port)               ; Close port
+(port? x)                  ; Type predicate
+(eof? port)                ; Check for EOF
+(file-exists? "file.txt")  ; Check if file exists
+```
+
+### Destructuring in Let (Implemented)
+```lisp
+(let [[a b c] (list 1 2 3)] ...)     ; Array/list destructuring
+(let [(cons h t) my-list] ...)       ; Cons destructuring
+(let [[x [y z]] nested] ...)         ; Nested destructuring
+```
+
+### Hygienic Macros (Implemented)
+```lisp
+;; Define syntax transformer with pattern matching
+(define [syntax my-if]
+  [(my-if test then else)
+   (match test [true then] [_ else])])
+
+;; With literals declaration (symbols that match literally)
+(define [syntax my-cond]
+  (literals else)
+  [(my-cond) nothing]
+  [(my-cond [else e]) e]
+  [(my-cond [test e] rest ...)
+   (my-if test e (my-cond rest ...))])
+
+;; Ellipsis patterns for zero-or-more matching
+(define [syntax my-and]
+  [(my-and) true]
+  [(my-and x) x]
+  [(my-and x y ...) (if x (my-and y ...) false)])
+
+;; Pattern variables are bare identifiers
+;; Keywords (:foo) match literally in patterns
+;; ... matches zero or more elements, binds to list
+```
+
+### Modules (Implemented)
+```lisp
+;; Define a module with exports
+(module math
+  (export square cube)
+
+  (define (square x) (* x x))
+  (define (cube x) (* x x x))
+  (define (private-fn x) x))  ; not exported - private
+
+;; Import all exported symbols
+(import math)
+(square 4)  ; -> 16
+
+;; Import specific symbols only
+(import math :only [square])
+
+;; Import with namespace alias
+(import math :as m)
+```
+
+### Strings & Characters (Implemented)
+```lisp
+"hello world"          ; String literal
+#\a                    ; Character literal
+#\newline              ; Named character
+
+(string-length "abc")         ; -> 3
+(string-append "a" "b" "c")   ; -> "abc"
+(string-ref "hello" 1)        ; -> #\e
+(substring "hello" 0 3)       ; -> "hel"
+(string->list "abc")          ; -> (#\a #\b #\c)
+(list->string (list #\a #\b)) ; -> "ab"
+(string? "x")                 ; -> true
+(char? #\a)                   ; -> true
+(empty? "")                   ; -> true
+```
+
+### Floats & Math (Implemented)
+```lisp
+3.14159                ; Float literal
+1.5e-10                ; Scientific notation
+0xFF                   ; Hex literal -> 255
+0b1010                 ; Binary literal -> 10
+
+(+ 1.5 2.5)            ; -> 4.0 (mixed arithmetic)
+(* 2 3.14)             ; -> 6.28
+
+; Trigonometry
+(sin (/ (pi) 2))       ; -> 1.0
+(cos 0)                ; -> 1.0
+(atan2 1 1)            ; -> 0.785... (pi/4)
+
+; Exponentials & Logarithms
+(sqrt 2)               ; -> 1.414...
+(pow 2 10)             ; -> 1024.0
+(exp 1)                ; -> 2.718... (e)
+(log (e))              ; -> 1.0
+
+; Rounding
+(floor 3.7)            ; -> 3.0
+(ceil 3.2)             ; -> 4.0
+(round 3.5)            ; -> 4.0
+(truncate -3.7)        ; -> -3.0
+
+; Conversion
+(->int 3.7)            ; -> 3
+(->float 42)           ; -> 42.0
+
+; Constants & Predicates
+(pi)                   ; -> 3.14159...
+(e)                    ; -> 2.71828...
+(float? 3.14)          ; -> true
+(number? 42)           ; -> true (int or float)
+```
+
+### Pattern Matching (Implemented)
+```lisp
+(match x
+  [1 "one"]
+  [(cons h t) h]
+  [(or 1 2 3) "small"]
+  [_ "default"])
+```
+
+### Fibers & Channels (Implemented)
+```lisp
+(fiber (lambda () ...))   ; Create fiber
+(spawn f)                 ; Queue fiber
+(resume f)                ; Resume fiber
+(yield)                   ; Yield control
+(chan n)                  ; Create channel
+(send ch val)             ; Send to channel
+(recv ch)                 ; Receive from channel
+(with-fibers body...)     ; Scoped fiber execution
 ```
 
 ### Comments
@@ -156,7 +383,6 @@ nothing         ; Unit value (void/absence)
 
 (empty? [])         ; -> true
 (empty? (list))     ; -> true
-(null? (list))      ; -> true (list-specific)
 ```
 
 ### 1.4 Parametric Types
@@ -243,10 +469,6 @@ Bindings are in `[]` as an even number of forms (name-value pairs):
 ```lisp
 (-> x (+ x 1))         ; Single-arg lambda
 (-> (x y) (* x y))     ; Multi-arg lambda
-
-#(+ % 1)               ; Reader macro shorthand
-#(* %1 %2)
-#(list %1 %2 %&)       ; %& = rest args
 ```
 
 ### 3.2 Multi-Arity (via Overloads)
@@ -262,22 +484,35 @@ Bindings are in `[]` as an even number of forms (name-value pairs):
   (print "Hello, $title $name"))
 ```
 
-### 3.3 Default Parameters
+### 3.3 Default Parameters ✓ IMPLEMENTED
 ```lisp
 (define (greet [name "Guest"])
-  (print "Hello, $name"))
+  (string-append "Hello, " name "!"))
 
-(define (connect [host {String} "localhost"] [port {Int} 8080])
-  ...)
+(greet)          ; -> "Hello, Guest!"
+(greet "Alice")  ; -> "Hello, Alice!"
+
+;; Multiple defaults
+(define (make-point [x 0] [y 0]) (list x y))
+
+;; Mixed required and optional
+(define (greet-with-title title [name "Guest"])
+  (string-append title " " name))
+
+;; Note: Type annotations in defaults not yet implemented
+; (define (connect [host {String} "localhost"] [port {Int} 8080]) ...)
 ```
 
-### 3.4 Variadic Functions
+### 3.4 Variadic Functions ✓ IMPLEMENTED
 ```lisp
 (define (sum .. nums)
   (reduce + 0 nums))
 
+(sum 1 2 3 4 5)  ; -> 15
+(sum)            ; -> 0
+
 (define (log level .. args)
-  (print "[$level] " (join " " args)))
+  (println "[" level "] " args))
 ```
 
 ### 3.5 Named Arguments
@@ -373,7 +608,7 @@ Parent defaults to `Any`; specify `^:parent {Type}` before the `{}` header:
 
 ---
 
-## 5. Sum Types (Enums)
+## 5. Sum Types (Enums) - IMPLEMENTED
 
 ### 5.1 Simple Enums
 ```lisp
@@ -381,6 +616,10 @@ Parent defaults to `Any`; specify `^:parent {Type}` before the `{}` header:
   Red
   Green
   Blue)
+
+(Color? Red)   ; -> true (type predicate)
+(Red? Red)     ; -> true (variant predicate)
+(Green? Red)   ; -> false
 
 (match color
   [Red "stop"]
@@ -391,33 +630,57 @@ Parent defaults to `Any`; specify `^:parent {Type}` before the `{}` header:
 Enum variants may be used unqualified when unique in scope. If ambiguous, use
 `Type.Variant` (for example, `Color.Red`).
 
-### 5.2 Enums with Data
+### 5.2 Enums with Data - IMPLEMENTED
 ```lisp
+;; Define enum with data variants
+(define {enum Option}
+  (Some [value])    ; Data variant - creates constructor function
+  None)             ; Simple variant - creates dict value
+
+;; Use the constructor
+(define x (Some 42))
+(get x 'value)      ; -> 42
+
+;; Predicates work on both simple and data variants
+(Option? x)         ; -> true
+(Some? x)           ; -> true
+(None? x)           ; -> false
+(None? None)        ; -> true
+
+;; Result type with multiple data fields
+(define {enum Result}
+  (Ok [value])
+  (Err [message]))
+
+(define success (Ok 100))
+(define failure (Err "not found"))
+
+;; Type parameters (syntax parsed but not enforced at runtime)
 (define {enum Option T}
   (Some [value {T}])
   None)
-
-(define {enum Result T E}
-  (Ok [value {T}])
-  (Err [error {E}]))
 ```
 
-### 5.3 Using Option/Result
+### 5.3 Using Option/Result - IMPLEMENTED
 ```lisp
 (define (find-user id)
   (if (exists? id)
       (Some (get-user id))
       None))
 
+;; Pattern matching extracts data from variants
 (define (unwrap-or opt default)
   (match opt
-    [(Some v) v]
+    [(Some v) v]      ; Destructures Some, binds value to v
     [None default]))
 
 (define (map-result f result)
   (match result
     [(Ok v) (Ok (f v))]
     [(Err e) (Err e)]))
+
+;; Direct field access
+(define val (get (Some 42) 'value))  ; -> 42
 ```
 
 ### 5.4 Recursive Enums
@@ -432,6 +695,59 @@ Enum variants may be used unqualified when unique in scope. If ambiguous, use
     [(Lit n) n]
     [(Add l r) (+ (eval l) (eval r))]
     [(Mul l r) (* (eval l) (eval r))]))
+```
+
+---
+
+## 5.5 Algebraic Effects (OCaml 5-style)
+
+Effects provide structured control flow with resumable handlers.
+
+### Effect Definition
+```lisp
+;; Basic effect with mode
+(define {effect ask} :one-shot)
+
+;; Effect with payload type (what perform sends to handler)
+(define {effect log} :one-shot
+  (payload String))
+
+;; Effect with return type (what resume sends back to perform site)
+(define {effect get-config} :one-shot
+  (returns String))
+
+;; Effect with both types
+(define {effect fetch} :one-shot
+  (payload String)
+  (returns String))
+```
+
+### Recovery Modes
+- `:one-shot` - Resume at most once (default, most efficient)
+- `:multi-shot` - Resume multiple times (for backtracking, non-determinism)
+- `:abort` - Never resumes (like exceptions)
+- `:tail` - Tail-resumptive (optimized for immediate resume)
+
+### Using Effects
+```lisp
+;; Perform an effect - control jumps to handler
+(perform ask "what is your name?")
+
+;; Handle effects with resume
+(handle
+  (+ 1 (perform ask nothing))
+  (ask (payload resume) (resume 41)))  ; -> 42
+
+;; Abort effects for error handling
+(define {effect fail} :abort (payload String))
+
+(handle
+  (do
+    (println "before")
+    (perform fail "oops")
+    (println "after"))  ; never reached
+  (fail (msg _) (string-append "Caught: " msg)))
+; prints "before", returns "Caught: oops"
 ```
 
 ---
@@ -623,7 +939,7 @@ arr.[::2]         ; Every 2nd element
 (cons 1 (list 2 3))
 (car lst)         ; Head
 (cdr lst)         ; Tail
-(null? lst)       ; Empty check
+(empty? lst)      ; Empty check
 ```
 
 ### 8.7 Iteration
@@ -685,17 +1001,17 @@ obj.[indices]     ; Multi-access / slice
 ```lisp
 (if condition then-expr else-expr)
 
-;; cond is a macro expanding to match
+;; cond (currently a special form, planned to be a macro over match)
 (cond
   [(< x 0) "negative"]
   [(> x 0) "positive"]
   [else "zero"])
 
-;; Expands to:
-(match true
-  [_ :when (< x 0) "negative"]
-  [_ :when (> x 0) "positive"]
-  [_ "zero"])
+;; Future: will expand to match with guards
+;; (match true
+;;   [_ :when (< x 0) "negative"]
+;;   [_ :when (> x 0) "positive"]
+;;   [_ "zero"])
 
 (when condition
   (side-effect))
@@ -751,48 +1067,92 @@ Multiple bindings are nested by default (cartesian product). If zip mode is adde
 
 ## 11. Concurrency
 
-### 11.1 Green Threads
+OmniLisp provides two levels of concurrency:
+- **Fibers**: Lightweight cooperative coroutines (implemented)
+- **Threads**: OS-level parallelism (planned)
+
+### 11.1 Fibers (Implemented)
 ```lisp
-(define p (spawn (lambda () (compute))))
+;; Create and run fibers
+(define f (fiber (lambda () (compute))))  ; Create paused fiber
+(spawn f)                                  ; Add to scheduler queue
+(resume f)                                 ; Resume and get yielded value
+(join f)                                   ; Wait for completion
+
+;; Yielding
+(yield)                   ; Yield control, return nothing
+(yield value)             ; Yield with value
+
+;; Scoped execution
+(with-fibers
+  (spawn f1)
+  (spawn f2)
+  body...)                ; Runs all spawned fibers, then returns body result
 ```
 
-### 11.2 Channels
+### 11.2 Channels (Implemented)
 ```lisp
-(define ch (channel))     ; Unbuffered
-(define ch (channel 10))  ; Buffered
+(define ch (chan))        ; Unbuffered (rendezvous)
+(define ch (chan 10))     ; Buffered capacity 10
 
-(send ch value)           ; Blocks if full, returns false if closed
-(recv ch)                 ; Blocks if empty
-(close ch)
+(send ch value)           ; Send (blocks if full/unbuffered)
+(recv ch)                 ; Receive (blocks if empty)
 
-;; Receive from closed channel returns nothing
-;; Send returns true on success, false if closed
+;; Channels integrate with fiber scheduler for blocking
 ```
 
-### 11.3 Coordination
+### 11.3 System Threads (Planned)
 ```lisp
-(yield)                   ; Cooperative yield
-(park)                    ; Suspend
-(unpark process value)    ; Resume with value
+(define t (thread (lambda () ...)))  ; Spawn OS thread
+(thread-join t)                       ; Wait for completion
+(thread-id)                           ; Current thread ID
+
+;; Thread-safe primitives
+(atomic-cas! ref old new)             ; Compare-and-swap
 ```
 
 ---
 
 ## 12. Macros
 
-### 12.1 Definition
-```lisp
-(define [macro unless] (condition body)
-  #'(if (not ~condition) ~body nothing))
+### 12.1 Hygienic Syntax Transformers (Implemented)
 
-(define [macro with-timing] (name . body)
-  #'(let [start (now)]
-      (let [result (begin ~@body)]
-        (print ~name " took " (- (now) start) "ms")
-        result)))
+The macro system uses pattern-based syntax transformers:
+
+```lisp
+;; Basic macro definition
+(define [syntax unless]
+  [(unless condition body ...)
+   (if condition nothing (do body ...))])
+
+;; Multiple clauses with pattern matching
+(define [syntax my-cond]
+  (literals else)                        ; Symbols that match literally
+  [(my-cond) nothing]                    ; Base case
+  [(my-cond [else e]) e]                 ; Else clause
+  [(my-cond [test e] rest ...)           ; Recursive case
+   (if test e (my-cond rest ...))])
+
+;; Ellipsis for zero-or-more matching
+(define [syntax my-and]
+  [(my-and) true]
+  [(my-and x) x]
+  [(my-and x y ...) (if x (my-and y ...) false)])
 ```
 
-### 12.2 Syntax API
+**Pattern Syntax:**
+- Bare identifiers are pattern variables (bind to input)
+- Keywords (`:foo`) match literally
+- `(literals sym1 sym2)` declares symbols that match literally
+- `x ...` matches zero-or-more, binds x to a list
+- Nested patterns are supported
+
+**Template Syntax:**
+- Pattern variables are substituted with bound values
+- `x ...` expands list bound to x
+- `(literal expr)` protects from expansion (for macro-generating macros)
+
+### 12.2 Quasi-Quote API (Planned)
 ```lisp
 #'(...)           ; Syntax quote
 ~expr             ; Unquote
@@ -941,7 +1301,7 @@ Type variables are determined by scoping. Variables bound in the function signat
 (define (map {A B}) {(List B)}
   [f {(Fn A B)}]
   [xs {(List A)}]
-  (if (null? xs)
+  (if (empty? xs)
       (list)
       (cons (f (car xs)) (map f (cdr xs)))))
 
@@ -972,7 +1332,7 @@ FFI uses the same annotation/construction distinction:
 
 ```lisp
 ;; External function declaration
-(define (extern torch/torch_load_tensor :null-on-error)
+(define (extern torch/torch_load_tensor :nothing-on-error)
   [path {CString}]                    ; annotation on binding
   (Option (Handle Module)))           ; type construction for return
 
@@ -980,7 +1340,7 @@ FFI uses the same annotation/construction distinction:
 (define (opaque Tensor :destructor torch/torch_tensor_free))
 
 ;; Full example
-(define (extern torch/torch_add :null-on-error)
+(define (extern torch/torch_add :nothing-on-error)
   [a {(Handle Tensor)}]
   [b {(Handle Tensor)}]
   (Option (Handle Tensor)))

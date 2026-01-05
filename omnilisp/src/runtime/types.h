@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <ucontext.h>
+#include <pthread.h>
 
 // -- Core Value Types --
 
@@ -16,7 +17,15 @@ typedef enum {
     T_CONT,     // First-class continuation
     T_CHAN,     // CSP channel
     T_PROCESS,  // Fiber / lightweight coroutine
-    T_BOUNCE    // Trampoline thunk (fn + args)
+    T_BOUNCE,   // Trampoline thunk (fn + args)
+    T_STRING,   // Immutable string (length + data)
+    T_CHAR,     // Unicode character (code point)
+    T_FLOAT,    // IEEE 754 double precision float
+    T_PORT,     // File I/O port
+    T_SYNTAX,   // Hygienic syntax transformer (macro)
+    T_FFI_LIB,  // Foreign library handle (dlopen)
+    T_FFI_PTR,  // Foreign pointer (opaque handle)
+    T_THREAD    // System thread (pthread)
 } Tag;
 
 struct Value;
@@ -92,6 +101,7 @@ typedef struct Value {
             struct Value* params;
             struct Value* body;
             struct Value* env;
+            struct Value* defaults;      // Default values for optional params (NULL if none)
         } lam;
         struct Value* box_value;         // T_BOX - mutable reference cell
         struct {                         // T_CONT - continuation
@@ -116,6 +126,41 @@ typedef struct Value {
             struct Value* fn;            // Function to call
             struct Value* args;          // Arguments list
         } bounce;
+        struct {                         // T_STRING - immutable string
+            char* data;                  // UTF-8 encoded data
+            size_t len;                  // Length in bytes
+        } str;
+        long codepoint;                  // T_CHAR - Unicode code point
+        double f;                        // T_FLOAT - IEEE 754 double
+        struct {                         // T_PORT - file I/O port
+            FILE* fp;
+            char* filename;
+            int mode;                    // 0=read, 1=write, 2=append
+            int closed;
+        } port;
+        struct {                         // T_SYNTAX - hygienic macro
+            char* name;                  // Macro name for error messages
+            struct Value* literals;      // #literals list (match literally)
+            struct Value* rules;         // List of (pattern template) pairs
+            struct Value* def_env;       // Definition-time environment (for hygiene)
+        } syntax;
+        struct {                         // T_FFI_LIB - foreign library
+            void* handle;                // dlopen handle
+            char* name;                  // Library name for error messages
+        } ffi_lib;
+        struct {                         // T_FFI_PTR - foreign pointer
+            void* ptr;                   // Raw pointer
+            char* type_name;             // Type name for debugging (optional)
+            int owned;                   // If 1, we should free when done
+        } ffi_ptr;
+        struct {                         // T_THREAD - system thread
+            pthread_t tid;               // pthread ID
+            struct Value* thunk;         // Lambda to execute
+            struct Value* result;        // Result when done
+            int started;                 // Has thread been started?
+            int joined;                  // Has thread been joined?
+            int done;                    // Is thread complete?
+        } thread;
     };
 } Value;
 
@@ -129,12 +174,22 @@ Value* mk_cell(Value* car, Value* cdr);
 Value* mk_prim(PrimFn fn);
 Value* mk_code(const char* s);
 Value* mk_lambda(Value* params, Value* body, Value* env);
+Value* mk_lambda_with_defaults(Value* params, Value* body, Value* env, Value* defaults);
 Value* mk_error(const char* msg);
 Value* mk_box(Value* initial);
 Value* mk_cont(ContFn fn, Value* menv, int tag);
 Value* mk_chan(int capacity);
 Value* mk_process(Value* thunk);
 Value* mk_bounce(Value* fn, Value* args);
+Value* mk_string(const char* s, size_t len);
+Value* mk_string_cstr(const char* s);  // Convenience for C strings
+Value* mk_char(long codepoint);
+Value* mk_float(double f);
+Value* mk_port(FILE* fp, const char* filename, int mode);
+Value* mk_syntax(const char* name, Value* literals, Value* rules, Value* def_env);
+Value* mk_ffi_lib(void* handle, const char* name);
+Value* mk_ffi_ptr(void* ptr, const char* type_name, int owned);
+Value* mk_thread(Value* thunk);
 
 // -- Type Predicates --
 int is_box(Value* v);
@@ -143,6 +198,25 @@ int is_chan(Value* v);
 int is_process(Value* v);
 int is_error(Value* v);
 int is_bounce(Value* v);
+int is_string(Value* v);
+int is_char(Value* v);
+int is_float(Value* v);
+int is_port(Value* v);
+int is_syntax(Value* v);
+int is_ffi_lib(Value* v);
+int is_ffi_ptr(Value* v);
+int is_thread(Value* v);
+
+// -- Numeric Helpers --
+int is_numeric(Value* v);  // true for T_INT or T_FLOAT
+double to_double(Value* v); // convert T_INT or T_FLOAT to double
+
+// -- String Operations --
+size_t string_len(Value* s);
+const char* string_data(Value* s);
+Value* string_append(Value* a, Value* b);
+Value* string_ref(Value* s, size_t index);
+Value* substring(Value* s, size_t start, size_t end);
 
 // -- Box Operations --
 Value* box_get(Value* box);
