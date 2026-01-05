@@ -169,6 +169,372 @@ of this document describes the intended language design.
 
 ---
 
+## 1.8 Implemented Features Reference
+
+This section provides complete documentation for features implemented in the C runtime.
+
+### 1.8.1 Tuples
+
+Tuples are immutable, fixed-size collections. Use them for returning multiple values or grouping related data.
+
+```lisp
+;; Create a tuple
+(tuple 1 2 3)              ; -> (__tuple__ 1 2 3)
+(tuple "name" 42 true)     ; Mixed types allowed
+
+;; Type predicate
+(tuple? (tuple 1 2))       ; -> true
+(tuple? [1 2])             ; -> false (that's an array)
+
+;; Access elements by index (0-based)
+(define t (tuple 10 20 30))
+(tuple-ref t 0)            ; -> 10
+(tuple-ref t 1)            ; -> 20
+(tuple-ref t 2)            ; -> 30
+
+;; Common use: multiple return values
+(define (min-max a b)
+  (if (< a b)
+      (tuple a b)
+      (tuple b a)))
+
+(define result (min-max 5 3))
+(tuple-ref result 0)       ; -> 3 (min)
+(tuple-ref result 1)       ; -> 5 (max)
+```
+
+### 1.8.2 Named Tuples
+
+Named tuples are tuples with field names, providing readable access to elements.
+
+```lisp
+;; Create a named tuple with field names
+(named-tuple [x 10] [y 20])        ; -> (__named_tuple__ (x . 10) (y . 20))
+(named-tuple [name "Alice"] [age 30] [active true])
+
+;; Access by field name
+(define point (named-tuple [x 10] [y 20]))
+(get point 'x)             ; -> 10
+(get point 'y)             ; -> 20
+
+;; Useful for structured data without defining a struct
+(define (make-user name email)
+  (named-tuple [name name] [email email] [created (current-time)]))
+
+(define user (make-user "Bob" "bob@example.com"))
+(get user 'name)           ; -> "Bob"
+(get user 'email)          ; -> "bob@example.com"
+```
+
+### 1.8.3 Partial Application
+
+`partial` creates a new function with some arguments pre-filled.
+
+```lisp
+;; Basic partial application
+(define add5 (partial + 5))
+(add5 10)                  ; -> 15
+(add5 1)                   ; -> 6
+
+;; With multiple pre-filled arguments
+(define add10and20 (partial + 10 20))
+(add10and20 5)             ; -> 35
+
+;; Useful with higher-order functions
+(map (partial * 2) [1 2 3 4])      ; -> (2 4 6 8)
+(filter (partial < 5) [3 7 2 9 1]) ; -> (7 9) - elements where 5 < x
+
+;; Creating specialized functions
+(define greet (partial str "Hello, "))
+(greet "World")            ; -> "Hello, World"
+(greet "Alice")            ; -> "Hello, Alice"
+```
+
+### 1.8.4 Function Composition
+
+`compose` chains functions right-to-left (mathematical composition).
+
+```lisp
+;; compose applies functions right-to-left
+;; (compose f g) means: first apply g, then apply f to the result
+(define inc (partial + 1))
+(define double (partial * 2))
+
+(define inc-then-double (compose double inc))
+(inc-then-double 5)        ; -> 12 (5+1=6, 6*2=12)
+
+(define double-then-inc (compose inc double))
+(double-then-inc 5)        ; -> 11 (5*2=10, 10+1=11)
+
+;; Chain multiple functions
+(define process (compose str double inc))
+(process 5)                ; -> "12"
+
+;; Useful for building pipelines
+(define normalize (compose string-downcase string-trim))
+```
+
+### 1.8.5 Identity Function
+
+`identity` returns its argument unchanged. Useful as a default or placeholder.
+
+```lisp
+(identity 42)              ; -> 42
+(identity "hello")         ; -> "hello"
+(identity (list 1 2 3))    ; -> (1 2 3)
+
+;; Default function argument
+(define (process-list xs [transform identity])
+  (map transform xs))
+
+(process-list [1 2 3])                    ; -> (1 2 3)
+(process-list [1 2 3] (partial * 2))      ; -> (2 4 6)
+
+;; Filter nothing - keep all
+(filter identity [1 nothing 2 nothing 3]) ; -> (1 2 3)
+```
+
+### 1.8.6 String Building with `str`
+
+`str` concatenates any values into a string, converting non-strings automatically.
+
+```lisp
+;; Basic concatenation
+(str "Hello" " " "World")  ; -> "Hello World"
+
+;; Automatic conversion of non-strings
+(str "Count: " 42)         ; -> "Count: 42"
+(str "Pi is " 3.14159)     ; -> "Pi is 3.14159"
+(str "List: " (list 1 2 3)); -> "List: (1 2 3)"
+
+;; Building messages
+(define (greet name age)
+  (str "Hello, " name "! You are " age " years old."))
+
+(greet "Alice" 30)         ; -> "Hello, Alice! You are 30 years old."
+
+;; Convert single value to string
+(str 123)                  ; -> "123"
+(str true)                 ; -> "true"
+```
+
+### 1.8.7 Named Arguments
+
+Functions with default parameters can be called with named arguments to override specific defaults.
+
+```lisp
+;; Define function with default parameters
+(define (greet name [greeting "Hello"] [punctuation "!"])
+  (str greeting ", " name punctuation))
+
+;; Call with positional arguments
+(greet "Alice")                          ; -> "Hello, Alice!"
+(greet "Bob" "Hi")                       ; -> "Hi, Bob!"
+(greet "Charlie" "Hey" "?")              ; -> "Hey, Charlie?"
+
+;; Call with named arguments (override by name)
+(greet "Alice" :greeting "Good morning") ; -> "Good morning, Alice!"
+(greet "Bob" :punctuation "...")         ; -> "Hello, Bob..."
+(greet "Eve" :greeting "Hi" :punctuation "~") ; -> "Hi, Eve~"
+
+;; Named arguments can appear after positional ones
+(define (make-point [x 0] [y 0] [z 0])
+  (list x y z))
+
+(make-point)               ; -> (0 0 0)
+(make-point 1)             ; -> (1 0 0)
+(make-point 1 2)           ; -> (1 2 0)
+(make-point :z 5)          ; -> (0 0 5)
+(make-point 1 :z 5)        ; -> (1 0 5)
+(make-point :x 10 :y 20)   ; -> (10 20 0)
+```
+
+### 1.8.8 Top-Level Destructuring
+
+`define` supports destructuring patterns to bind multiple variables at once.
+
+```lisp
+;; Basic list destructuring
+(define [a b c] (list 1 2 3))
+a                          ; -> 1
+b                          ; -> 2
+c                          ; -> 3
+
+;; Destructuring function return values
+(define (get-bounds items)
+  (list (apply min items) (apply max items)))
+
+(define [min-val max-val] (get-bounds [5 2 8 1 9]))
+min-val                    ; -> 1
+max-val                    ; -> 9
+
+;; Rest pattern with ..
+(define [first second .. rest] (list 1 2 3 4 5))
+first                      ; -> 1
+second                     ; -> 2
+rest                       ; -> (3 4 5)
+
+;; Head and tail
+(define [head .. tail] (list 10 20 30))
+head                       ; -> 10
+tail                       ; -> (20 30)
+
+;; Ignoring rest
+(define [x y .. _] (list 1 2 3 4 5))
+x                          ; -> 1
+y                          ; -> 2
+;; rest is ignored
+```
+
+### 1.8.9 Exception Handling: try/catch/finally
+
+Simplified exception handling for common error cases. For resumable effects, use algebraic effects.
+
+```lisp
+;; Basic try/catch
+(try
+  (/ 10 0)
+  (catch e
+    (println "Error:" e)
+    0))                    ; -> 0 (caught division error)
+
+;; Catch and return default
+(define (safe-parse str)
+  (try
+    (parse-int str)
+    (catch e
+      nothing)))
+
+(safe-parse "42")          ; -> 42
+(safe-parse "abc")         ; -> nothing
+
+;; With finally (always executes)
+(define (read-config path)
+  (try
+    (let [f (open path :read)]
+      (try
+        (parse-json (read-all f))
+        (finally
+          (close f))))     ; Always close, even on error
+    (catch e
+      (println "Failed to read config:" e)
+      (default-config))))
+
+;; Signaling errors
+(define (divide a b)
+  (if (= b 0)
+      (error "Division by zero")
+      (/ a b)))
+
+(try
+  (divide 10 0)
+  (catch e
+    (str "Caught: " e)))   ; -> "Caught: Division by zero"
+
+;; Nested try blocks
+(try
+  (try
+    (risky-operation)
+    (catch e
+      (error (str "Wrapped: " e))))  ; Re-throw wrapped
+  (catch e
+    (println "Outer caught:" e)))
+```
+
+### 1.8.10 Automatic Resource Management: with-open-file
+
+`with-open-file` ensures files are closed even if an error occurs.
+
+```lisp
+;; Reading a file (auto-closes)
+(with-open-file [f "data.txt" :read]
+  (read-all f))            ; File closed after this returns
+
+;; Writing to a file
+(with-open-file [f "output.txt" :write]
+  (write-line f "First line")
+  (write-line f "Second line"))
+;; File automatically closed and flushed
+
+;; Appending to a file
+(with-open-file [f "log.txt" :append]
+  (write-line f (str (current-time) ": Event occurred")))
+
+;; Processing line by line
+(with-open-file [f "data.csv" :read]
+  (let loop [lines []]
+    (let [line (read-line f)]
+      (if (nothing? line)
+          lines
+          (loop (cons line lines))))))
+
+;; Modes:
+;; :read   - Open for reading (file must exist)
+;; :write  - Open for writing (creates or truncates)
+;; :append - Open for appending (creates if needed)
+```
+
+### 1.8.11 Algebraic Effects: handle/perform/resume
+
+OCaml 5-style algebraic effects for structured control flow with resumable handlers.
+
+```lisp
+;; Define an effect
+(define {effect ask} :one-shot)
+
+;; Perform an effect - jumps to handler
+(perform ask "What is your name?")
+
+;; Handle effects with resume
+(handle
+  (+ 1 (perform ask nothing))  ; Perform suspends here
+  (ask (payload resume)
+    (resume 41)))              ; -> 42 (1 + 41)
+
+;; Effects can carry payloads
+(define {effect log} :one-shot (payload String))
+
+(handle
+  (do
+    (perform log "Starting...")
+    (let [result (compute)]
+      (perform log (str "Result: " result))
+      result))
+  (log (msg resume)
+    (println "[LOG]" msg)
+    (resume nothing)))         ; Continue after logging
+
+;; Abort effects (no resume)
+(define {effect fail} :abort (payload String))
+
+(handle
+  (do
+    (when (< x 0)
+      (perform fail "Negative value"))
+    (sqrt x))
+  (fail (msg _)
+    (str "Error: " msg)))      ; Returns error message
+
+;; Multi-shot effects (can resume multiple times)
+(define {effect choice} :multi-shot)
+
+(handle
+  (let [x (perform choice)]
+    (let [y (perform choice)]
+      (list x y)))
+  (choice (_ resume)
+    (append (resume 1) (resume 2))))
+;; -> ((1 1) (1 2) (2 1) (2 2))
+
+;; Effect modes:
+;; :one-shot   - Resume at most once (default, efficient)
+;; :multi-shot - Resume multiple times (backtracking)
+;; :abort      - Never resumes (like exceptions)
+;; :tail       - Tail-resumptive (optimized)
+```
+
+---
+
 ## Planned Design (Not Yet Implemented in C Compiler)
 
 The sections below describe the intended Omnilisp language design and are not yet implemented in the C compiler unless explicitly noted.
