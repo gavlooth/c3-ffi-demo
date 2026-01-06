@@ -718,6 +718,10 @@ void omni_parse_result_free(OmniParseResult* result) {
 
 Value* omni_pika_match(const char* pattern, const char* input) {
     char* error = NULL;
+
+    /* Check if pattern requires start anchor (^) */
+    bool require_start = (pattern[0] == '^');
+
     PikaGrammar* grammar = omni_compile_pattern(pattern, &error);
     if (!grammar) {
         if (error) free(error);
@@ -745,6 +749,14 @@ Value* omni_pika_match(const char* pattern, const char* input) {
     PikaMatch* match = matches[0];
     int start = pika_match_start(match);
     int len = pika_match_len(match);
+
+    /* If pattern requires start anchor, filter out matches not at position 0 */
+    if (require_start && start != 0) {
+        free(matches);
+        pika_memo_free(memo);
+        pika_grammar_free(grammar);
+        return mk_nil();
+    }
 
     char* text = malloc(len + 1);
     memcpy(text, input + start, len);
@@ -1094,9 +1106,16 @@ static RegexTokenArray* regex_tokenize(const char* pattern, char** error_out) {
         if (c == '[') {
             size_t end = pos + 1;
 
-            /* Find closing bracket */
-            while (end < len && pattern[end] != ']') {
-                end++;
+            /* Find closing bracket, handling escaped \] */
+            while (end < len) {
+                if (pattern[end] == '\\' && end + 1 < len) {
+                    /* Skip escape sequence (e.g., \] or \n) */
+                    end += 2;
+                } else if (pattern[end] == ']') {
+                    break;
+                } else {
+                    end++;
+                }
             }
 
             if (end >= len) {
@@ -1106,13 +1125,23 @@ static RegexTokenArray* regex_tokenize(const char* pattern, char** error_out) {
                 return NULL;
             }
 
-            /* Extract inner content WITHOUT brackets */
+            /* Extract inner content WITHOUT brackets, processing escape sequences */
             /* pika_clause_charset_from_pattern expects content like "abc" or "^abc" */
             tok.type = RTOK_CHARSET;
-            int inner_len = (int)(end - pos - 1);  /* Exclude [ and ] */
-            if (inner_len < 0) inner_len = 0;
 
-            /* Reject empty character classes like [] or []] */
+            /* First pass: calculate processed length by counting escape sequences */
+            int inner_len = 0;
+            for (size_t i = pos + 1; i < end; i++) {
+                if (pattern[i] == '\\' && i + 1 < end) {
+                    /* Escape sequence: count as 1 character (the resolved escape) */
+                    inner_len++;
+                    i++;  /* Skip the escaped character */
+                } else {
+                    inner_len++;
+                }
+            }
+
+            /* Reject empty character classes like [] */
             if (inner_len == 0) {
                 if (error_out) *error_out = strdup("Empty character class [] is invalid");
                 token_array_free(arr);
@@ -1136,8 +1165,35 @@ static RegexTokenArray* regex_tokenize(const char* pattern, char** error_out) {
                 free(arr);
                 return NULL;
             }
-            memcpy(tok.value, pattern + pos + 1, tok.value_len);  /* Skip [ */
-            tok.value[tok.value_len] = '\0';
+
+            /* Second pass: copy content, processing escape sequences */
+            int out_idx = 0;
+            for (size_t i = pos + 1; i < end; i++) {
+                if (pattern[i] == '\\' && i + 1 < end) {
+                    /* Process escape sequence */
+                    char next = pattern[i + 1];
+                    switch (next) {
+                        case 'n': tok.value[out_idx++] = '\n'; break;
+                        case 't': tok.value[out_idx++] = '\t'; break;
+                        case 'r': tok.value[out_idx++] = '\r'; break;
+                        case '0': tok.value[out_idx++] = '\0'; break;
+                        case '\\': tok.value[out_idx++] = '\\'; break;
+                        case '[': tok.value[out_idx++] = '['; break;
+                        case ']': tok.value[out_idx++] = ']'; break;
+                        case '^': tok.value[out_idx++] = '^'; break;
+                        case '-': tok.value[out_idx++] = '-'; break;
+                        default:
+                            /* Unknown escape: just copy the character after backslash */
+                            tok.value[out_idx++] = next;
+                            break;
+                    }
+                    i++;  /* Skip the escaped character */
+                } else {
+                    tok.value[out_idx++] = pattern[i];
+                }
+            }
+            tok.value[out_idx] = '\0';
+
             token_array_push(arr, &tok);
             pos = end + 1;
         }
@@ -1552,10 +1608,14 @@ static PikaClause* ast_to_clause(RegexAstNode* node) {
             /* For practical purposes, we can skip this since PEG matches from start by default */
             return pika_clause_nothing();
 
-        case RAST_ANCHOR_END:
-            /* End anchor - use not_followed_by (negative lookahead) for any character */
-            /* For simplicity, we'll skip this in the initial implementation */
-            return pika_clause_nothing();
+        case RAST_ANCHOR_END: {
+            /* End anchor ($): "not followed by any character" = at end of input */
+            /* We use not_followed_by with DOT (matches any character except NULL) */
+            /* If nothing can follow, we must be at the end */
+            PikaClause* dot = pika_clause_charset_invert(pika_clause_char('\0'));
+            if (!dot) return pika_clause_nothing();
+            return pika_clause_not_followed_by(dot);
+        }
 
         case RAST_SEQUENCE: {
             /* Sequence of two clauses */
