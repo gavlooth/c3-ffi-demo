@@ -439,19 +439,18 @@ Address issues and concerns identified in the current `omni_compile_pattern()` i
     - `.` matches characters outside the current hardcoded set
     - Document any remaining limitations
 
-- [ ] **T-pattern-anchors-fix**: Implement proper anchor semantics
+- [R] **T-pattern-anchors-fix**: Implement proper anchor semantics
   - **Objective**: Make `^` and `$` work correctly
-  - **Where**: `src/runtime/pika/omni_grammar.c` in `ast_to_clause()` RAST_ANCHOR_* cases
+  - **Where**: `src/runtime/pika/omni_grammar.c` in `ast_to_clause()` and `omni_pika_match()`
   - **What to change**:
-    - `^` (start): Use negative lookbehind or track position
-    - `$` (end): Use `pika_clause_not_followed_by(pika_clause_any())`
-    - Consider Pika's substring matching behavior
+    - `^` (start): Check match position at API level - filter matches to only accept those at position 0
+    - `$` (end): Use `pika_clause_not_followed_by(pika_clause_charset_invert(pika_clause_char('\0')))`
+    - Added tests: `pika_pattern_end_anchor`, `pika_pattern_start_anchor`
   - **How to verify**:
     - `^foo` only matches "foo" at start of input
     - `foo$` only matches "foo" at end of input
-    - Fix the skipped test in `test_pika_tower.c:308`
   - **Acceptance**:
-    - Anchor tests pass with correct semantics
+    - Anchor tests pass with correct semantics (81/81 tests passing)
     - Behavior documented
 
 - [R] **T-pattern-null-checks**: Add NULL checks for allocations
@@ -496,40 +495,54 @@ Address issues and concerns identified in the current `omni_compile_pattern()` i
     - No memory leak concerns for removed code
 
 - [R] **T-pattern-charset-edge**: Handle character class edge cases
-  - **Objective**: Support edge cases in character class syntax
+  - **Objective**: Support edge cases in character class syntax and escape sequences
   - **Where**: `src/runtime/pika/omni_grammar.c` in `regex_tokenize()`
   - **What to change**:
     - Handle `[]]` (literal `]` as first char)
     - Handle `[-az]` or `[az-]` (literal `-` at start/end)
-    - Handle `[\]]` (escaped `]`)
-  - **How to verify**: Add tests for each edge case
+    - Handle escaped `]` when scanning for closing bracket
+    - Process escape sequences in charsets: `\n`, `\t`, `\r`, `\0`, `\\`, `\[`, `\]`, `\-`
+    - Two-pass algorithm: calculate processed length, then copy with resolved escapes
+  - **How to verify**: Added `pika_pattern_charset_escapes` test with comprehensive coverage
   - **Acceptance**:
     - Edge case tests pass
-    - Or: document as unsupported with clear error message
+    - Escape sequences properly resolved
+    - Known limitation documented: `\^` in charsets causes Pika library crash
 
 ---
 
 ## Known Issues
 
-### Anchor Implementation Incomplete
+### Escaped Caret in Character Classes
 
-`^` and `$` anchors emit `pika_clause_nothing()` which is a no-op. This means:
-- `^foo` matches `foo` anywhere, not just at start
-- `foo$` matches `foo` anywhere, not just at end
+**Status:** Pika Library Limitation
 
-Proper implementation requires lookahead predicates. See task **T-pattern-anchors-fix**.
+Using `\^` (escaped caret) inside a character class causes a crash in the Pika library. For example:
+- `[\^]+` - crashes with SIGSEGV in `fnv1a_hash()`
+
+**Root Cause:** The Pika library appears to have special handling for `^` as a negation operator that conflicts with using it as a literal character. When the tokenizer processes `[\^]` and extracts the inner content as `^`, the Pika clause construction fails.
+
+**Workaround:** Don't use `\^` in character classes. If you need to match literal `^` characters, use alternative patterns:
+- For negation: Use `[^...]` at the start of the charset (e.g., `[^abc]`)
+- For literal `^`: Match it outside of character classes or use a different approach
+
+**Other Escape Sequences Work:** All other escape sequences in character classes work correctly:
+- `[\]]` - matches `]`
+- `[\[]` - matches `[`
+- `[\\-c]` - after processing, becomes range `[a-c]`
+- `[\n]` - matches newline
+- `[\t]` - matches tab
 
 ### DOT Implementation Limitations
 
-The `.` (any character) now uses `pika_clause_charset_invert(pika_clause_char('\0'))` which matches any character except NULL.
+The `.` (any character) uses `pika_clause_charset_invert(pika_clause_char('\0'))` which matches any character except NULL.
+
+**Limitations:**
+- Does NOT match NULL bytes (`\0`)
 - Works correctly for all C strings (which don't contain NULL bytes)
-- For true "any byte" semantics (including NULL), would need different implementation
+- For binary data with embedded NULLs, would need different implementation
 
-### Character Class Escape Sequences
-
-Escape sequences inside character classes (e.g., `[\]]`) are not fully resolved:
-- `[\]]` treats `\` as a literal character, not an escape
-- Future improvement: process escapes inside charsets to convert `\]` to `]`
+**Practical Impact:** For text processing, this limitation is irrelevant since C strings are NULL-terminated.
 
 ---
 
