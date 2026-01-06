@@ -82,7 +82,7 @@ foo              ; Symbol
 ; File I/O: open close read-line read-all write-string write-line flush port? eof? file-exists?
 ; Higher-order: map filter reduce range partial compose identity
 ; I/O: print println
-; Introspection: type-of describe keyword?
+; Introspection: type-of describe symbol?
 ; String: str string-append string-length
 ```
 
@@ -96,19 +96,52 @@ foo              ; Symbol
 (array-length arr)         ; Get length
 (array-slice arr 1 4)      ; Slice [1:4]
 
-(dict :a 1 :b 2)           ; Create dict with keyword keys
+(dict :a 1 'b 2)           ; Create dict with symbol keys
 (dict? d)                  ; Type predicate
 (dict-ref d :a)            ; Get value for key
-(dict-set! d :a val)       ; Set value for key
+(dict-set! d 'a val)       ; Set value for key
 (dict-contains? d :a)      ; Check if key exists
 (keys d)                   ; Get all keys as list
 (values d)                 ; Get all values as list
 ```
 
+### Symbols & Quote Shorthand (Implemented)
+
+OmniLisp has **no separate keyword type**. Symbols are the primary unit of identity.
+There are two ways to write a literal symbol:
+
+1.  **Quoted symbols**: `'foo` (standard Lisp quote).
+2.  **Colon symbols**: `:foo` (shorthand for `'foo`).
+
+The colon prefix `:` is purely reader sugar. It produces a regular symbol and
+tells the reader to treat it as a literal (self-evaluating), identical to
+prefixing it with a quote.
+
+```lisp
+;; These are exactly the same symbol value:
+:foo                       ; -> foo (the symbol)
+'foo                       ; -> foo (the symbol)
+(= :foo 'foo)              ; -> true (identical)
+
+;; Both work anywhere a symbol is expected:
+(define person #{:name "Alice" 'age 30})
+person.name                ; -> "Alice"
+(get person 'name)         ; -> "Alice"
+(get person :name)         ; -> "Alice"
+
+;; Symbols are self-evaluating when using : prefix or ' quote
+(symbol? :foo)             ; -> true
+(symbol? 'bar)             ; -> true
+(symbol? 42)               ; -> false
+
+;; Note for Clojure users: :foo is NOT a distinct type.
+;; It is just a symbol that evaluates to itself.
+```
+
 ### Dot Access Syntax (Implemented)
 ```lisp
 ;; Field access: obj.field -> (get obj :field)
-person.name                ; -> (get person :name)
+person.name                ; -> (get person :name) or (get person 'name)
 person.age                 ; -> (get person :age)
 
 ;; Chained access: a.b.c -> (get (get a :b) :c)
@@ -118,7 +151,8 @@ company.ceo.name           ; -> (get (get company :ceo) :name)
 arr.(0)                    ; array index
 arr.(idx)                  ; variable as index
 data.("string-key")        ; string key
-obj.(:key)                 ; explicit keyword (same as obj.key)
+obj.(:key)                 ; explicit symbol (same as obj.key)
+obj.('key)                 ; identical to above
 
 ;; Slicing: arr.[start end] -> (array-slice arr start end)
 arr.[1 4]                  ; -> (array-slice arr 1 4)
@@ -128,34 +162,6 @@ data.items.(0)             ; nested dict then array access
 
 ;; Works on arrays, dicts, and strings
 "hello".(0)                ; -> #\h (first character)
-```
-
-### Symbols & Quote Sugar (Implemented)
-
-OmniLisp has **no separate keyword type**. The `:foo` syntax is purely reader
-sugar for `'foo` (a quoted symbol). They produce identical values:
-
-```lisp
-;; :foo is sugar for 'foo - both produce the symbol foo
-:foo                       ; -> foo (the symbol)
-'foo                       ; -> foo (the symbol)
-(= :foo 'foo)              ; -> true (identical)
-
-;; This means dict keys and dot notation work uniformly:
-(define person #{:name "Alice" :age 30})
-person.name                ; -> "Alice" (dot notation)
-(get person :name)         ; -> "Alice" (explicit get with :key)
-(get person 'name)         ; -> "Alice" (equivalent - 'name = :name)
-
-;; Symbols are self-evaluating when quoted
-(symbol? :foo)             ; -> true
-(symbol? 'bar)             ; -> true
-(symbol? 42)               ; -> false
-
-;; .field is a getter function: (lambda (x) (get x 'field))
-(map .name people)         ; extract names from list of dicts
-(map .age people)          ; extract ages
-(filter .active? items)    ; filter by field
 ```
 
 ### File I/O (Implemented)
@@ -203,7 +209,7 @@ person.name                ; -> "Alice" (dot notation)
   [(my-and x y ...) (if x (my-and y ...) false)])
 
 ;; Pattern variables are bare identifiers
-;; Keywords (:foo) match literally in patterns
+;; Symbols (written as :foo or 'foo) match literally in patterns
 ;; ... matches zero or more elements, binds to list
 ```
 
@@ -426,7 +432,7 @@ OmniLisp uses algebraic effects for error handling. Use `:abort` mode for non-re
 ### Named Arguments (Implemented)
 ```lisp
 ;; Symbols starting with : are self-evaluating (used for named args)
-:foo                      ; -> :foo (not quoted)
+:foo                      ; -> :foo (identitcal to 'foo)
 
 ;; Functions with default parameters
 (define (greet name [greeting "Hello"])
@@ -500,7 +506,7 @@ All sections below describe the intended Omnilisp language design and are not ye
 
 ;; Symbols & Booleans
 'a-symbol       ; Quoted symbol
-:shorthand      ; Reader sugar for 'shorthand
+:shorthand      ; Symbol shorthand (identitcal to 'shorthand)
 true
 false
 nothing         ; Unit value (void/absence)
@@ -1303,7 +1309,7 @@ The macro system uses pattern-based syntax transformers:
 
 **Pattern Syntax:**
 - Bare identifiers are pattern variables (bind to input)
-- Keywords (`:foo`) match literally
+- Symbols written as `:foo` or `'foo` match literally
 - `(literals sym1 sym2)` declares symbols that match literally
 - `x ...` matches zero-or-more, binds x to a list
 - Nested patterns are supported
@@ -1522,7 +1528,7 @@ FFI uses the same annotation/construction distinction:
 ## 16. Metadata
 
 ```lisp
-^:private            ; Keyword metadata
+^:private            ; Symbol metadata (sugar for '^' 'private)
 ^:hot                ; Compiler hint
 ^:mutable            ; Mutability hint (fields/bindings)
 ^:tailrec            ; Must compile to tail call

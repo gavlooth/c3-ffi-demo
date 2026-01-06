@@ -73,7 +73,7 @@ company.ceo.name         ; chained: a.b.c
 arr.(0)                  ; array index
 arr.(idx)                ; variable as key
 data.("string-key")      ; string key
-obj.(:key)               ; explicit keyword (same as obj.key)
+obj.(:key)               ; explicit symbol (same as obj.key)
 
 ;; Slicing
 arr.[1 4]                ; -> (array-slice arr 1 4)
@@ -465,7 +465,7 @@ Color             ; -> (Red Green Blue)
 ; Default parameters
 (define (greet [name "Guest"]) ...)
 
-; Named/keyword arguments
+; Named arguments
 (define (make-point & :x x :y y) ...)
 
 ; Variadic functions
@@ -613,7 +613,7 @@ None
 - Lists: `cons`, `car`, `cdr`, `empty?`, `list`, `length`
 - Arrays: `array?`, `array-ref`, `array-set!`, `array-length`, `array-slice`
 - Dicts: `dict?`, `dict-ref`, `dict-set!`, `dict-contains?`, `keys`, `values`
-- Strings: `string?`, `char?`, `keyword?`, `string-length`, `string-append`, `string-ref`, `substring`, `string->list`, `list->string`
+- Strings: `string?`, `char?`, `symbol?`, `string-length`, `string-append`, `string-ref`, `substring`, `string->list`, `list->string`
 - Math: `float?`, `int?`, `number?`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `exp`, `log`, `log10`, `sqrt`, `pow`, `abs`, `floor`, `ceil`, `round`, `truncate`, `->int`, `->float`, `pi`, `e`, `inf`, `nan`, `nan?`, `inf?`
 - File I/O: `open`, `close`, `read-line`, `read-all`, `write-string`, `write-line`, `flush`, `port?`, `eof?`, `file-exists?`
 - Higher-order: `map`, `filter`, `reduce`, `range`

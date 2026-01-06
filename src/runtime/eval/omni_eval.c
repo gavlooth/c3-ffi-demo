@@ -552,7 +552,7 @@ Value* omni_eval(Value* expr, Env* env) {
             if (strcmp(expr->s, "false") == 0) return mk_sym("false");
             if (strcmp(expr->s, "nothing") == 0) return mk_nothing();
 
-            // Keywords (symbols starting with :) are self-evaluating
+            // Symbols (with : shorthand) are self-evaluating
             if (expr->s[0] == ':') return expr;
 
             // Environment lookup
