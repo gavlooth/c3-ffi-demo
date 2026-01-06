@@ -30,15 +30,17 @@ SRCS = $(RUNTIME_DIR)/types.c \
        $(COMPILER_DIR)/omni_compile.c \
        $(UTIL_DIR)/dstring.c \
        $(UTIL_DIR)/hashmap.c \
-       $(MEMORY_DIR)/scc.c \
-       $(MEMORY_DIR)/deferred.c \
-       $(MEMORY_DIR)/arena.c \
-       $(MEMORY_DIR)/symmetric.c \
-       $(MEMORY_DIR)/region.c \
-       $(MEMORY_DIR)/genref.c \
-       $(MEMORY_DIR)/constraint.c \
-       $(MEMORY_DIR)/exception.c \
-       $(MEMORY_DIR)/concurrent.c
+       $(RUNTIME_DIR)/memory/deferred.c \
+       $(RUNTIME_DIR)/memory/arena.c \
+       $(RUNTIME_DIR)/memory/region.c \
+       $(RUNTIME_DIR)/memory/genref.c \
+       $(RUNTIME_DIR)/memory/constraint.c \
+       $(RUNTIME_DIR)/memory/exception.c \
+       $(RUNTIME_DIR)/memory/concurrent.c \
+       runtime/src/memory/arena_core.c \
+       runtime/src/memory/region_core.c \
+       runtime/src/memory/transmigrate.c \
+       runtime/src/memory/region_value.c
 
 # Object files
 OBJS = $(SRCS:.c=.o)

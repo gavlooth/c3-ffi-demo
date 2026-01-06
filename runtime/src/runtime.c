@@ -400,6 +400,17 @@ void invalidate_weak_refs_for(void* target) {
     }
 }
 
+#include "memory/region_core.h"
+#include "memory/region_value.h"
+
+static Region* _legacy_region = NULL;
+
+static void _ensure_legacy_region(void) {
+    if (!_legacy_region) {
+        _legacy_region = region_create();
+    }
+}
+
 /* IPGE generation seed - evolves with each allocation
  * Uses 64-bit LCG for full randomness, truncated to Generation type.
  * This gives each allocation a pseudo-random starting generation. */
@@ -434,25 +445,13 @@ int is_pool_obj(Obj* obj) {
 
 /* Object Constructors */
 Obj* mk_int(long i) {
-    Obj* x = malloc(sizeof(Obj));
-    if (!x) return NULL;
-    x->generation = _next_generation();
-    x->mark = 1;
-    x->tag = TAG_INT;
-    x->is_pair = 0;
-    x->i = i;
-    return x;
+    _ensure_legacy_region();
+    return (Obj*)mk_int_region(_legacy_region, i);
 }
 
 Obj* mk_float(double f) {
-    Obj* x = malloc(sizeof(Obj));
-    if (!x) return NULL;
-    x->generation = _next_generation();
-    x->mark = 1;
-    x->tag = TAG_FLOAT;
-    x->is_pair = 0;
-    x->f = f;
-    return x;
+    _ensure_legacy_region();
+    return (Obj*)mk_float_region(_legacy_region, f);
 }
 
 double get_float(Obj* x) {
@@ -465,66 +464,29 @@ Obj* mk_char(long c) {
     if (c >= 0 && c <= 0x10FFFF) {
         return mk_char_unboxed(c);
     }
-    /* Fallback to boxed for invalid codepoints */
-    Obj* x = malloc(sizeof(Obj));
-    if (!x) return NULL;
-    x->generation = _next_generation();
-    x->mark = 1;
-    x->tag = TAG_CHAR;
-    x->is_pair = 0;
-    x->i = c;
-    return x;
+    _ensure_legacy_region();
+    return (Obj*)mk_char_region(_legacy_region, c);
 }
 
 Obj* mk_pair(Obj* a, Obj* b) {
-    Obj* x = malloc(sizeof(Obj));
-    if (!x) return NULL;
-    x->generation = _next_generation();
-    x->mark = 1;
-    x->tag = TAG_PAIR;
-    x->is_pair = 1;
-    /* Move semantics: ownership transfers to pair, no inc_ref needed */
-    x->a = a;
-    x->b = b;
-    return x;
+    _ensure_legacy_region();
+    return (Obj*)mk_cell_region(_legacy_region, (Value*)a, (Value*)b);
 }
 
 Obj* mk_sym(const char* s) {
-    Obj* x = malloc(sizeof(Obj));
-    if (!x) return NULL;
-    x->generation = _next_generation();
-    x->mark = 1;
-    x->tag = TAG_SYM;
-    x->is_pair = 0;
-    if (s) {
-        size_t len = strlen(s);
-        char* copy = malloc(len + 1);
-        if (!copy) {
-            free(x);
-            return NULL;
-        }
-        memcpy(copy, s, len + 1);
-        x->ptr = copy;
-    } else {
-        x->ptr = NULL;
-    }
-    return x;
+    _ensure_legacy_region();
+    return (Obj*)mk_sym_region(_legacy_region, s);
 }
+
 
 Obj* mk_nothing(void) {
     return &omni_nothing_obj;
 }
 
 Obj* mk_box(Obj* v) {
-    Obj* x = malloc(sizeof(Obj));
-    if (!x) return NULL;
-    x->generation = _next_generation();
-    x->mark = 1;
-    x->tag = TAG_BOX;
-    x->is_pair = 0;
-    if (v) inc_ref(v);
-    x->ptr = v;
-    return x;
+    _ensure_legacy_region();
+    // mk_box_region takes Value*, Obj* is compatible
+    return (Obj*)mk_box_region(_legacy_region, (Value*)v);
 }
 
 Obj* box_get(Obj* b) {

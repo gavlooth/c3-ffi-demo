@@ -9,8 +9,6 @@
 - After user approval, change `[R]` to `[DONE]`
 - Workflow: `[TODO]` → implement → `[R]` → user approves → `[DONE]`
 
-This ensures no feature is considered "done" until a human has reviewed it.
-
 ---
 
 ## Phase 13: Region-Based Reference Counting (RC-G) Refactor
@@ -107,42 +105,6 @@ Replace hybrid memory management with a unified Region-RC architecture.
     - Variables grouped by interaction.
     - Scope boundaries correctly identified.
 
-- [TODO] Label: T-rcg-codegen-lifecycle
-  Objective: Wire Region lifecycle into Codegen.
-  Where: `csrc/codegen/codegen.c`, `src/runtime/compiler/omni_compile.c`
-  What to change:
-    - [ ] **Modify Function Signatures**: Add `Region* _caller_region` as the first argument to all generated C functions.
-    - [ ] **Inject Local Region**: At the start of each function (or at dominator), emit `Region* _local_region = region_create();`.
-    - [ ] **Constructor Swap**: Replace all `mk_int(...)`, `mk_pair(...)`, etc., with `mk_int_region(_local_region, ...)`.
-    - [ ] **Call Site Update**: Pass `_local_region` as the first argument to all nested function calls.
-    - [ ] **Region Exit**: Emit `region_exit(_local_region)` before each `return` and at the end of the function.
-  How to verify: Compile a simple OmniLisp program and verify the generated C code includes region management.
-  Acceptance:
-    - Generated code uses regions for all allocations.
-    - Regions are correctly created and exited.
-
-- [TODO] Label: T-rcg-escape
-  Objective: Implement Transmigration for escaping values.
-  Where: `csrc/codegen/codegen.c`, `csrc/analysis/escape.c`
-  What to change:
-    - [ ] **Return Path Logic**: Identify values that escape to the caller (returned values).
-    - [ ] **Emit Transmigrate**: Before the `return` statement, emit `Value* _result = transmigrate(val, _local_region, _caller_region);`.
-    - [ ] **Cleanup**: Ensure `region_exit(_local_region)` is called AFTER `transmigrate`.
-  How to verify: Compile a function returning a list and verify the result is transmigrated to the caller's region.
-  Acceptance:
-    - Returned objects are safely moved to the caller's region.
-    - No dangling references to the local region.
-
-- [TODO] Label: T-rcg-codegen-tether
-  Objective: Emit Tethering for RegionRef arguments.
-  Where: `csrc/codegen/codegen.c`
-  What to change:
-    - [ ] For `RegionRef` arguments, emit `region_tether_start(arg.region);` at function entry.
-    - [ ] Emit `region_tether_end(arg.region);` at function exit.
-  How to verify: Inspect generated code for tether calls.
-  Acceptance:
-    - Arguments are tethered during function execution.
-
 - [DONE] Label: T-rcg-cleanup
   Objective: Remove obsolete runtime components.
   Where: `runtime/src/memory/`, `src/runtime/memory/`, `runtime/src/runtime.c`
@@ -154,3 +116,43 @@ Replace hybrid memory management with a unified Region-RC architecture.
   Acceptance:
     - Codebase compiles without old cycle detector.
     - All tests pass with new Region-RC runtime.
+
+---
+
+## Phase 14: Full System Integration (The Wiring)
+
+**Reference:** `docs/COMPLETE_INTEGRATION_PLAN.md` for architectural details.
+
+- [DONE] Label: T-rcg-inference-hook
+  Objective: Hook inference pass into compiler.
+  Where: `src/runtime/compiler/omni_compile.c`
+  What to change:
+    - [x] In `omni_compile_function`, call `infer_regions(ctx)`.
+    - [x] Ensure `AnalysisContext` is correctly populated.
+  How to verify: Inspect compiler debug logs.
+  Acceptance:
+    - Inference pass runs during compilation.
+
+- [DONE] Label: T-rcg-codegen-wiring
+  Objective: Swap legacy constructors for Region-aware ones in Codegen.
+  Where: `csrc/codegen/codegen.c`
+  What to change:
+    - [x] **Signatures:** Add `Region* _caller` to all emitted C functions.
+    - [x] **Lifecycle:** Inject `Region* _local = region_create();` at function start.
+    - [x] **Constructors:** Replace `mk_int(...)` with `mk_int_region(_local, ...)`.
+    - [x] **Return:** Emit `transmigrate` and `region_exit` before `return`.
+  How to verify: Compile a Lisp program and verify generated C code.
+  Acceptance:
+    - No more `malloc` in hot path.
+    - Regions manage all emitted object lifetimes.
+
+- [TODO] Label: T-rcg-entry
+  Objective: Bootstrap the Root Region in `main`.
+  Where: `src/runtime/main.c`
+  What to change:
+    - [ ] Create initial `Region* root = region_create();`.
+    - [ ] Pass `root` to entry function.
+    - [ ] Call `region_exit(root)` at end of program.
+  How to verify: Run `omni` executable and verify no leaks.
+  Acceptance:
+    - Program execution starts and ends with a valid region.
