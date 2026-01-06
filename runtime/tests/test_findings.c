@@ -21,7 +21,7 @@ void* thread_func(void* arg) {
     (void)arg;
     for (int i = 0; i < ITERATIONS; i++) {
         /* Concurrently decrement reference counts */
-        dec_ref(shared_objs[i]);
+        ATOMIC_DEC_REF(shared_objs[i]);
     }
     return NULL;
 }

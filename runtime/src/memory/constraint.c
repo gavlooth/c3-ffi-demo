@@ -24,7 +24,11 @@ static void add_violation(ConstraintContext* ctx, const char* message) {
 
     /* Duplicate the message */
     char* msg_copy = strdup(message);
-    if (!msg_copy) return;
+    if (!msg_copy) {
+        ctx->had_strdup_failure = true;
+        fprintf(stderr, "CRITICAL: Failed to allocate memory for violation message: %s\n", message);
+        return;
+    }
 
     if (ctx->violation_count >= ctx->violation_capacity) {
         char** new_violations = grow_array(
@@ -34,6 +38,8 @@ static void add_violation(ConstraintContext* ctx, const char* message) {
         );
         if (!new_violations) {
             free(msg_copy);
+            ctx->had_strdup_failure = true; /* Also track array growth failure here */
+            fprintf(stderr, "CRITICAL: Failed to grow violation array\n");
             return;
         }
         ctx->violations = new_violations;

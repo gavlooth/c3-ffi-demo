@@ -528,6 +528,28 @@ BorrowRef* borrow_create(Obj* obj, const char* source_desc);
 void borrow_release(BorrowRef* ref);
 Obj* borrow_get(BorrowRef* ref);
 
+/* ========== Concurrency: Atomic Operations ========== */
+
+#ifdef __STDC_NO_ATOMICS__
+/* Fallback for systems without C11 atomics - unsafe/mutex needed */
+/* Note: Ideally we'd use a mutex here, but for header simplicity we assume external sync or GCC builtins */
+#define ATOMIC_INC_REF(o) inc_ref(o)
+#define ATOMIC_DEC_REF(o) dec_ref(o)
+#else
+/* Using __atomic builtins for GCC/Clang compatibility */
+#define ATOMIC_INC_REF(o) do { \
+    if ((o)) __atomic_add_fetch(&(o)->mark, 1, __ATOMIC_SEQ_CST); \
+} while(0)
+
+#define ATOMIC_DEC_REF(o) do { \
+    if ((o)) { \
+        if (__atomic_sub_fetch(&(o)->mark, 1, __ATOMIC_SEQ_CST) <= 0) { \
+            free_obj(o); \
+        } \
+    } \
+} while(0)
+#endif
+
 /* ========== Concurrency: Channels ========== */
 
 Obj* make_channel(int capacity);

@@ -36,8 +36,8 @@ struct SymComponent {
     };
     
     struct SymObj** members; /* All objects in this island */
-    int member_count;
-    int member_capacity;
+    size_t member_count;
+    size_t member_capacity;
     
     struct SymComponent* parent; /* Union-Find parent (NULL if root) */
     

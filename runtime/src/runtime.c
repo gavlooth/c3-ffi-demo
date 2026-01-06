@@ -313,6 +313,7 @@ typedef struct FreeNode {
 
 FreeNode* FREE_HEAD = NULL;
 int FREE_COUNT = 0;
+pthread_mutex_t free_list_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* Stack Allocation Pool */
 #define STACK_POOL_SIZE 256
@@ -384,13 +385,21 @@ void _invalidate_weak(_InternalWeakRef* w) {
 }
 
 void invalidate_weak_refs_for(void* target) {
+    _InternalWeakRefNode** prev = &_WEAK_REF_HEAD;
     _InternalWeakRefNode* n = _WEAK_REF_HEAD;
     while (n) {
         _InternalWeakRef* obj = n->ref;
         if (obj->target == target) {
             _invalidate_weak(obj);
+            /* Remove node from list to prevent leak */
+            *prev = n->next;
+            _InternalWeakRefNode* to_free = n;
+            n = n->next;
+            free(to_free); /* weak node */
+        } else {
+            prev = &n->next;
+            n = n->next;
         }
-        n = n->next;
     }
 }
 
@@ -893,15 +902,24 @@ void free_obj(Obj* x) {
         return;
     }
     n->obj = x;
+    
+    pthread_mutex_lock(&free_list_mutex);
     n->next = FREE_HEAD;
     FREE_HEAD = n;
     FREE_COUNT++;
+    pthread_mutex_unlock(&free_list_mutex);
 }
 
 void flush_freelist(void) {
-    while (FREE_HEAD) {
-        FreeNode* n = FREE_HEAD;
-        FREE_HEAD = n->next;
+    pthread_mutex_lock(&free_list_mutex);
+    FreeNode* current_head = FREE_HEAD;
+    FREE_HEAD = NULL;
+    FREE_COUNT = 0;
+    pthread_mutex_unlock(&free_list_mutex);
+
+    while (current_head) {
+        FreeNode* n = current_head;
+        current_head = n->next;
         if (n->obj->mark < 0) {
             release_children(n->obj);
             borrow_invalidate_obj(n->obj);
@@ -910,7 +928,6 @@ void flush_freelist(void) {
         }
         free(n);
     }
-    FREE_COUNT = 0;
 }
 
 /* Deferred release for cyclic structures */
@@ -1060,6 +1077,10 @@ SCC* find_scc(int id) {
 
 void release_scc(SCC* scc) {
     if (!scc) return;
+    if (scc->ref_count <= 0) {
+        fprintf(stderr, "FATAL: SCC refcount underflow for SCC ID %d\n", scc->id);
+        abort();
+    }
     scc->ref_count--;
     if (scc->ref_count <= 0 && scc->frozen) {
         /* Free all members - mark as freed first to prevent double-free

@@ -91,6 +91,7 @@ struct Frame {
             jmp_buf escape;     /* For non-local return */
             Obj* result;        /* Result passed back */
             Obj* handler;       /* Optional effect handler */
+            bool cloned;        /* TRUE if this frame was cloned (jmp_buf unsafe) */
         } prompt;
 
         /* FRAME_YIELD */

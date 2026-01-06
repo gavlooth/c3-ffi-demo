@@ -93,6 +93,8 @@ static inline Slot* slot_from_payload(void* payload) {
 
 /* ============== Slot Pool Structure ============== */
 
+#include <pthread.h>
+
 typedef struct SlotBlock {
     Slot* slots;             /* Array of slots */
     size_t slot_count;       /* Number of slots in this block */
@@ -108,6 +110,9 @@ typedef struct SlotPool {
     Slot** freelist;         /* Array of free slot pointers */
     size_t freelist_capacity;
     size_t freelist_top;     /* Stack pointer */
+
+    /* Synchronization */
+    pthread_mutex_t lock;    /* Mutex for alloc/free */
 
     /* Configuration */
     size_t payload_size;     /* Size of payload per slot */

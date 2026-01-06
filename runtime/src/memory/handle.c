@@ -62,54 +62,20 @@ static inline SlotPool* get_pool(void) {
  * Check if a pointer is within the slot pool.
  * Used to determine if an Obj came from the pool or malloc.
  */
-typedef struct PoolBounds {
-    uintptr_t start;
-    uintptr_t end;
-    struct PoolBounds* next;
-} PoolBounds;
-
-static PoolBounds* g_pool_bounds = NULL;
-
-static void update_pool_bounds(void) {
-    /* Free old bounds */
-    while (g_pool_bounds) {
-        PoolBounds* next = g_pool_bounds->next;
-        free(g_pool_bounds);
-        g_pool_bounds = next;
-    }
-
-    /* Build new bounds from pool blocks */
-    SlotPool* pool = get_pool();
-    if (!pool) return;
-
-    for (SlotBlock* block = pool->blocks; block; block = block->next) {
-        PoolBounds* bounds = malloc(sizeof(PoolBounds));
-        if (!bounds) continue;
-
-        bounds->start = (uintptr_t)block->slots;
-        bounds->end = bounds->start + block->slot_count * block->slot_stride;
-        bounds->next = g_pool_bounds;
-        g_pool_bounds = bounds;
-    }
-}
-
 bool handle_is_pool_obj(Obj* obj) {
     if (!obj) return false;
 
+    SlotPool* pool = get_pool();
+    if (!pool) return false;
+
     uintptr_t ptr = (uintptr_t)obj;
 
-    /* Check against known bounds */
-    for (PoolBounds* b = g_pool_bounds; b; b = b->next) {
-        if (ptr >= b->start && ptr < b->end) {
-            return true;
-        }
-    }
-
-    /* Bounds might be stale - update and retry */
-    update_pool_bounds();
-
-    for (PoolBounds* b = g_pool_bounds; b; b = b->next) {
-        if (ptr >= b->start && ptr < b->end) {
+    /* Check against actual pool blocks - always up to date */
+    for (SlotBlock* block = pool->blocks; block; block = block->next) {
+        uintptr_t start = (uintptr_t)block->slots;
+        uintptr_t end = start + block->slot_count * block->slot_stride;
+        
+        if (ptr >= start && ptr < end) {
             return true;
         }
     }

@@ -154,6 +154,7 @@ Frame* frame_clone(Frame* f) {
         case FRAME_PROMPT:
             if (clone->prompt.result) inc_ref(clone->prompt.result);
             if (clone->prompt.handler) inc_ref(clone->prompt.handler);
+            clone->prompt.cloned = true;
             break;
 
         default:
@@ -997,6 +998,10 @@ void generator_yield(Obj* value) {
     }
 
     if (prompt) {
+        if (prompt->prompt.cloned) {
+            fprintf(stderr, "FATAL: Attempted to yield to cloned prompt! (jmp_buf invalid)\n");
+            abort();
+        }
         prompt->prompt.result = value;
         longjmp(prompt->prompt.escape, 1);
     }

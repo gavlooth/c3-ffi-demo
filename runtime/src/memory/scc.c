@@ -335,6 +335,10 @@ void inc_scc_ref(SCC* scc) {
 
 void release_scc(SCC* scc) {
     if (!scc) return;
+    if (scc->ref_count <= 0) {
+        fprintf(stderr, "FATAL: SCC refcount underflow for SCC ID %d\n", scc->id);
+        abort();
+    }
     scc->ref_count--;
 
     if (scc->ref_count == 0) {
@@ -655,6 +659,10 @@ void gen_scc_runtime(void) {
 
     printf("void release_scc(SCC* scc) {\n");
     printf("    if (!scc) return;\n");
+    printf("    if (scc->ref_count <= 0) {\n");
+    printf("        fprintf(stderr, \"FATAL: SCC refcount underflow\\n\");\n");
+    printf("        abort();\n");
+    printf("    }\n");
     printf("    scc->ref_count--;\n");
     printf("    if (scc->ref_count == 0) {\n");
     printf("        for (int i = 0; i < scc->member_count; i++) {\n");

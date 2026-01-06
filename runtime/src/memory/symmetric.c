@@ -40,17 +40,17 @@ static SymObj* sym_pool_alloc(void) {
         SYM_TLS.pools = pool;
         /* Add all objects to freelist */
         for (int i = 0; i < SYM_POOL_SIZE; i++) {
-            pool->objects[i].refs = (SymObj**)SYM_TLS.freelist;
+            pool->objects[i].freelist_next = SYM_TLS.freelist;
             SYM_TLS.freelist = &pool->objects[i];
         }
     }
     SymObj* obj = SYM_TLS.freelist;
-    SYM_TLS.freelist = (SymObj*)obj->refs;
+    SYM_TLS.freelist = obj->freelist_next;
     return obj;
 }
 
 static void sym_pool_free(SymObj* obj) {
-    obj->refs = (SymObj**)SYM_TLS.freelist;
+    obj->freelist_next = SYM_TLS.freelist;
     SYM_TLS.freelist = obj;
 }
 

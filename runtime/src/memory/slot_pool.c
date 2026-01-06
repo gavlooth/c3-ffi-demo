@@ -127,6 +127,14 @@ SlotPool* slot_pool_create(size_t payload_size, size_t alignment, size_t initial
     }
     pool->freelist_top = initial_slots;
 
+    /* Initialize mutex */
+    if (pthread_mutex_init(&pool->lock, NULL) != 0) {
+        free(pool->freelist);
+        destroy_block(block);
+        free(pool);
+        return NULL;
+    }
+
     /* Initialize all slots and populate freelist */
     for (size_t i = 0; i < initial_slots; i++) {
         Slot* slot = get_slot_at_index(block, i);
@@ -157,6 +165,7 @@ void slot_pool_destroy(SlotPool* pool) {
     }
 
     free(pool->freelist);
+    pthread_mutex_destroy(&pool->lock);
     free(pool);
 }
 
@@ -215,10 +224,13 @@ static bool pool_grow(SlotPool* pool) {
 Slot* slot_pool_alloc(SlotPool* pool) {
     if (!pool) return NULL;
 
+    pthread_mutex_lock(&pool->lock);
+
     /* Try freelist first */
     if (pool->freelist_top == 0) {
         /* Need to grow */
         if (!pool_grow(pool)) {
+            pthread_mutex_unlock(&pool->lock);
             return NULL;  /* Can't grow */
         }
     }
@@ -239,12 +251,20 @@ Slot* slot_pool_alloc(SlotPool* pool) {
         pool->peak_in_use = pool->current_in_use;
     }
 
+    pthread_mutex_unlock(&pool->lock);
+
     return slot;
 }
 
 void slot_pool_free(SlotPool* pool, Slot* slot) {
     if (!pool || !slot) return;
-    if (slot->flags == SLOT_FREE) return;  /* Already free */
+    
+    pthread_mutex_lock(&pool->lock);
+    
+    if (slot->flags == SLOT_FREE) {
+        pthread_mutex_unlock(&pool->lock);
+        return;  /* Already free */
+    }
 
     /* Evolve generation - invalidates existing handles */
     slot->generation++;
@@ -258,6 +278,8 @@ void slot_pool_free(SlotPool* pool, Slot* slot) {
     /* Statistics */
     pool->total_frees++;
     pool->current_in_use--;
+    
+    pthread_mutex_unlock(&pool->lock);
 }
 
 /* ============== Handle Operations ============== */
@@ -280,6 +302,7 @@ Handle slot_pool_make_handle(SlotPool* pool, Slot* slot) {
 void slot_pool_get_stats(SlotPool* pool, SlotPoolStats* stats) {
     if (!pool || !stats) return;
 
+    pthread_mutex_lock(&pool->lock);
     memset(stats, 0, sizeof(SlotPoolStats));
 
     /* Count total slots across blocks */
@@ -299,6 +322,7 @@ void slot_pool_get_stats(SlotPool* pool, SlotPoolStats* stats) {
     stats->total_frees = pool->total_frees;
     stats->block_count = pool->block_count;
     stats->memory_bytes = memory;
+    pthread_mutex_unlock(&pool->lock);
 }
 
 /* ============== Global Slot Pool ============== */

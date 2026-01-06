@@ -32,7 +32,10 @@ typedef enum {
 struct SymObj {
     int external_rc;        /* References from live scopes */
     int internal_rc;        /* References from other objects */
-    SymObj** refs;          /* Points to inline_refs or dynamic array */
+    union {
+        SymObj** refs;          /* Points to inline_refs or dynamic array */
+        SymObj* freelist_next;  /* For pool freelist */
+    };
     int ref_count;          /* Number of outgoing references */
     int ref_capacity;       /* Capacity of refs array */
     void* data;             /* Actual data payload */

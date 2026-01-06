@@ -54,6 +54,7 @@ struct ConstraintContext {
     char** violations;
     int violation_count;
     int violation_capacity;
+    bool had_strdup_failure;
 };
 
 /* Statistics */
