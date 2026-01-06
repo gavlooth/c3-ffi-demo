@@ -67,16 +67,15 @@ Replace hybrid memory management with a unified Region-RC architecture.
   Objective: Implement Adaptive Transmigration (Deep Copy + Promotion).
   Where: `runtime/src/memory/transmigrate.c`, `runtime/src/memory/transmigrate.h`
   What to change:
-    - [x] Implement `transmigrate(void* root, Region* dest_region)`:
+    - [x] Implement `transmigrate(void* root, Region* src_region, Region* dest_region)`:
       - Use `uthash` for `Map<void* old_ptr, void* new_ptr>` to handle cycles.
-      - Recursively walk graph based on `obj->tag` (enum `Tag` in `src/runtime/types.h`).
+      - Recursively walk graph based on `obj->tag`.
       - Deep copy primitives and recursively copy children.
-    - [x] Handle all Value types: T_CELL, T_INT, T_NIL, T_STRING, T_SYM, T_LAMBDA, T_BOX, T_CONT, T_PROCESS, etc.
-    - [x] Add adaptive logic: if `copied_bytes > 4096`, abort copy and perform **Arena Promotion** (append source arena blocks to destination).
+    - [x] Add adaptive logic: if `copied_bytes > 4096`, abort copy and perform **Region Promotion** (Arena Promotion).
   How to verify: Test copying cyclic graphs between regions.
   Acceptance:
     - Cycles preserved in copy.
-    - All Value types handled correctly.
+    - Large copies trigger promotion (pointer reuse).
 
 - [DONE] Label: T-rcg-constructors
   Objective: Implement Region-Aware Value Constructors.
@@ -84,70 +83,62 @@ Replace hybrid memory management with a unified Region-RC architecture.
   What to change:
     - [x] Create `region_value.h` with declarations for all `mk_*_region` functions.
     - [x] Implement `region_value.c` with all region-aware constructors.
-    - [x] Handle all Value types: scalars, strings, cells, lambdas, boxes, etc.
-    - [x] Integrate with `region_alloc()` for all allocations.
   How to verify: Unit test creating various values in a region.
   Acceptance:
     - All `mk_*_region` functions work correctly.
-    - Values allocated in region are freed on `region_exit()`.
-    - String data also allocated in region.
 
-- [R] Label: T-rcg-inference
+- [TODO] Label: T-rcg-inference
   Objective: Implement Advanced Lifetime-Based Region Inference.
   Where: `csrc/analysis/region_inference.c`
   What to change:
     - [ ] **Step 1: Build Variable Interaction Graph (VIG)**
       - Iterate all instructions in CFG.
       - Add nodes for all variables.
-      - Add undirected edge `(u, v)` if:
-        - `v` is assigned from `u` (data flow).
-        - `u` and `v` are arguments to the same call (aliasing).
-        - `v` is a field access of `u` (structural relation).
+      - Add undirected edge `(u, v)` if they interact (assignment, cons, call args).
     - [ ] **Step 2: Find Connected Components**
-      - Use Union-Find or BFS.
-      - Each Component is a **Candidate Region**.
+      - Use Union-Find or BFS to group variables into Candidate Regions.
     - [ ] **Step 3: Liveness Analysis**
-      - For each Component `C`:
-        - `Start(C)` = Earliest definition point of any var in C.
-        - `End(C)` = Latest last-use point of any var in C.
+      - For each Component `C`, find `Start(C)` (earliest def) and `End(C)` (latest use).
     - [ ] **Step 4: Dominator Placement**
-      - Identify the **Dominator Block** for `Start(C)`.
-      - Identify the **Post-Dominator** for `End(C)`.
-      - Store these locations in `RegionInfo` struct.
+      - Insert `region_create` at Dominator of `Start(C)`.
+      - Insert `region_destroy` at Post-Dominator of `End(C)`.
   How to verify: Inspect compiler output for `region_create/destroy` calls matching variable lifetimes.
   Acceptance:
     - Variables grouped by interaction.
     - Scope boundaries correctly identified.
 
-- [TODO] Label: T-rcg-escape
-  Objective: Update Escape Analysis to trigger Transmigration.
-  Where: `csrc/analysis/escape.c`
-  What to change:
-    - [ ] Identify `ESCAPE_TO_CALLER` variables (returned or stored in globals).
-    - [ ] Emit `transmigrate(x, caller_region)` call when returning local region data.
-  How to verify: Compile function returning a local list; verify `transmigrate` is emitted.
-  Acceptance:
-    - Escaping locals are copied.
-    - Non-escaping locals are freed with region.
-
 - [TODO] Label: T-rcg-codegen-lifecycle
-  Objective: Emit C code for Region lifecycle management.
-  Where: `csrc/codegen/codegen.c`
+  Objective: Wire Region lifecycle into Codegen.
+  Where: `csrc/codegen/codegen.c`, `src/runtime/compiler/omni_compile.c`
   What to change:
-    - [ ] Emit `Region* _local_region = region_create();` at function start (or dominator).
-    - [ ] Pass `_local_region` to all constructors (`mk_pair`).
-    - [ ] Emit `region_exit(_local_region)` (sets `scope_alive = false`) and `region_destroy_if_dead` at exit.
-  How to verify: Generated C code compiles and runs without leaks.
+    - [ ] **Modify Function Signatures**: Add `Region* _caller_region` as the first argument to all generated C functions.
+    - [ ] **Inject Local Region**: At the start of each function (or at dominator), emit `Region* _local_region = region_create();`.
+    - [ ] **Constructor Swap**: Replace all `mk_int(...)`, `mk_pair(...)`, etc., with `mk_int_region(_local_region, ...)`.
+    - [ ] **Call Site Update**: Pass `_local_region` as the first argument to all nested function calls.
+    - [ ] **Region Exit**: Emit `region_exit(_local_region)` before each `return` and at the end of the function.
+  How to verify: Compile a simple OmniLisp program and verify the generated C code includes region management.
   Acceptance:
-    - All allocations use local region.
-    - Region cleanup emitted on all paths.
+    - Generated code uses regions for all allocations.
+    - Regions are correctly created and exited.
+
+- [TODO] Label: T-rcg-escape
+  Objective: Implement Transmigration for escaping values.
+  Where: `csrc/codegen/codegen.c`, `csrc/analysis/escape.c`
+  What to change:
+    - [ ] **Return Path Logic**: Identify values that escape to the caller (returned values).
+    - [ ] **Emit Transmigrate**: Before the `return` statement, emit `Value* _result = transmigrate(val, _local_region, _caller_region);`.
+    - [ ] **Cleanup**: Ensure `region_exit(_local_region)` is called AFTER `transmigrate`.
+  How to verify: Compile a function returning a list and verify the result is transmigrated to the caller's region.
+  Acceptance:
+    - Returned objects are safely moved to the caller's region.
+    - No dangling references to the local region.
 
 - [TODO] Label: T-rcg-codegen-tether
   Objective: Emit Tethering for RegionRef arguments.
   Where: `csrc/codegen/codegen.c`
   What to change:
-    - [ ] For `RegionRef` args, emit `region_tether_start(arg.region);` at entry.
-    - [ ] Emit `region_tether_end(arg.region);` at exit.
+    - [ ] For `RegionRef` arguments, emit `region_tether_start(arg.region);` at function entry.
+    - [ ] Emit `region_tether_end(arg.region);` at function exit.
   How to verify: Inspect generated code for tether calls.
   Acceptance:
     - Arguments are tethered during function execution.
@@ -159,11 +150,7 @@ Replace hybrid memory management with a unified Region-RC architecture.
     - [x] Delete `runtime/src/memory/scc.c`, `scc.h`, `component.c`, `component.h`.
     - [x] Delete `src/runtime/memory/scc.c`, `scc.h`.
     - [x] Modify `Obj` struct in `runtime/src/runtime.c`: Remove `int scc_id`, `int scan_tag`.
-    - [x] Remove all code references to `scc_id` and `scan_tag`.
-    - [x] Remove `#include "memory/component.h"` from `runtime/src/runtime.c`.
-    - [x] Update `runtime/src/memory/arena.c` to remove SCC field references.
-  How to verify: `make clean && make test` (full regression suite).
+  How to verify: `make clean && make test`.
   Acceptance:
-    - [x] Codebase compiles without old cycle detector.
-    - [x] All RCG tests pass with new Region-RC runtime.
-  Note: `csrc/analysis/scc.c` and `component.c` are for compiler CFG analysis (static analysis), not runtime GC, so they remain.
+    - Codebase compiles without old cycle detector.
+    - All tests pass with new Region-RC runtime.

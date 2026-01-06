@@ -15,7 +15,7 @@
 
 /* Sound generational references - slot pool never frees to system allocator */
 #include "memory/slot_pool.h"
-#include "memory/component.h"
+/* component.h removed - SCC cycle detection replaced by Region-RC */
 
 /* Structured condition system */
 #include "condition.h"
@@ -221,8 +221,7 @@ typedef struct Obj {
     int mark;               /* Reference count or mark bit */
     int tag;                /* ObjTag */
     int is_pair;            /* 1 if pair, 0 if not */
-    int scc_id;             /* SCC identifier for cycle detection (-1 = none) */
-    unsigned int scan_tag;  /* Scanner mark (separate from RC) */
+    /* SCC fields removed - Region-RC handles cycles via bulk deallocation */
     union {
         long i;
         double f;
@@ -326,8 +325,6 @@ static Obj omni_nothing_obj = {
     .mark = -1,
     .tag = TAG_NOTHING,
     .is_pair = 0,
-    .scc_id = -1,
-    .scan_tag = 0,
     .ptr = NULL
 };
 
@@ -443,8 +440,6 @@ Obj* mk_int(long i) {
     x->mark = 1;
     x->tag = TAG_INT;
     x->is_pair = 0;
-    x->scc_id = -1;  /* Initialize to not in SCC */
-    x->scan_tag = 0;  /* Initialize to not visited by Tarjan */
     x->i = i;
     return x;
 }
@@ -456,8 +451,6 @@ Obj* mk_float(double f) {
     x->mark = 1;
     x->tag = TAG_FLOAT;
     x->is_pair = 0;
-    x->scc_id = -1;  /* Initialize to not in SCC */
-    x->scan_tag = 0;  /* Initialize to not visited by Tarjan */
     x->f = f;
     return x;
 }
@@ -479,8 +472,6 @@ Obj* mk_char(long c) {
     x->mark = 1;
     x->tag = TAG_CHAR;
     x->is_pair = 0;
-    x->scc_id = -1;  /* Initialize to not in SCC */
-    x->scan_tag = 0;  /* Initialize to not visited by Tarjan */
     x->i = c;
     return x;
 }
@@ -492,8 +483,6 @@ Obj* mk_pair(Obj* a, Obj* b) {
     x->mark = 1;
     x->tag = TAG_PAIR;
     x->is_pair = 1;
-    x->scc_id = -1;  /* Initialize to not in SCC */
-    x->scan_tag = 0;  /* Initialize to not visited by Tarjan */
     /* Move semantics: ownership transfers to pair, no inc_ref needed */
     x->a = a;
     x->b = b;
@@ -507,8 +496,6 @@ Obj* mk_sym(const char* s) {
     x->mark = 1;
     x->tag = TAG_SYM;
     x->is_pair = 0;
-    x->scc_id = -1;  /* Initialize to not in SCC */
-    x->scan_tag = 0;  /* Initialize to not visited by Tarjan */
     if (s) {
         size_t len = strlen(s);
         char* copy = malloc(len + 1);
@@ -535,8 +522,6 @@ Obj* mk_box(Obj* v) {
     x->mark = 1;
     x->tag = TAG_BOX;
     x->is_pair = 0;
-    x->scc_id = -1;  /* Initialize to not in SCC */
-    x->scan_tag = 0;  /* Initialize to not visited by Tarjan */
     if (v) inc_ref(v);
     x->ptr = v;
     return x;
@@ -558,9 +543,7 @@ Obj* mk_error(const char* msg) {
     Obj* x = malloc(sizeof(Obj));
     if (!x) return NULL;
     x->mark = 1;
-    x->scc_id = -1;
     x->is_pair = 0;
-    x->scan_tag = 0;
     x->tag = TAG_ERROR;
     x->generation = _next_generation();
     if (msg) {
@@ -584,9 +567,7 @@ Obj* mk_condition_obj(Condition* cond) {
     Obj* x = malloc(sizeof(Obj));
     if (!x) return NULL;
     x->mark = 1;
-    x->scc_id = -1;
     x->is_pair = 0;
-    x->scan_tag = 0;
     x->tag = TAG_CONDITION;
     x->generation = _next_generation();
     x->ptr = cond;
@@ -632,9 +613,7 @@ Obj* mk_resumption_obj(Resumption* r) {
     Obj* x = malloc(sizeof(Obj));
     if (!x) return NULL;
     x->mark = 1;
-    x->scc_id = -1;
     x->is_pair = 0;
-    x->scan_tag = 0;
     x->tag = TAG_RESUMPTION;
     x->generation = _next_generation();
     x->ptr = r;
@@ -654,9 +633,7 @@ Obj* mk_effect_obj(Effect* eff) {
     Obj* x = malloc(sizeof(Obj));
     if (!x) return NULL;
     x->mark = 1;
-    x->scc_id = -1;
     x->is_pair = 0;
-    x->scan_tag = 0;
     x->tag = TAG_EFFECT;
     x->generation = _next_generation();
     x->ptr = eff;
@@ -718,9 +695,7 @@ Obj* mk_int_stack(long i) {
     if (STACK_PTR < STACK_POOL_SIZE) {
         Obj* x = &STACK_POOL[STACK_PTR++];
         x->mark = 0;
-        x->scc_id = -1;
         x->is_pair = 0;
-        x->scan_tag = 0;
         x->tag = TAG_INT;
         x->generation = _next_generation();
         x->i = i;
@@ -733,9 +708,7 @@ Obj* mk_float_stack(double f) {
     if (STACK_PTR < STACK_POOL_SIZE) {
         Obj* x = &STACK_POOL[STACK_PTR++];
         x->mark = 0;
-        x->scc_id = -1;
         x->is_pair = 0;
-        x->scan_tag = 0;
         x->tag = TAG_FLOAT;
         x->generation = _next_generation();
         x->f = f;
@@ -748,9 +721,7 @@ Obj* mk_char_stack(long c) {
     if (STACK_PTR < STACK_POOL_SIZE) {
         Obj* x = &STACK_POOL[STACK_PTR++];
         x->mark = 0;
-        x->scc_id = -1;
         x->is_pair = 0;
-        x->scan_tag = 0;
         x->tag = TAG_CHAR;
         x->generation = _next_generation();
         x->i = c;
@@ -945,9 +916,7 @@ Obj* arena_mk_int(Arena* a, long i) {
     Obj* x = arena_alloc(a, sizeof(Obj));
     if (!x) return NULL;
     x->mark = -2;  /* Special mark for arena-allocated */
-    x->scc_id = -1;
     x->is_pair = 0;
-    x->scan_tag = 0;
     x->tag = TAG_INT;
     x->generation = _next_generation();
     x->i = i;
@@ -958,9 +927,7 @@ Obj* arena_mk_pair(Arena* a, Obj* car, Obj* cdr) {
     Obj* x = arena_alloc(a, sizeof(Obj));
     if (!x) return NULL;
     x->mark = -2;  /* Special mark for arena-allocated */
-    x->scc_id = -1;
     x->is_pair = 1;
-    x->scan_tag = 0;
     x->tag = TAG_PAIR;
     x->generation = _next_generation();
     x->a = car;
@@ -1047,7 +1014,6 @@ SCC* create_scc(void) {
 void scc_add_member(SCC* scc, Obj* obj) {
     if (!scc || !obj) return;
     /* Check if object is already in an SCC */
-    if (obj->scc_id >= 0) {
         /* Object is already in an SCC, don't add again */
         return;
     }
@@ -1059,7 +1025,6 @@ void scc_add_member(SCC* scc, Obj* obj) {
         scc->member_capacity = new_cap;
     }
     scc->members[scc->member_count++] = obj;
-    obj->scc_id = scc->id;
 }
 
 void freeze_scc(SCC* scc) {
@@ -1149,8 +1114,6 @@ void release_with_scc(Obj* obj) {
         /* Object was already freed, don't do anything */
         return;
     }
-    if (obj->scc_id >= 0) {
-        SCC* scc = find_scc(obj->scc_id);
         if (scc) {
             release_scc(scc);
             return;
@@ -1168,9 +1131,7 @@ void tarjan_strongconnect(Obj* v, TarjanState* state,
                                   void (*on_scc)(Obj**, int)) {
     if (!v || !state) return;
 
-    /* Use scan_tag field to store Tarjan index for this node */
     int v_idx = state->current_index++;
-    v->scan_tag = (unsigned int)v_idx;
     state->index[v_idx % state->capacity] = v_idx;
     state->lowlink[v_idx % state->capacity] = v_idx;
     state->stack[state->stack_top++] = v;
@@ -1183,11 +1144,9 @@ void tarjan_strongconnect(Obj* v, TarjanState* state,
             Obj* w = children[i];
             if (!w) continue;
 
-            int w_idx = (int)w->scan_tag;
             if (w_idx == 0) {
                 /* Not visited yet */
                 tarjan_strongconnect(w, state, on_scc);
-                int w_low = state->lowlink[w->scan_tag % state->capacity];
                 if (w_low < state->lowlink[v_idx % state->capacity]) {
                     state->lowlink[v_idx % state->capacity] = w_low;
                 }
@@ -1207,7 +1166,6 @@ void tarjan_strongconnect(Obj* v, TarjanState* state,
         Obj* w;
         do {
             w = state->stack[--state->stack_top];
-            int w_idx = (int)w->scan_tag;
             state->on_stack[w_idx % state->capacity] = 0;
             if (scc_size < 256) {
                 scc_members[scc_size++] = w;
@@ -1841,9 +1799,7 @@ Obj* mk_closure(ClosureFn fn, Obj** captures, BorrowRef** refs, int count, int a
     Obj* x = malloc(sizeof(Obj));
     if (!x) return NULL;
     x->mark = 1;
-    x->scc_id = -1;
     x->is_pair = 0;
-    x->scan_tag = 0;
     x->tag = TAG_CLOSURE;
     x->generation = _next_generation();
 
@@ -2673,8 +2629,6 @@ Obj* list_foldr(Obj* fn, Obj* init, Obj* xs) {
 
 /* Generic Scanners (debug/verification only) */
 void scan_obj(Obj* x) {
-    if (!x || x->scan_tag) return;
-    x->scan_tag = 1;
     switch (x->tag) {
     case TAG_PAIR:
         scan_obj(x->a);
@@ -2701,8 +2655,6 @@ void scan_obj(Obj* x) {
 }
 
 void clear_marks_obj(Obj* x) {
-    if (!x || !x->scan_tag) return;
-    x->scan_tag = 0;
     switch (x->tag) {
     case TAG_PAIR:
         clear_marks_obj(x->a);
@@ -2748,9 +2700,7 @@ Obj* reuse_as_int(Obj* old, long value) {
     Obj* obj = try_reuse(old, sizeof(Obj));
     if (!obj) return NULL;
     obj->mark = 1;
-    obj->scc_id = -1;
     obj->is_pair = 0;
-    obj->scan_tag = 0;
     obj->tag = TAG_INT;
     obj->generation = _next_generation();
     obj->i = value;
@@ -2761,9 +2711,7 @@ Obj* reuse_as_pair(Obj* old, Obj* a, Obj* b) {
     Obj* obj = try_reuse(old, sizeof(Obj));
     if (!obj) return NULL;
     obj->mark = 1;
-    obj->scc_id = -1;
     obj->is_pair = 1;
-    obj->scan_tag = 0;
     obj->tag = TAG_PAIR;
     obj->generation = _next_generation();
     obj->a = a;
@@ -2854,9 +2802,7 @@ Obj* make_channel(int capacity) {
         return NULL;
     }
     obj->mark = 1;
-    obj->scc_id = -1;
     obj->is_pair = 0;
-    obj->scan_tag = 0;
     obj->tag = TAG_CHANNEL;
     obj->generation = _next_generation();
     obj->ptr = ch;
@@ -3096,9 +3042,7 @@ Obj* make_atom(Obj* initial) {
         return NULL;
     }
     obj->mark = 1;
-    obj->scc_id = -1;
     obj->is_pair = 0;
-    obj->scan_tag = 0;
     obj->tag = TAG_ATOM;
     obj->generation = _next_generation();
     obj->ptr = a;
@@ -3264,9 +3208,7 @@ Obj* spawn_thread(Obj* closure) {
     Obj* obj = malloc(sizeof(Obj));
     if (!obj) return NULL;
     obj->mark = 1;
-    obj->scc_id = -1;
     obj->is_pair = 0;
-    obj->scan_tag = 0;
     obj->tag = TAG_THREAD;
     obj->generation = _next_generation();
     obj->ptr = h;
@@ -3370,8 +3312,6 @@ void append_into(Obj** dest, Obj* xs, Obj* ys) {
 /* Type-Aware Scanner for List */
 /* Note: ASAP uses compile-time free injection, not runtime GC */
 void scan_List(Obj* x) {
-    if (!x || x->scan_tag) return;
-    x->scan_tag = 1;
     if (x->is_pair) {
         scan_List(x->a);
         scan_List(x->b);
@@ -3379,8 +3319,6 @@ void scan_List(Obj* x) {
 }
 
 void clear_marks_List(Obj* x) {
-    if (!x || !x->scan_tag) return;
-    x->scan_tag = 0;
     if (x->is_pair) {
         clear_marks_List(x->a);
         clear_marks_List(x->b);
@@ -3570,7 +3508,6 @@ Obj* make_fiber_chan(int capacity) {
     obj->mark = 1;
     obj->tag = TAG_GREEN_CHANNEL;
     obj->is_pair = 0;
-    obj->scc_id = -1;
     obj->generation = ipge_evolve(0);
     obj->ptr = ch;
 
@@ -3642,7 +3579,6 @@ Obj* make_gen(Obj* producer) {
     obj->mark = 1;
     obj->tag = TAG_GENERATOR;
     obj->is_pair = 0;
-    obj->scc_id = -1;
     obj->generation = ipge_evolve(0);
     obj->ptr = g;
 
@@ -3694,7 +3630,6 @@ Obj* make_promise_val(void) {
     obj->mark = 1;
     obj->tag = TAG_PROMISE;
     obj->is_pair = 0;
-    obj->scc_id = -1;
     obj->generation = ipge_evolve(0);
     obj->ptr = p;
 
@@ -3750,7 +3685,6 @@ Obj* fiber_spawn_task(Obj* thunk) {
     obj->mark = 1;
     obj->tag = TAG_FIBER;
     obj->is_pair = 0;
-    obj->scc_id = -1;
     obj->generation = ipge_evolve(0);
     obj->ptr = t;
 
@@ -3771,7 +3705,6 @@ Obj* spawn_async_task(Obj* thunk) {
     obj->mark = 1;
     obj->tag = TAG_PROMISE;
     obj->is_pair = 0;
-    obj->scc_id = -1;
     obj->generation = ipge_evolve(0);
     obj->ptr = p;
 
