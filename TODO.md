@@ -202,20 +202,59 @@ Replace hybrid memory management with a unified Region-RC architecture.
     - Promotion is seamless and preserves all allocated data.
     - Most small regions never promote (common case stays lightweight).
 
-- [TODO] Label: T-adaptive-polynomial-arena
-  Objective: Implement polynomial (√n) arena growth for adaptive block sizing.
+- [TODO] Label: T-adaptive-size-analysis
+  Objective: Implement compile-time size analysis for static region sizing.
+  Where: `csrc/analysis/size.c` (new), `csrc/analysis/analysis.c`
+  What to change:
+    - [ ] Add size analysis pass that computes allocation sizes per lifecycle group.
+    - [ ] Classify allocations as STATIC (known size) or DYNAMIC (runtime-dependent).
+    - [ ] Sum static sizes per lifecycle group for exact allocation.
+    - [ ] Track dynamic allocation patterns for fallback strategy selection.
+  How to verify: Compile programs with known allocation patterns; verify correct size classification.
+  Acceptance:
+    - cons/list/record allocations classified as STATIC with correct sizes.
+    - map/filter/read-file classified as DYNAMIC.
+    - Per-group size totals computed for static portions.
+
+- [TODO] Label: T-adaptive-exact-alloc
+  Objective: Implement exact static allocation for fully-static lifecycle groups.
+  Where: `csrc/codegen/codegen.c`, `src/runtime/memory/region_core.c`
+  What to change:
+    - [ ] Add region_create_exact(size) that allocates single block of exact size.
+    - [ ] Emit exact allocation for groups where all allocations are STATIC.
+    - [ ] Use bump allocation within the exact-sized block.
+  How to verify: Compile fully-static function; verify single allocation of exact computed size.
+  Acceptance:
+    - O(1) metadata (single block).
+    - O(1) slack (alignment padding only).
+    - No runtime growth logic for static groups.
+
+- [TODO] Label: T-adaptive-vm-reservation
+  Objective: Implement VM reservation strategy for dynamic allocations.
+  Where: `src/runtime/memory/arena_core.c`
+  What to change:
+    - [ ] Add region_create_vm(max_size) using mmap with PROT_NONE.
+    - [ ] Implement on-demand page commit via mprotect or SIGSEGV handler.
+    - [ ] Cap virtual reservation at reasonable limit (e.g., 16MB default).
+    - [ ] Graceful fallback to polynomial growth if mmap unavailable.
+  How to verify: Allocate varying amounts; verify physical memory usage tracks actual data.
+  Acceptance:
+    - O(1) metadata (single reservation).
+    - O(page_size) slack (4KB max on most systems).
+    - Zero-copy growth (no realloc/memcpy).
+
+- [TODO] Label: T-adaptive-polynomial-fallback
+  Objective: Implement polynomial (√n) growth as fallback for non-VM systems.
   Where: `src/runtime/memory/arena_core.c`
   What to change:
     - [ ] Implement polynomial growth: block sizes b, b·√n, b·n (2-3 blocks typical).
-    - [ ] Initial block: 256 bytes, growth factor based on target size estimate.
+    - [ ] Use when VM reservation unavailable and size is dynamic.
     - [ ] Cap individual blocks at 64KB, link blocks beyond that.
-    - [ ] Track block count (expect O(1) blocks, not O(log n)).
-  How to verify: Allocate varying amounts in region; verify 2-3 blocks for realistic sizes.
+  How to verify: Disable VM reservation; verify polynomial block sizing.
   Acceptance:
-    - O(1) metadata overhead (constant number of blocks).
-    - O(√n) slack overhead (sublinear, not O(n)).
-    - Amortized O(1) allocation maintained.
-    - Fewer blocks than geometric growth for same data size.
+    - O(1) metadata (2-3 blocks typical).
+    - O(√n) slack (sublinear).
+    - Fallback only - prefer static sizing or VM reservation.
 
 - [TODO] Label: T-adaptive-non-atomic-tiny
   Objective: Use non-atomic RC for TINY regions (single-threaded optimization).

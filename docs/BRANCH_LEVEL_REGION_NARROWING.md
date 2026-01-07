@@ -454,89 +454,147 @@ Promote to full Region (64+ bytes)
 
 Most small lifecycle groups never promote.
 
-### 12.6 Arena Growth Strategies
+### 12.6 Arena Allocation Strategies
 
-Instead of fixed-size arena blocks, use dynamic growth. The choice of growth strategy affects overhead characteristics.
+The compiler already performs escape analysis, shape analysis, and liveness analysis. We can extend this with **size analysis** to determine exact allocation sizes at compile time.
 
-#### 12.6.1 Growth Strategy Comparison
+#### 12.6.1 Strategy Comparison
 
-| Strategy | Block Sizes | # Blocks | Metadata | Slack (worst) |
-|----------|-------------|----------|----------|---------------|
-| **Geometric (2×)** | b, 2b, 4b, 8b, ... | O(log n) | O(log n) | O(n) |
-| **Polynomial (n^(1/k))** | b, b·n^(1/k), b·n^(2/k), ... | O(k) = O(1) | O(1) | O(n^(1/k)) |
-| **Square Root (n^(1/2))** | b, b·√n, b·n | O(1) ~2-3 | O(1) | O(√n) |
-| **Linear (+c)** | b, b+c, b+2c, ... | O(√n) | O(√n) | O(√n) |
+| Strategy | Metadata | Slack | When to Use |
+|----------|----------|-------|-------------|
+| **Static Sizing** | O(1) | O(1) | All allocations statically sized |
+| **VM Reservation** | O(1) | O(page) | Dynamic size, OS support available |
+| **Polynomial (√n)** | O(1) | O(√n) | Dynamic size, no VM support |
+| **Geometric (2×)** | O(log n) | O(n) | Fallback only |
 
-#### 12.6.2 Geometric Growth (Standard)
+#### 12.6.2 Static Size Analysis (Recommended - Zero Slack)
 
-```text
-Block sizes: 256 → 512 → 1024 → 2048 → ...
+Most allocations have statically known sizes:
 
-For n bytes of data:
-  - Blocks needed: O(log n)
-  - Metadata overhead: O(log n)
-  - Slack space: up to 2n allocated (amortized O(1) per allocation)
-  - Amortized allocation: O(1)
-```
+| Pattern | Size | Static? |
+|---------|------|---------|
+| `(cons a b)` | sizeof(Cell) = 24B | ✓ Yes |
+| `(make-point x y)` | sizeof(Point) = 16B | ✓ Yes |
+| `(list 1 2 3)` | 3 × sizeof(Cell) = 72B | ✓ Yes |
+| `(make-array 100)` | 100 × elem_size | ✓ Yes |
+| `(map f xs)` | length(xs) × sizeof(Cell) | ✗ Dynamic |
+| `(read-file path)` | file size | ✗ Dynamic |
 
-**Pros:** Simple, well-understood, good amortized performance.
-**Cons:** Many small blocks for large regions, O(n) slack worst case.
-
-#### 12.6.3 Polynomial Growth (n^(1/k)) - Recommended
+**Algorithm:**
 
 ```text
-For k=2 (square root growth):
-  Block 1: b           = 256 B
-  Block 2: b · √n      ≈ 256 · √n
-  Block 3: b · n       ≈ 256 · n (covers remaining)
+For each lifecycle group G:
+  static_size = 0
+  dynamic_allocs = []
 
-For n = 64 KB:
-  Block 1: 256 B
-  Block 2: 256 · 256 = 64 KB
-  Block 3: (rarely needed)
+  for alloc in G.allocations:
+    if alloc.size is statically known:
+      static_size += alloc.size
+    else:
+      dynamic_allocs.append(alloc)
 
-Total: 2-3 blocks for any realistic size
+  if dynamic_allocs.empty():
+    # Perfect case: exact allocation, zero slack
+    emit: region = region_create_exact(static_size)
+  else:
+    # Hybrid: static portion exact, dynamic portion growable
+    emit: region = region_create_hybrid(static_size, growth_strategy)
 ```
 
-**Analysis:**
-```text
-Blocks needed:        O(k) = O(1) for fixed k
-Metadata overhead:    O(1) - constant number of blocks
-Slack per block:      O(n^(1/k)) worst case
-Total slack:          O(n^((k-1)/k)) - sublinear for k > 1
-```
+**Overhead for fully static groups:** O(1) metadata, O(1) slack (alignment only)
 
-For k=2: O(√n) slack instead of O(n).
-For k=3: O(n^(2/3)) slack.
+#### 12.6.3 Two-Phase Allocation (Dynamic with Zero Slack)
 
-**Pros:**
-- Constant metadata overhead regardless of region size
-- Sublinear slack waste
-- Fewer blocks = simpler management, better cache behavior
-
-**Cons:**
-- Larger jumps between block sizes (if estimate is wrong, waste more)
-- Requires size hint for optimal block sizing
-
-#### 12.6.4 Recommended Strategy: Adaptive Polynomial
-
-Use compile-time size estimation to select growth strategy:
+For dynamic allocations where size is computable but not statically known:
 
 ```text
-Size estimate available and confident:
-  → Pre-allocate single block of estimated size
-  → Fallback to √n growth if exceeded
+Phase 1 (sizing pass):
+  Walk the data, compute total size needed
 
-Size estimate uncertain:
-  → Start with TINY (256 B)
-  → Use √n growth: next block = current · √(target)
-  → Cap at 64 KB per block, then link blocks
+Phase 2 (allocation pass):
+  Allocate exact total
+  Bump-allocate into it
 ```
 
-This gives:
-- O(1) metadata overhead (2-3 blocks typical)
-- O(√n) slack overhead (sublinear)
-- Good cache locality (fewer, larger blocks)
+Example - copying a list:
+```lisp
+(defn copy-list [xs]
+  ;; Phase 1: count
+  (let [n (length xs)]
+    ;; Phase 2: allocate exact, fill
+    (region-with-size (* n (sizeof Cell))
+      (map identity xs))))
+```
+
+**Overhead:** O(1) metadata, O(1) slack, but 2× traversal cost
+
+**When worthwhile:** When traversal is cheap relative to allocation (e.g., counting list length vs allocating cells).
+
+#### 12.6.4 Virtual Memory Reservation (OS-Level Zero-Copy Growth)
+
+For truly dynamic sizes on systems with virtual memory:
+
+```c
+// Reserve large virtual space (not backed by physical memory)
+void* region = mmap(NULL, 1*MB, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+
+// Commit pages on demand as data is written
+// (via SIGSEGV handler or explicit mprotect)
+mprotect(region + committed, new_pages * 4096, PROT_READ|PROT_WRITE);
+```
+
+**Overhead:**
+- Virtual space: free (not backed until touched)
+- Physical slack: O(page_size) = 4KB max
+- Growth: O(1) - no copying, just commit more pages
+
+**Pros:** True O(1) growth with O(page) slack.
+**Cons:** Requires OS support, page granularity (4KB minimum).
+
+#### 12.6.5 Polynomial Growth (√n) - Fallback
+
+When static sizing isn't possible and VM reservation isn't available:
+
+```text
+Block 1: b           = 256 B
+Block 2: b · √n      ≈ 256 · √n
+Block 3: b · n       ≈ 256 · n
+
+For n = 64 KB: 2 blocks (256B, 64KB)
+For n = 1 MB:  3 blocks (256B, 16KB, 1MB)
+```
+
+**Overhead:** O(1) metadata (2-3 blocks), O(√n) slack
+
+#### 12.6.6 Recommended Hybrid Strategy
+
+```text
+┌─────────────────────────────────────────────────────────────────┐
+│ Compile-Time Size Analysis                                      │
+│                                                                 │
+│ For lifecycle group G:                                          │
+│   Classify each allocation as STATIC or DYNAMIC                 │
+└─────────────────────────────┬───────────────────────────────────┘
+                              │
+              ┌───────────────┴───────────────┐
+              │                               │
+              ▼                               ▼
+      ALL STATIC                        HAS DYNAMIC
+              │                               │
+              ▼                               ▼
+┌─────────────────────────┐   ┌─────────────────────────────────┐
+│ Exact Static Allocation │   │ Hybrid Allocation               │
+│                         │   │                                 │
+│ size = sum(alloc.size)  │   │ static_region = exact(static)   │
+│ region = exact(size)    │   │ dynamic_region = choose:        │
+│                         │   │   - VM reservation (preferred)  │
+│ Overhead:               │   │   - Two-phase if traversal cheap│
+│   Metadata: O(1)        │   │   - √n growth (fallback)        │
+│   Slack: O(1)           │   │                                 │
+└─────────────────────────┘   └─────────────────────────────────┘
+```
+
+**Expected outcome:** Most lifecycle groups are fully static → O(1) everything.
 
 ### 12.7 Revised Decision Framework
 
@@ -554,17 +612,25 @@ The compile-time decision simplifies to pure lifecycle analysis. Runtime sizing 
 
 ### 12.8 Asymptotic Comparison
 
-| Operation | Fixed Model | Geometric (2×) | Polynomial (√n) |
-|-----------|-------------|----------------|-----------------|
-| Create region | O(1) fixed | O(1) | O(1) |
-| Allocate | O(1) bump | O(1) amortized | O(1) amortized |
-| Destroy | O(1) | O(log n) blocks | O(1) blocks |
-| # Blocks | 1 | O(log n) | O(1) ~2-3 |
-| Metadata overhead | C constant | O(log n) | O(1) |
-| Slack overhead | 0 or huge | O(n) worst | O(√n) worst |
-| RC increment | O(1) atomic | O(1) atomic | O(1), non-atomic for TINY |
+| Operation | Static Sizing | VM Reservation | Polynomial (√n) | Geometric (2×) |
+|-----------|---------------|----------------|-----------------|----------------|
+| Create region | O(1) | O(1) | O(1) | O(1) |
+| Allocate | O(1) bump | O(1) bump | O(1) amortized | O(1) amortized |
+| Destroy | O(1) | O(1) | O(1) | O(log n) |
+| # Blocks | 1 | 1 | O(1) ~2-3 | O(log n) |
+| Metadata | O(1) | O(1) | O(1) | O(log n) |
+| Slack | **O(1)** | O(page) | O(√n) | O(n) |
+| Requires | Size analysis | OS support | Size hint | Nothing |
 
-**Recommendation:** Polynomial (√n) growth gives O(1) metadata with O(√n) slack - best tradeoff for region-based allocation where sizes vary widely.
+**Recommendation hierarchy:**
+
+1. **Static sizing** (O(1) everything) - when all allocations are statically sized
+2. **VM reservation** (O(1) + O(page)) - when dynamic but OS supports virtual memory
+3. **Two-phase** (O(1) + 2× traversal) - when size is computable at runtime cheaply
+4. **Polynomial √n** (O(1) + O(√n)) - fallback for truly unpredictable sizes
+5. **Geometric** (O(log n) + O(n)) - last resort only
+
+**Expected:** Most OmniLisp code hits case 1 (static sizing).
 
 ---
 
