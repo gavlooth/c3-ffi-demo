@@ -8,12 +8,13 @@
 CC ?= gcc
 AR ?= ar
 CFLAGS = -std=c99 -O2 -Wall -Wextra -fPIC -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE
-LDFLAGS = -lpthread
+LDFLAGS = -lpthread -lm
 
 # Directories
 SRCDIR = src
 INCDIR = include
 BUILDDIR = build
+BENCHDIR = bench
 
 # Source files - main runtime
 MAIN_SOURCES = $(wildcard $(SRCDIR)/*.c)
@@ -64,8 +65,28 @@ shared: $(BUILDDIR) $(OBJECTS)
 	$(CC) -shared $(OBJECTS) -o $(SHARED_LIB) $(LDFLAGS)
 	@echo "Built shared library: $(SHARED_LIB)"
 
+# ========== Benchmark Targets ==========
+
+# Build main benchmark runner (links all bench_*.c files together)
+$(BENCHDIR)/bench_runner: $(BENCHDIR)/bench_runner.c $(BENCHDIR)/*.c $(STATIC_LIB)
+	$(CC) $(CFLAGS) -I$(INCDIR) -I$(SRCDIR) -I$(BENCHDIR) \
+		$(filter-out $(BENCHDIR)/bench_runner.c, $(wildcard $(BENCHDIR)/*.c)) \
+		$(BENCHDIR)/bench_runner.c \
+		$(STATIC_LIB) $(LDFLAGS) -o $@
+	@echo "Built benchmark runner: $@"
+
+# Run all benchmarks
+bench: $(BENCHDIR)/bench_runner
+	@echo "Running RC-G benchmark suite..."
+	$(BENCHDIR)/bench_runner --all
+
+# Run specific benchmark suite
+bench-%: $(BENCHDIR)/bench_runner
+	@echo "Running benchmark suite: $*"
+	$(BENCHDIR)/bench_runner $*
+
 # Clean build artifacts
 clean:
-	rm -rf $(BUILDDIR) $(STATIC_LIB) $(SHARED_LIB)
+	rm -rf $(BUILDDIR) $(STATIC_LIB) $(SHARED_LIB) $(BENCHDIR)/bench_runner
 
-.PHONY: all clean shared
+.PHONY: all clean shared bench bench-%

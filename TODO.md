@@ -38,7 +38,7 @@ Replace hybrid memory management with a unified Region-RC architecture.
   Acceptance:
     - All `mk_*_region` functions work correctly.
 
-- [TODO] Label: T-fix-transmigrate
+- [R] Label: T-fix-transmigrate
   Objective: Fix type mismatches in transmigrate.c to enable it in the runtime build.
   Reference: docs/REGION_RC_ARCHITECTURE.md
   Where: `runtime/src/memory/transmigrate.c`, `runtime/Makefile`
@@ -65,6 +65,7 @@ Replace hybrid memory management with a unified Region-RC architecture.
   Acceptance:
     - `transmigrate.c` compiles without errors.
     - `libomni.a` includes transmigration logic.
+  Status: COMPLETED - transmigrate.c now uses Obj*/TAG_* types and compiles successfully.
 
 - [DONE] Label: T-rcg-cleanup
   Objective: Remove obsolete runtime components.
@@ -274,7 +275,7 @@ Replace hybrid memory management with a unified Region-RC architecture.
 **Objective:** Transform OmniLisp from a "Core Language" to a "Usable Ecosystem" by providing a battery-included standard library and robust tooling.
 **Reference:** docs/LANGUAGE_COMPLETENESS_REPORT.md
 
-- [TODO] Label: T-stdlib-pika-regex
+- [R] Label: T-stdlib-pika-regex
   Objective: Implement a high-level Regex API that capitalizes on Pika's superiority (left-recursion, non-anchored matching).
   Reference: docs/PATTERN_SYNTAX.md
   Where: `runtime/src/regex.c`, `runtime/include/omni.h`, `csrc/codegen/codegen.c`
@@ -299,7 +300,7 @@ Replace hybrid memory management with a unified Region-RC architecture.
     - `re-find-all` correctly identifies multiple matches.
     - Handles Pika-specific grammars if passed as pattern.
 
-- [TODO] Label: T-stdlib-string-utils
+- [R] Label: T-stdlib-string-utils
   Objective: Implement core string manipulation utilities (Split, Join, Replace, Case, Trim).
   Reference: docs/LANGUAGE_COMPLETENESS_REPORT.md
   Where: `runtime/src/string_utils.c`, `runtime/include/omni.h`
@@ -311,16 +312,200 @@ Replace hybrid memory management with a unified Region-RC architecture.
     - Comprehensive string library available.
     - All functions handle `nothing` and empty strings gracefully.
 
-- [TODO] Label: T-stdlib-math-numerics
-  Objective: Complete the math/numeric library with statistics and random number generation.
-  Reference: docs/LANGUAGE_COMPLETENESS_REPORT.md
-  Where: `runtime/src/math_ext.c`, `runtime/include/omni.h`
+
+---
+
+## Phase 19: Syntax Alignment (Strict Character Calculus) [STANDBY]
+
+**Objective:** Align the entire compiler and runtime with the **Strict Character Calculus** rules and the **Julia-aligned Type System** as defined in `docs/SYNTAX_REVISION.md`.
+
+- [R] Label: T-syntax-uniform-define
+  Objective: Refactor `analyze_define` to support the Uniform Definition syntax and `OMNI_TYPE_LIT`.
+  Reference: docs/SYNTAX_REVISION.md (Section 1.1, 3)
+  Where: `csrc/analysis/analysis.c`, `csrc/analysis/analysis.h`
+  Why: Current analyzer uses legacy `deftype` and cannot handle the modern `(define {Kind Name} ...)` pattern.
   What to change:
-    1.  **Statistics:** Add `mean`, `median`, `stddev` for arrays/lists.
-    2.  **Random:** Add `rand` (0..1), `rand-int`, `rand-seed!`.
-    3.  **Constants:** Ensure `pi`, `e`, `inf`, `nan` are available.
-  How to verify: `(mean [1 2 3 4 5])` => `2.0`.
-  Acceptance:
-    - Numeric library covers common statistical and random needs.
-    - Functions work on both Arrays and Lists.
+    1. Update `analyze_define` to check for `OMNI_TYPE_LIT` via `omni_is_type_lit()`.
+    2. Dispatch to type registration logic (replacing legacy `deftype` entry points).
+    3. Update `TypeDef` struct to store `bit_width` and `parent` pointers.
+  Implementation Details:
+    ```c
+    if (omni_is_type_lit(name_or_sig)) {
+        /* (define {struct Point} [fields...]) */
+        TypeDef* t = omni_register_type_from_lit(ctx, name_or_sig);
+        /* Parse body as fields or bit-width from Slot [] */
+    }
+    ```
+  Verification: `(define {struct Point} [x {Float64} y {Float64}])` successfully populates the type registry.
+
+- [R] Label: T-syntax-metadata-where
+  Objective: Implement Metadata (`^`) and Constraints (`^:where`) processing.
+  Reference: docs/SYNTAX_REVISION.md (Section 2.2, 5)
+  Where: `csrc/analysis/analysis.c`, `csrc/ast/ast.h`
+  Why: The Calculus uses metadata for inheritance, constraints, and variance.
+  What to change:
+    1. Implement a metadata extraction pass in `analyze_expr`.
+    2. Support `^:parent {Type}` for subtyping relationships.
+    3. Support `^:where [Constraints]` for diagonal dispatch.
+  Implementation Details:
+    `analyze_metadata` should pop the metadata stack and apply it to the following form's analysis context. Metadata should be stored in `OmniValue` or a side-table.
+  Verification: `(define ^:parent {Number} {abstract Real} [])` correctly establishes the inheritance link in the type graph.
+
+- [TODO] Label: T-syntax-slot-refactor
+  Objective: Update `define` and `let` to use strict Slot `[]` for parameters and bindings.
+  Reference: docs/SYNTAX_REVISION.md (Section 2.1, 6.2)
+  Where: `csrc/analysis/analysis.c`
+  Why: To align with the rule that data/arguments always reside in the `[]` domain.
+  What to change:
+    1. Update `analyze_define` to expect parameters in a Slot `[]` instead of a list.
+    2. Update `analyze_let` to handle triplets `[name {Type} value]` and metadata `^:seq` / `^:rec`.
+  Verification: `(define [x {Int} y {Int}] {Int} (+ x y))` passes analysis.
+
+- [R] Label: T-syntax-type-algebra
+  Objective: Implement Flow Constructors for dynamic types (`union`, `fn`).
+  Reference: docs/SYNTAX_REVISION.md (Section 4)
+  Where: `runtime/src/generic.c`, `csrc/codegen/codegen.c`
+  Why: Unions and function signatures are results of Flow calculations, allowing dynamic type generation and first-class signatures.
+  What to change:
+    1. Implement `prim_union` and `prim_fn` in the runtime.
+    2. These functions must return `TAG_KIND` objects representing the calculated type.
+    3. Add structural Kind-equivalence checks in the subtyping logic.
+  Verification: `(union [{Int32} {String}])` returns a composite Kind object at runtime.
+
+- [TODO] Label: T-syntax-reader-macros
+  Objective: Implement planned Reader Macros (`#`).
+  Reference: docs/SYNTAX_REVISION.md (Section 6)
+  Where: `csrc/parser/parser.c`
+  Why: Provide shorthands for lambdas, regex, and platform-specific conditionals.
+  What to change:
+    1. Add Pika rules for `#(...)` (lambda), `#?` (reader-cond), `#r` (regex), `#raw`, and `#b`.
+    2. Implement semantic actions to expand these to core OmniLisp forms during parsing.
+  Verification: `#(+ % 1)` is correctly expanded to `(lambda (__arg1) (+ __arg1 1))`.
+
+- [TODO] Label: T-syntax-wire-dispatch
+  Objective: Wire the new Type System with the Multiple Dispatch engine.
+  Reference: docs/SYNTAX_REVISION.md (Section 2.2, 7), runtime/src/generic.c
+  Where: `csrc/analysis/analysis.c`, `csrc/codegen/codegen.c`, `runtime/src/generic.c`
+  Why: To enable Julia-style multiple dispatch using the new Calculus-compliant types and constraints.
+  What to change:
+    1. Update `omni_apply` analysis to use the `is_subtype` and `compute_specificity` logic from `generic.c`.
+    2. Integrate `^:where` constraints into the dispatch selection algorithm.
+    3. Ensure that `(define ...)` with different signatures correctly populates the `Generic` function's method table.
+  Verification: A function defined with multiple signatures (e.g., `(define [x {Int}] ...)` and `(define [x {String}] ...)`) correctly dispatches at runtime based on the argument Kind.
+
+- [TODO] Label: T-syntax-pika-dual-mode
+  Objective: Implement dual-mode parsing (`parser->ast` and `parser->string`) in the Pika engine.
+  Reference: `csrc/parser/pika_core.c` (`pika_run`), `docs/SYNTAX_REVISION.md` (Section 1)
+  Where: `csrc/parser/pika.h`, `csrc/parser/pika_core.c`, `runtime/src/runtime.c`
+  Why: Languages built on the Tower need the raw AST for meta-programming, while standard use cases often require the matched string.
+  What to change:
+    1.  Add `PikaMode` enum and `mode` field to `PikaState`.
+    2.  Update `pika_run` to respect the mode:
+        *   `PIKA_MODE_AST`: Return the `OmniValue*` produced by semantic actions.
+        *   `PIKA_MODE_STRING`: Bypass actions and return the matched substring as an `OMNI_STRING`.
+    3.  Update runtime primitives (`prim_pika_match`) to select the mode via metadata `^:ast` or `^:string`.
+  Implementation Details:
+    ```c
+    typedef enum { PIKA_MODE_AST, PIKA_MODE_STRING } PikaMode;
+    // In pika_run:
+    if (state->mode == PIKA_MODE_STRING) {
+        return omni_new_string_n(state->input + root->pos, root->len);
+    }
+    ```
+  Verification: `(pika-match ^:ast my-grammar rule input)` returns AST nodes; `(pika-match ^:string my-grammar rule input)` returns a string.
+
+
+---
+
+## Phase 20: Meta-Programming (Tower & Macros) [STANDBY]
+
+**Objective:** Restore the "Collapsing Towers of Interpreters" semantics and implement a hygienic macro system.
+**Reference:** `docs/SYNTAX_REVISION.md` (Section 7), legacy `src/runtime/tower/tower.c`, legacy `src/runtime/eval/omni_eval.c`.
+
+- [TODO] Label: T-tower-handlers
+  Objective: Implement the Meta-Environment Handler System in the C analyzer.
+  Where: `csrc/analysis/analysis.c`, `csrc/analysis/analysis.h`, `csrc/ast/ast.h`
+  Why: The tower relies on 9 customizable handlers (h-lit, h-var, etc.) to define evaluation semantics at different levels.
+  What to change:
+    1.  Add `OmniHandlerWrapper` and handler indices to `csrc/analysis/analysis.h`.
+    2.  Update `AnalysisContext` to store the current `MEnv` (Meta-Environment).
+    3.  Implement `omni_get_handler(ctx, index)` and `omni_set_handler(ctx, index, fn)`.
+  Verification: `(with-handlers [[h-lit my-handler]] ...)` correctly dispatches literal analysis to `my-handler`.
+
+- [TODO] Label: T-tower-lift-run
+  Objective: Implement `lift`, `run`, and `EM` (Escape to Meta).
+  Reference: legacy `src/runtime/tower/tower.c` (functions `default_h_lft`, `default_h_run`, `default_h_em`)
+  Where: `csrc/analysis/analysis.c`, `csrc/codegen/codegen.c`
+  Why: These are the core primitives for moving between evaluation stages.
+  What to change:
+    1.  **Lift:** Analyzes an expression and emits code that *constructs* that expression at runtime.
+    2.  **Run:** Analyzes a code-valued expression and emits logic to execute it at tower-level 0.
+    3.  **EM:** Evaluates an expression at the parent meta-level during the analysis pass.
+  Implementation Details:
+    Copy logic from legacy `staging_h_lft` which transforms values into `mk_int`, `mk_sym` calls in the generated C.
+  Verification: `(run (lift (+ 1 2)))` analyzed and compiled to code that returns `3`.
+
+- [TODO] Label: T-macro-hygienic
+  Objective: Implement a hygienic `syntax-rules` macro system.
+  Reference: legacy `src/runtime/eval/omni_eval.c` (functions `try_macro_expand`, `syntax_match`, `syntax_expand`)
+  Where: `csrc/analysis/analysis.c`
+  Why: To support compile-time syntax transformations without name capture.
+  What to change:
+    1.  Implement `syntax_match(pattern, input)` logic to bind pattern variables.
+    2.  Implement `syntax_expand(template, bindings)` to generate the expanded form.
+    3.  Update `analyze_expr` to check for macro definitions in the environment before dispatching to special forms.
+  Verification: `(define-syntax when (syntax-rules () [(when test body) (if test body nothing)]))` expands correctly.
+
+---
+
+## Phase 21: Object System (Multiple Dispatch & Protocols) [STANDBY]
+
+**Objective:** Complete the Julia-style object system integration.
+**Reference:** `docs/SYNTAX_REVISION.md` (Section 3, 4), `runtime/src/generic.c`.
+
+- [TODO] Label: T-obj-dispatch-logic
+  Objective: Implement static specificity sorting for multiple dispatch.
+  Where: `csrc/analysis/analysis.c`, `runtime/src/generic.c`
+  Why: The compiler must determine which method is most specific for a given call site or emit a generic dispatch call.
+  What to change:
+    1.  Implement `omni_type_specificity(type1, type2)` comparing distance in the inheritance graph.
+    2.  Update `analyze_application` to perform static method selection when argument types are known.
+  Verification: `(define [x {Int}] (f x) 1) (define [x {Any}] (f x) 2) (f 10)` selects the `Int` method.
+
+- [TODO] Label: T-obj-interfaces
+  Objective: Implement `{interface ...}` (Protocols).
+  Reference: `docs/SYNTAX_REVISION.md` (recovered from `DESIGN.md`)
+  Where: `csrc/analysis/analysis.c`, `csrc/analysis/analysis.h`
+  Why: To support explicit contracts for generic functions.
+  What to change:
+    1.  Add `InterfaceDef` to the type registry.
+    2.  Implement `extend-type` logic to register method implementations for specific interfaces.
+  Verification: `(define {interface Drawable} (draw [self {Self}]))` correctly enforces that types implementing `Drawable` have a `draw` method.
+
+---
+
+## Phase 22: Module System & High-Level Syntax [STANDBY]
+
+**Objective:** Implement namespace isolation and final syntax refinements.
+**Reference:** `docs/SYNTAX_REVISION.md` (Section 9).
+
+- [TODO] Label: T-mod-isolation
+  Objective: Implement the `module` and `import` system.
+  Where: `csrc/analysis/analysis.c`, `csrc/compiler/compiler.c`
+  Why: To provide namespace isolation and prevent symbol collisions.
+  What to change:
+    1.  Update `AnalysisContext` to support a stack of environments (namespaces).
+    2.  Implement `analyze_module` which creates a new environment and populates an `export` list.
+    3.  Implement `analyze_import` to map exported symbols from one module to the current environment.
+  Verification: `(module A (export f) (define (f) 1)) (import A) (f)` works, but private symbols in A are not visible.
+
+- [TODO] Label: T-syntax-piping
+  Objective: Implement the Pipe operator `|>` and leading dot accessors `.field`.
+  Reference: `docs/SYNTAX_REVISION.md` (recovered from `DESIGN.md`)
+  Where: `csrc/parser/parser.c`, `csrc/analysis/analysis.c`
+  Why: To support functional data-flow patterns.
+  What to change:
+    1.  Add Pika rules for `.field` expanding to `(lambda (it) (get it 'field))`.
+    2.  Implement `|>` as a macro expanding to nested applications.
+  Verification: `(|> x (f) (g))` expands to `(g (f x))`.
 

@@ -11,6 +11,7 @@
 #include <string.h>
 #include <pthread.h>
 #include <stdbool.h>
+#include <math.h>
 
 #include "memory/region_core.h"
 #include "memory/region_value.h"
@@ -23,13 +24,25 @@ void dec_ref(Obj* x) { if (x && !IS_IMMEDIATE(x)) x->mark--; }
 void free_obj(Obj* x) { (void)x; }
 
 /* Global Region for Interpreter/Legacy support */
-static Region* _global_region = NULL;
-static void _ensure_global_region(void) {
+/* NOTE: Made non-static for use by other runtime modules (regex.c, string_utils.c) */
+Region* _global_region = NULL;
+
+void _ensure_global_region(void) {
     if (!_global_region) {
         printf("[debug] creating global region\n");
         fflush(stdout);
         _global_region = region_create();
     }
+}
+
+/* Public API for global region access (for use by other modules) */
+void omni_ensure_global_region(void) {
+    _ensure_global_region();
+}
+
+Region* omni_get_global_region(void) {
+    _ensure_global_region();
+    return _global_region;
 }
 
 /* Helpers */
@@ -685,4 +698,183 @@ Obj* arena_mk_pair(Arena* a, Obj* car, Obj* cdr) {
     o->is_pair = 1;
     o->mark = 0;
     return o;
+}
+
+/* ============== Phase 19: Flow Constructors (Type Algebra) ============== */
+
+/*
+ * Helper: Create string symbol from C string
+ */
+static Obj* str_to_sym(const char* s) {
+    if (!s) return NULL;
+    omni_ensure_global_region();
+    return mk_sym_region(omni_get_global_region(), s);
+}
+
+/*
+ * prim_union: Create a union type from a list of types
+ * Args: types_list - List of type objects (Kind objects)
+ * Returns: A union Kind object representing the union of all input types
+ *
+ * Example: (union [{Int32} {String}]) -> {Union Int32 String}
+ */
+Obj* prim_union(Obj* types_list) {
+    if (!types_list) {
+        /* Empty union is the bottom type */
+        return str_to_sym("Union");
+    }
+
+    /* Build union type name by collecting all type names */
+    size_t count = 0;
+    Obj* p = types_list;
+    while (p && IS_BOXED(p) && p->tag == TAG_PAIR) {
+        count++;
+        p = p->b;
+    }
+
+    if (count == 0) {
+        return str_to_sym("Union");
+    }
+
+    if (count == 1) {
+        /* Union of one type is just that type */
+        Obj* type_obj = types_list->a;
+        if (IS_BOXED(type_obj) && type_obj->tag == TAG_KIND) {
+            return type_obj;
+        }
+        return types_list->a;
+    }
+
+    /* Create union name: "Union Type1 Type2 Type3" */
+    size_t name_len = 32;  /* "Union" prefix */
+    p = types_list;
+    while (p && IS_BOXED(p) && p->tag == TAG_PAIR) {
+        const char* type_name = NULL;
+        Obj* type_obj = p->a;
+        if (IS_BOXED(type_obj) && type_obj->tag == TAG_KIND) {
+            Kind* kind = (Kind*)type_obj->ptr;
+            if (kind) type_name = kind->name;
+        } else if (IS_BOXED(type_obj) && type_obj->tag == TAG_SYM) {
+            type_name = (const char*)type_obj->ptr;
+        }
+        if (type_name) name_len += strlen(type_name) + 1;
+        p = p->b;
+    }
+
+    char* union_name = malloc(name_len + 1);
+    strcpy(union_name, "Union");
+
+    p = types_list;
+    while (p && IS_BOXED(p) && p->tag == TAG_PAIR) {
+        const char* type_name = NULL;
+        Obj* type_obj = p->a;
+        if (IS_BOXED(type_obj) && type_obj->tag == TAG_KIND) {
+            Kind* kind = (Kind*)type_obj->ptr;
+            if (kind) type_name = kind->name;
+        } else if (IS_BOXED(type_obj) && type_obj->tag == TAG_SYM) {
+            type_name = (const char*)type_obj->ptr;
+        }
+        if (type_name) {
+            strcat(union_name, " ");
+            strcat(union_name, type_name);
+        }
+        p = p->b;
+    }
+
+    /* Create union Kind object */
+    omni_ensure_global_region();
+    Obj* result = mk_kind_region(omni_get_global_region(), union_name, NULL, 0);
+    free(union_name);
+
+    return result;
+}
+
+/*
+ * prim_fn: Create a function type (Kind) from parameter types and return type
+ * Args: params_and_ret - Slot containing [param_types... return_type]
+ * Returns: A function Kind object
+ *
+ * Example: (fn [[{Int32} {Int32}] {Int32}]) -> {Int32 Int32 -> Int32}
+ */
+Obj* prim_fn(Obj* params_and_ret) {
+    if (!params_and_ret) return NULL;
+
+    /* Extract parameters and return type from Slot */
+    /* Expected format: ((param1 param2 ...) return_type) */
+    if (!IS_BOXED(params_and_ret) || params_and_ret->tag != TAG_PAIR) {
+        return NULL;
+    }
+
+    Obj* params_obj = params_and_ret->a;
+    Obj* ret_type_obj = params_and_ret->b;
+
+    /* Count parameters */
+    size_t param_count = 0;
+    Obj* p = params_obj;
+    while (p && IS_BOXED(p) && p->tag == TAG_PAIR) {
+        param_count++;
+        p = p->b;
+    }
+
+    /* Build function type name */
+    size_t name_len = 64;  /* Base size for "Fn ->" */
+    p = params_obj;
+    while (p && IS_BOXED(p) && p->tag == TAG_PAIR) {
+        const char* param_name = NULL;
+        Obj* param_obj = p->a;
+        if (IS_BOXED(param_obj) && param_obj->tag == TAG_KIND) {
+            Kind* kind = (Kind*)param_obj->ptr;
+            if (kind) param_name = kind->name;
+        } else if (IS_BOXED(param_obj) && param_obj->tag == TAG_SYM) {
+            param_name = (const char*)param_obj->ptr;
+        }
+        if (param_name) name_len += strlen(param_name) + 2;
+        p = p->b;
+    }
+
+    /* Add return type */
+    const char* ret_name = NULL;
+    if (IS_BOXED(ret_type_obj) && ret_type_obj->tag == TAG_KIND) {
+        Kind* kind = (Kind*)ret_type_obj->ptr;
+        if (kind) ret_name = kind->name;
+    } else if (IS_BOXED(ret_type_obj) && ret_type_obj->tag == TAG_SYM) {
+        ret_name = (const char*)ret_type_obj->ptr;
+    }
+    if (ret_name) name_len += strlen(ret_name) + 4;
+
+    char* fn_name = malloc(name_len + 1);
+    strcpy(fn_name, "Fn");
+
+    /* Add parameter types */
+    p = params_obj;
+    while (p && IS_BOXED(p) && p->tag == TAG_PAIR) {
+        const char* param_name = NULL;
+        Obj* param_obj = p->a;
+        if (IS_BOXED(param_obj) && param_obj->tag == TAG_KIND) {
+            Kind* kind = (Kind*)param_obj->ptr;
+            if (kind) param_name = kind->name;
+        } else if (IS_BOXED(param_obj) && param_obj->tag == TAG_SYM) {
+            param_name = (const char*)param_obj->ptr;
+        }
+        if (param_name) {
+            strcat(fn_name, " ");
+            strcat(fn_name, param_name);
+        }
+        p = p->b;
+    }
+
+    /* Add return type */
+    strcat(fn_name, " -> ");
+    if (ret_name) {
+        strcat(fn_name, ret_name);
+    } else {
+        strcat(fn_name, "Any");
+    }
+
+    /* Create function Kind object */
+    omni_ensure_global_region();
+    Obj* result = mk_kind_region(omni_get_global_region(), fn_name, NULL, 0);
+    free(fn_name);
+
+    return result;
 }

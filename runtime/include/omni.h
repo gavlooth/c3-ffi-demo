@@ -821,6 +821,112 @@ Obj* named_tuple_get(Obj* tup, Obj* key);
 
 Obj* mk_generic(const char* name);
 
+/* ========== Global Region (for legacy/shim support) ========== */
+
+/* Ensure the global region exists (called automatically by constructors) */
+void omni_ensure_global_region(void);
+
+/* Get the global region (for advanced use) */
+struct Region* omni_get_global_region(void);
+
+/* ========== Regex Primitives (Pika-ready API) ========== */
+
+/*
+ * Match first occurrence of pattern in input.
+ * Args: pattern (string), input (string)
+ * Returns: Matched substring or NULL if no match
+ */
+Obj* prim_re_match(Obj* pattern_obj, Obj* input_obj);
+
+/*
+ * Find all non-overlapping matches.
+ * Args: pattern (string), input (string)
+ * Returns: List of matched substrings
+ */
+Obj* prim_re_find_all(Obj* pattern_obj, Obj* input_obj);
+
+/*
+ * Split string by pattern delimiter.
+ * Args: pattern (string), input (string)
+ * Returns: List of substrings
+ */
+Obj* prim_re_split(Obj* pattern_obj, Obj* input_obj);
+
+/*
+ * Replace all occurrences of pattern with replacement.
+ * Args: pattern (string), replacement (string), input (string), global (boolean)
+ * Returns: Modified string
+ */
+Obj* prim_re_replace(Obj* pattern_obj, Obj* replacement_obj, Obj* input_obj, Obj* global_obj);
+
+/*
+ * Check if pattern matches entire string.
+ * Args: pattern (string), input (string)
+ * Returns: Boolean
+ */
+Obj* prim_re_fullmatch(Obj* pattern_obj, Obj* input_obj);
+
+/* ========== String Utility Primitives ========== */
+
+/* String length */
+Obj* prim_string_length(Obj* str_obj);
+
+/* Split string by delimiter */
+Obj* prim_string_split(Obj* delim_obj, Obj* str_obj);
+
+/* Join list of strings with delimiter */
+Obj* prim_string_join(Obj* delim_obj, Obj* list_obj);
+
+/* Replace substring with another */
+Obj* prim_string_replace(Obj* old_obj, Obj* new_obj, Obj* str_obj);
+
+/* Trim whitespace from both ends */
+Obj* prim_string_trim(Obj* str_obj);
+Obj* prim_string_trim_left(Obj* str_obj);
+Obj* prim_string_trim_right(Obj* str_obj);
+
+/* Convert to uppercase/lowercase */
+Obj* prim_string_upcase(Obj* str_obj);
+Obj* prim_string_lowcase(Obj* str_obj);
+
+/* Concatenate two strings */
+Obj* prim_string_concat(Obj* str1_obj, Obj* str2_obj);
+
+/* Get substring */
+Obj* prim_string_substr(Obj* str_obj, Obj* start_obj, Obj* length_obj);
+
+/* Check if string contains substring */
+Obj* prim_string_contains(Obj* str_obj, Obj* substr_obj);
+
+/* Find index of substring (returns -1 if not found) */
+Obj* prim_string_index_of(Obj* str_obj, Obj* substr_obj);
+
+/* Compare strings for equality */
+Obj* prim_string_equals(Obj* str1_obj, Obj* str2_obj);
+
+/* Compare strings (returns <0, 0, >0) */
+Obj* prim_string_compare(Obj* str1_obj, Obj* str2_obj);
+
+/* ========== Phase 19: Flow Constructors (Type Algebra) ========== */
+
+/*
+ * prim_union: Create a union type from a list of types
+ * Args: types_list - List of type objects (Kind objects or symbols)
+ * Returns: A union Kind object representing the union of all input types
+ *
+ * Example: (union [{Int32} {String}]) -> {Union Int32 String}
+ */
+Obj* prim_union(Obj* types_list);
+
+/*
+ * prim_fn: Create a function type (Kind) from parameter types and return type
+ * Args: params_and_ret - Pair containing (param_types . return_type)
+ * Returns: A function Kind object
+ *
+ * Example: (fn ({Int32} {Int32}) . {Int32}) -> {Int32 Int32 -> Int32}
+ */
+Obj* prim_fn(Obj* params_and_ret);
+
 #ifdef __cplusplus
 }
 #endif

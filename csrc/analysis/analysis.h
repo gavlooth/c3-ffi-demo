@@ -127,6 +127,13 @@ typedef enum {
     FIELD_BORROWED,          /* Borrowed reference (caller owns) */
 } FieldStrength;
 
+/* Variance of type parameters */
+typedef enum {
+    VARIANCE_INVARIANT = 0,  /* Default: no subtyping */
+    VARIANCE_COVARIANT,      /* + : subtyping preserves direction */
+    VARIANCE_CONTRAVARIANT,  /* - : subtyping reverses direction */
+} VarianceKind;
+
 /* Type field definition */
 typedef struct TypeField {
     char* name;              /* Field name */
@@ -134,7 +141,36 @@ typedef struct TypeField {
     FieldStrength strength;  /* Ownership strength */
     bool is_mutable;         /* Can be mutated after construction */
     int index;               /* Field index for fast access */
+    VarianceKind variance;   /* Variance for parametric fields */
 } TypeField;
+
+/* ============== Metadata System (Phase 19: Syntax Alignment) ============== */
+
+/*
+ * Metadata types that can be attached to definitions via ^:key syntax.
+ * Metadata provides out-of-band instructions that don't affect identity.
+ */
+typedef enum {
+    META_NONE = 0,
+    META_PARENT,             /* ^:parent {Type} - Inheritance relationship */
+    META_WHERE,              /* ^:where [Constraints] - Type constraints */
+    META_MUTABLE,            /* ^:mutable - Mutability marker */
+    META_COVAR,              /* ^:covar - Covariant type parameter */
+    META_CONTRA,             /* ^:contra - Contravariant type parameter */
+    META_SEQ,                /* ^:seq - Sequential binding (let*) */
+    META_REC,                /* ^:rec - Recursive binding (letrec) */
+    META_PRIMITIVE,          /* {primitive} - Machine type with bit width */
+    META_ABSTRACT,           /* {abstract} - Abstract type */
+    META_STRUCT,             /* {struct} - Composite type */
+} MetaType;
+
+/* Single metadata entry */
+typedef struct MetadataEntry {
+    MetaType type;           /* Type of metadata */
+    char* key;               /* Metadata key (e.g., "parent", "where") */
+    OmniValue* value;        /* Associated value (type name, constraint list, etc.) */
+    struct MetadataEntry* next;
+} MetadataEntry;
 
 /* Type definition in the registry */
 typedef struct TypeDef {
@@ -145,6 +181,16 @@ typedef struct TypeDef {
     ShapeClass shape;        /* Inferred shape class */
     bool is_opaque;          /* True if implementation hidden */
     bool has_cycles;         /* True if type can form cycles */
+
+    /* ============== Phase 19: Julia-Aligned Type System ============== */
+    char* parent;            /* Parent type name (for inheritance) */
+    int bit_width;           /* Bit width for primitives (0 for non-primitives) */
+    bool is_abstract;        /* True if abstract type */
+    bool is_primitive;       /* True if primitive machine type */
+    MetadataEntry* metadata; /* Metadata attached to this type */
+    char** type_params;      /* Type parameter names (for parametric types) */
+    size_t type_param_count; /* Number of type parameters */
+
     struct TypeDef* next;    /* Next in registry list */
 } TypeDef;
 
@@ -924,6 +970,73 @@ void omni_gen_field_mutator(AnalysisContext* ctx, TypeDef* type, TypeField* fiel
 
 /* Generate release function for a type (skips weak fields) */
 void omni_gen_type_release(AnalysisContext* ctx, TypeDef* type);
+
+/* ============== Phase 19: Julia-Aligned Type System API ============== */
+
+/*
+ * Metadata Handling Functions
+ * Extract and process metadata (^:key) from definitions.
+ */
+
+/* Extract metadata from a form (returns linked list of MetadataEntry) */
+MetadataEntry* omni_extract_metadata(OmniValue* form);
+
+/* Free metadata list */
+void omni_free_metadata(MetadataEntry* metadata);
+
+/* Get metadata value by key */
+OmniValue* omni_get_metadata(MetadataEntry* metadata, const char* key);
+
+/* Check if metadata contains a specific key */
+bool omni_has_metadata(MetadataEntry* metadata, const char* key);
+
+/*
+ * Type Hierarchy Functions
+ * Handle inheritance and subtyping relationships.
+ */
+
+/* Set parent type for a type definition */
+void omni_type_set_parent(TypeDef* type, const char* parent_name);
+
+/* Get parent type definition */
+TypeDef* omni_type_get_parent(AnalysisContext* ctx, TypeDef* type);
+
+/* Check if type_a is a subtype of type_b */
+bool omni_type_is_subtype(AnalysisContext* ctx, const char* type_a, const char* type_b);
+
+/* Compute specificity score for method dispatch (higher = more specific) */
+int omni_compute_specificity(AnalysisContext* ctx, TypeDef* type);
+
+/* Register a type with full metadata support */
+TypeDef* omni_register_type_with_metadata(AnalysisContext* ctx, OmniValue* type_def,
+                                          MetadataEntry* metadata);
+
+/* Register a primitive type with bit width */
+TypeDef* omni_register_primitive_type(AnalysisContext* ctx, const char* name,
+                                      const char* parent, int bit_width);
+
+/* Register an abstract type */
+TypeDef* omni_register_abstract_type(AnalysisContext* ctx, const char* name,
+                                     const char* parent);
+
+/* Register a struct type with fields */
+TypeDef* omni_register_struct_type(AnalysisContext* ctx, const char* name,
+                                   const char* parent, OmniValue* fields);
+
+/*
+ * Parametric Type Functions
+ * Handle type parameters and variance.
+ */
+
+/* Add type parameter to a type definition */
+void omni_type_add_param(TypeDef* type, const char* param_name, VarianceKind variance);
+
+/* Get variance of a type parameter */
+VarianceKind omni_type_get_param_variance(TypeDef* type, const char* param_name);
+
+/* Create a parametric type instance (e.g., (List Int)) */
+TypeDef* omni_make_parametric_instance(AnalysisContext* ctx, const char* base_type,
+                                       char** type_args, size_t arg_count);
 
 /* ============== Constructor-Level Ownership API ============== */
 

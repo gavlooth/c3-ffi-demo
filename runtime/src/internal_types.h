@@ -4,6 +4,10 @@
 #include "../include/omni.h"
 #include "util/hashmap.h"
 
+/* Global region access (defined in runtime.c) */
+extern Region* _global_region;
+void _ensure_global_region(void);
+
 typedef struct Array {
     Obj** data;
     int len;

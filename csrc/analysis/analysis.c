@@ -4305,3 +4305,429 @@ static void analyze_application_scoped(AnalysisContext* ctx, OmniValue* expr) {
     ctx->in_return_position = old_return_pos;
     ctx->position++;
 }
+
+/* ============== Phase 19: Julia-Aligned Type System Implementation ============== */
+
+/*
+ * Metadata Extraction and Processing
+ * Handles ^:key metadata attached to definitions.
+ */
+
+/* Extract metadata from a form (returns linked list of MetadataEntry) */
+MetadataEntry* omni_extract_metadata(OmniValue* form) {
+    if (!form || !omni_is_cell(form)) return NULL;
+
+    MetadataEntry* head = NULL;
+    MetadataEntry* tail = NULL;
+    OmniValue* current = form;
+
+    while (!omni_is_nil(current) && omni_is_cell(current)) {
+        OmniValue* item = omni_car(current);
+
+        /* Check if this item is metadata: ^:key value */
+        if (omni_is_cell(item) && omni_is_sym(omni_car(item))) {
+            OmniValue* key_sym = omni_car(item);
+            const char* key_str = key_sym->str_val;
+
+            /* Check for metadata marker (^) */
+            if (key_str && key_str[0] == '^' && key_str[1] == ':') {
+                const char* meta_key = key_str + 2;  /* Skip "^:" */
+                OmniValue* meta_value = omni_car(omni_cdr(item));
+
+                /* Determine metadata type */
+                MetaType meta_type = META_NONE;
+                if (strcmp(meta_key, "parent") == 0) meta_type = META_PARENT;
+                else if (strcmp(meta_key, "where") == 0) meta_type = META_WHERE;
+                else if (strcmp(meta_key, "mutable") == 0) meta_type = META_MUTABLE;
+                else if (strcmp(meta_key, "covar") == 0) meta_type = META_COVAR;
+                else if (strcmp(meta_key, "contra") == 0) meta_type = META_CONTRA;
+                else if (strcmp(meta_key, "seq") == 0) meta_type = META_SEQ;
+                else if (strcmp(meta_key, "rec") == 0) meta_type = META_REC;
+
+                /* Create metadata entry */
+                MetadataEntry* entry = malloc(sizeof(MetadataEntry));
+                entry->type = meta_type;
+                entry->key = strdup(meta_key);
+                entry->value = meta_value;
+                entry->next = NULL;
+
+                if (!head) {
+                    head = entry;
+                } else {
+                    tail->next = entry;
+                }
+                tail = entry;
+            }
+        }
+
+        current = omni_cdr(current);
+    }
+
+    return head;
+}
+
+/* Free metadata list */
+void omni_free_metadata(MetadataEntry* metadata) {
+    while (metadata) {
+        MetadataEntry* next = metadata->next;
+        free(metadata->key);
+        free(metadata);
+        metadata = next;
+    }
+}
+
+/* Get metadata value by key */
+OmniValue* omni_get_metadata(MetadataEntry* metadata, const char* key) {
+    while (metadata) {
+        if (strcmp(metadata->key, key) == 0) {
+            return metadata->value;
+        }
+        metadata = metadata->next;
+    }
+    return NULL;
+}
+
+/* Check if metadata contains a specific key */
+bool omni_has_metadata(MetadataEntry* metadata, const char* key) {
+    return omni_get_metadata(metadata, key) != NULL;
+}
+
+/*
+ * Type Hierarchy Functions
+ * Handle inheritance and subtyping relationships.
+ */
+
+/* Set parent type for a type definition */
+void omni_type_set_parent(TypeDef* type, const char* parent_name) {
+    if (!type) return;
+    if (type->parent) free(type->parent);
+    type->parent = parent_name ? strdup(parent_name) : NULL;
+}
+
+/* Get parent type definition */
+TypeDef* omni_type_get_parent(AnalysisContext* ctx, TypeDef* type) {
+    if (!type || !type->parent) return NULL;
+    if (!ctx->type_registry) return NULL;
+
+    /* Search for parent in registry */
+    for (TypeDef* t = ctx->type_registry->types; t; t = t->next) {
+        if (strcmp(t->name, type->parent) == 0) {
+            return t;
+        }
+    }
+    return NULL;
+}
+
+/* Check if type_a is a subtype of type_b */
+bool omni_type_is_subtype(AnalysisContext* ctx, const char* type_a, const char* type_b) {
+    if (!type_a || !type_b) return false;
+    if (strcmp(type_a, type_b) == 0) return true;
+
+    /* Check for Any type (all types are subtypes of Any) */
+    if (strcmp(type_b, "Any") == 0) return true;
+
+    if (!ctx->type_registry) return false;
+
+    /* Get type definition for type_a */
+    TypeDef* type_def = omni_get_type(ctx, type_a);
+    if (!type_def) return false;
+
+    /* Check parent chain */
+    if (type_def->parent) {
+        /* Direct parent match */
+        if (strcmp(type_def->parent, type_b) == 0) return true;
+
+        /* Recursive check up the hierarchy */
+        return omni_type_is_subtype(ctx, type_def->parent, type_b);
+    }
+
+    return false;
+}
+
+/* Compute specificity score for method dispatch (higher = more specific) */
+int omni_compute_specificity(AnalysisContext* ctx, TypeDef* type) {
+    if (!type) return 0;
+
+    int score = 0;
+
+    /* Concrete types are more specific than abstract */
+    if (!type->is_abstract) score += 100;
+
+    /* Primitives are more specific than composites */
+    if (type->is_primitive) score += 50;
+
+    /* Count depth in type hierarchy (deeper = more specific) */
+    int depth = 0;
+    TypeDef* current = type;
+    while (current->parent) {
+        depth++;
+        TypeDef* parent = omni_type_get_parent(ctx, current);
+        if (!parent) break;
+        current = parent;
+    }
+    score += depth * 10;
+
+    return score;
+}
+
+/* Register a type with full metadata support */
+TypeDef* omni_register_type_with_metadata(AnalysisContext* ctx, OmniValue* type_def,
+                                          MetadataEntry* metadata) {
+    if (!ctx->type_registry) {
+        ctx->type_registry = omni_type_registry_new();
+    }
+
+    /* Extract type name from first element */
+    if (!omni_is_cell(type_def)) return NULL;
+    OmniValue* name_obj = omni_car(omni_cdr(type_def));
+    if (!omni_is_sym(name_obj)) return NULL;
+
+    const char* type_name = name_obj->str_val;
+
+    /* Check for abstract type marker */
+    bool is_abstract = omni_has_metadata(metadata, "abstract");
+
+    /* Check for primitive type marker */
+    bool is_primitive = omni_has_metadata(metadata, "primitive");
+
+    /* Create or get type definition */
+    TypeDef* type = malloc(sizeof(TypeDef));
+    memset(type, 0, sizeof(TypeDef));
+    type->name = strdup(type_name);
+    type->is_abstract = is_abstract;
+    type->is_primitive = is_primitive;
+    type->field_capacity = 8;
+    type->fields = malloc(type->field_capacity * sizeof(TypeField));
+
+    /* Extract parent from metadata */
+    OmniValue* parent_value = omni_get_metadata(metadata, "parent");
+    if (parent_value && omni_is_sym(parent_value)) {
+        type->parent = strdup(parent_value->str_val);
+    }
+
+    /* Extract bit width for primitives */
+    OmniValue* width_value = omni_car(omni_cdr(type_def));
+    if (is_primitive && width_value && omni_is_int(width_value)) {
+        type->bit_width = width_value->int_val;
+    }
+
+    /* Add to registry */
+    type->next = ctx->type_registry->types;
+    ctx->type_registry->types++;
+    ctx->type_registry->type_count++;
+
+    return type;
+}
+
+/* Register a primitive type with bit width */
+TypeDef* omni_register_primitive_type(AnalysisContext* ctx, const char* name,
+                                      const char* parent, int bit_width) {
+    if (!ctx->type_registry) {
+        ctx->type_registry = omni_type_registry_new();
+    }
+
+    TypeDef* type = malloc(sizeof(TypeDef));
+    memset(type, 0, sizeof(TypeDef));
+    type->name = strdup(name);
+    type->is_primitive = true;
+    type->bit_width = bit_width;
+    if (parent) type->parent = strdup(parent);
+
+    type->next = ctx->type_registry->types;
+    ctx->type_registry->types = type;
+    ctx->type_registry->type_count++;
+
+    return type;
+}
+
+/* Register an abstract type */
+TypeDef* omni_register_abstract_type(AnalysisContext* ctx, const char* name,
+                                     const char* parent) {
+    if (!ctx->type_registry) {
+        ctx->type_registry = omni_type_registry_new();
+    }
+
+    TypeDef* type = malloc(sizeof(TypeDef));
+    memset(type, 0, sizeof(TypeDef));
+    type->name = strdup(name);
+    type->is_abstract = true;
+    if (parent) type->parent = strdup(parent);
+
+    type->next = ctx->type_registry->types;
+    ctx->type_registry->types = type;
+    ctx->type_registry->type_count++;
+
+    return type;
+}
+
+/* Register a struct type with fields */
+TypeDef* omni_register_struct_type(AnalysisContext* ctx, const char* name,
+                                   const char* parent, OmniValue* fields) {
+    if (!ctx->type_registry) {
+        ctx->type_registry = omni_type_registry_new();
+    }
+
+    TypeDef* type = malloc(sizeof(TypeDef));
+    memset(type, 0, sizeof(TypeDef));
+    type->name = strdup(name);
+    type->is_abstract = false;
+    type->is_primitive = false;
+    if (parent) type->parent = strdup(parent);
+
+    type->field_capacity = 8;
+    type->fields = malloc(type->field_capacity * sizeof(TypeField));
+
+    /* Parse fields from Slot [] syntax */
+    if (fields && omni_is_cell(fields)) {
+        /* Fields are alternating name/type pairs */
+        OmniValue* f = fields;
+        while (!omni_is_nil(f) && omni_is_cell(f)) {
+            OmniValue* field_name = omni_car(f);
+            OmniValue* field_type = omni_car(omni_cdr(f));
+
+            if (omni_is_sym(field_name)) {
+                TypeField tf;
+                tf.name = strdup(field_name->str_val);
+                tf.type_name = (field_type && omni_is_sym(field_type)) ?
+                               strdup(field_type->str_val) : NULL;
+                tf.strength = FIELD_STRONG;
+                tf.is_mutable = false;
+                tf.index = type->field_count;
+                tf.variance = VARIANCE_INVARIANT;
+
+                if (type->field_count >= type->field_capacity) {
+                    type->field_capacity *= 2;
+                    type->fields = realloc(type->fields,
+                                          type->field_capacity * sizeof(TypeField));
+                }
+                type->fields[type->field_count++] = tf;
+            }
+
+            f = omni_cdr(omni_cdr(f));  /* Skip name and type */
+        }
+    }
+
+    type->next = ctx->type_registry->types;
+    ctx->type_registry->types = type;
+    ctx->type_registry->type_count++;
+
+    return type;
+}
+
+/*
+ * Parametric Type Functions
+ * Handle type parameters and variance.
+ */
+
+/* Add type parameter to a type definition */
+void omni_type_add_param(TypeDef* type, const char* param_name, VarianceKind variance) {
+    if (!type || !param_name) return;
+
+    /* Allocate or expand type params array */
+    if (!type->type_params) {
+        type->type_param_capacity = 4;
+        type->type_params = malloc(type->type_param_capacity * sizeof(char*));
+    }
+
+    if (type->type_param_count >= type->type_param_capacity) {
+        type->type_param_capacity *= 2;
+        type->type_params = realloc(type->type_params,
+                                     type->type_param_capacity * sizeof(char*));
+    }
+
+    type->type_params[type->type_param_count++] = strdup(param_name);
+}
+
+/* Get variance of a type parameter */
+VarianceKind omni_type_get_param_variance(TypeDef* type, const char* param_name) {
+    if (!type || !param_name) return VARIANCE_INVARIANT;
+
+    for (size_t i = 0; i < type->type_param_count; i++) {
+        if (strcmp(type->type_params[i], param_name) == 0) {
+            /* Check if this param has variance metadata */
+            if (type->metadata) {
+                MetadataEntry* meta = type->metadata;
+                while (meta) {
+                    if ((strcmp(meta->key, param_name) == 0) &&
+                        (omni_is_sym(meta->value) &&
+                         strcmp(meta->value->str_val, "+") == 0)) {
+                        return VARIANCE_COVARIANT;
+                    }
+                    if ((strcmp(meta->key, param_name) == 0) &&
+                        (omni_is_sym(meta->value) &&
+                         strcmp(meta->value->str_val, "-") == 0)) {
+                        return VARIANCE_CONTRAVARIANT;
+                    }
+                    meta = meta->next;
+                }
+            }
+            return VARIANCE_INVARIANT;
+        }
+    }
+
+    return VARIANCE_INVARIANT;
+}
+
+/* Create a parametric type instance (e.g., (List Int)) */
+TypeDef* omni_make_parametric_instance(AnalysisContext* ctx, const char* base_type,
+                                       char** type_args, size_t arg_count) {
+    if (!ctx->type_registry) return NULL;
+
+    /* Find base type */
+    TypeDef* base = omni_get_type(ctx, base_type);
+    if (!base) return NULL;
+
+    /* Create instance type with mangled name */
+    char instance_name[256];
+    strcpy(instance_name, base_type);
+    strcat(instance_name, "_");
+    for (size_t i = 0; i < arg_count; i++) {
+        if (i > 0) strcat(instance_name, "_");
+        strcat(instance_name, type_args[i]);
+    }
+
+    /* Check if instance already exists */
+    TypeDef* existing = omni_get_type(ctx, instance_name);
+    if (existing) return existing;
+
+    /* Create new instance */
+    TypeDef* instance = malloc(sizeof(TypeDef));
+    memset(instance, 0, sizeof(TypeDef));
+    instance->name = strdup(instance_name);
+    instance->parent = base->parent ? strdup(base->parent) : NULL;
+    instance->is_abstract = base->is_abstract;
+    instance->is_primitive = base->is_primitive;
+    instance->bit_width = base->bit_width;
+
+    /* Copy fields and substitute type parameters */
+    instance->field_capacity = base->field_capacity;
+    instance->fields = malloc(instance->field_capacity * sizeof(TypeField));
+    for (size_t i = 0; i < base->field_count; i++) {
+        instance->fields[i] = base->fields[i];
+        if (instance->fields[i].name) {
+            instance->fields[i].name = strdup(base->fields[i].name);
+        }
+        if (instance->fields[i].type_name) {
+            /* Check if type is a parameter */
+            for (size_t j = 0; j < arg_count; j++) {
+                if (base->type_params &&
+                    j < base->type_param_count &&
+                    strcmp(base->type_params[j], base->fields[i].type_name) == 0) {
+                    instance->fields[i].type_name = strdup(type_args[j]);
+                    break;
+                }
+            }
+            if (instance->fields[i].type_name == base->fields[i].type_name) {
+                instance->fields[i].type_name = strdup(base->fields[i].type_name);
+            }
+        }
+    }
+    instance->field_count = base->field_count;
+
+    /* Add to registry */
+    instance->next = ctx->type_registry->types;
+    ctx->type_registry->types = instance;
+    ctx->type_registry->type_count++;
+
+    return instance;
+}
