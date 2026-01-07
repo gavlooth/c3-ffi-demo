@@ -47,7 +47,7 @@ Replace hybrid memory management with a unified Region-RC architecture.
 
 ---
 
-## Phase 15: Branch-Level Region Narrowing [STANDBY]
+## Phase 15: Branch-Level Region Narrowing
 
 **Objective:** Reduce RC overhead by keeping branch-local data out of RC-managed regions.
 **Reference:** `docs/BRANCH_LEVEL_REGION_NARROWING.md`
