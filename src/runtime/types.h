@@ -36,6 +36,12 @@ struct PikaGrammar;  // Forward declaration for Pika grammar
 // Function pointer types
 typedef struct Value* (*PrimFn)(struct Value* args, struct Value* menv);
 typedef struct Value* (*HandlerFn)(struct Value* exp, struct Value* menv);
+typedef void (*TraceFn)(struct Value* obj, void* ctx, void (*visit)(struct Value** slot, void* ctx));
+
+typedef struct TypeInfo {
+    const char* name;
+    TraceFn trace;
+} TypeInfo;
 
 // Forward declarations for new types
 struct Channel;
@@ -85,7 +91,9 @@ typedef struct ContEscape {
 
 // Core Value structure
 typedef struct Value {
+    int mark;
     Tag tag;
+    const TypeInfo* type;
     union {
         long i;                          // T_INT
         char* s;                         // T_SYM, T_CODE, T_ERROR

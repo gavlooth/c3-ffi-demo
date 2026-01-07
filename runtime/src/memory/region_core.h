@@ -32,6 +32,7 @@ void region_tether_end(Region* r);
 
 // Allocation
 void* region_alloc(Region* r, size_t size);
+void region_splice(Region* dest, Region* src, void* start_ptr, void* end_ptr);
 
 // -- Region Reference (Smart Pointer) --
 typedef struct RegionRef {

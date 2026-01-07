@@ -55,6 +55,13 @@ static Value* eval_resume(Value* args, Env* env);
 static Value* eval_try_catch(Value* args, Env* env);
 static Value* eval_with_open_file(Value* args, Env* env);
 
+// Helper functions - forward declarations
+static int is_array(Value* v);
+static int is_dict(Value* v);
+static Value* prim_get(Value* args);
+static Value* prim_dict_set(Value* args);
+static Value* prim_array_set(Value* args);
+
 // Effect type system - forward declarations for (define {effect ...})
 typedef enum {
     RECOVERY_ONE_SHOT = 0,   // Can resume at most once (default)
@@ -1197,52 +1204,6 @@ static Value* eval_define(Value* args, Env* env) {
                 return name;
             }
         }
-                Value* name = car(cdr(arr_contents));
-                if (!name || name->tag != T_SYM) {
-                    return mk_error("define [grammar ...]: expected name");
-                }
-
-                // Collect all rule definitions: each is [rule-name clause]
-                Value* rules_list = mk_nil();
-                Value** rules_tail = &rules_list;
-
-                Value* rest = cdr(args);
-                while (!is_nil(rest)) {
-                    Value* rule_form = car(rest);
-                    // Each rule should be a list
-                    if (rule_form && rule_form->tag == T_CELL) {
-                        *rules_tail = mk_cell(rule_form, mk_nil());
-                        rules_tail = &((*rules_tail)->cell.cdr);
-                    }
-                    rest = cdr(rest);
-                }
-
-                // Compile the grammar from rules
-                char* error = NULL;
-                PikaGrammar* grammar = omni_compile_grammar_from_value(rules_list, &error);
-
-                if (!grammar) {
-                    if (error) {
-                        Value* err = mk_error(error);
-                        free(error);
-                        return err;
-                    }
-                    return mk_error("Failed to compile grammar");
-                }
-
-                // Create grammar value
-                Value* grammar_val = mk_grammar(grammar, name->s);
-                if (!grammar_val) {
-                    pika_grammar_free(grammar);
-                    if (error) free(error);
-                    return mk_error("Failed to create grammar value");
-                }
-
-                // Define in environment
-                env_define(env, name, grammar_val);
-                return grammar_val;
-            }
-        }
 
         // Check for struct definition: (define {struct Name} [field1] [field2] ...)
         // {struct Name} parses as (type struct Name)
@@ -1680,23 +1641,6 @@ static Value* eval_define(Value* args, Env* env) {
             // Return first variable name
             return car(pattern);
         }
-
-        // Regular function definition
-        Value* name = head;
-        Value* params = cdr(first);
-
-        // Build lambda args and call eval_lambda to handle defaults
-        // eval_lambda expects (params body...) and handles multi-body wrapping
-        Value* lambda_args = mk_cell(params, cdr(args));
-        Value* lambda = eval_lambda(lambda_args, env);
-        if (is_error(lambda)) return lambda;
-
-        // Attach metadata if present
-        if (define_metadata) {
-            metadata_set(lambda, define_metadata);
-        }
-        env_define(env, name, lambda);
-        return name;
     }
 
     // Variable definition: (define name value)
@@ -2036,9 +1980,6 @@ static int match_pattern(Value* pattern, Value* subject, Env* env) {
         
         return matched;
     }
-    }
-
-    return 0;
 }
 
 static int match_list_pattern(Value* patterns, Value* items, Env* env) {
@@ -2600,9 +2541,9 @@ static Value* eval_put_bang(Value* args, Env* env) {
         
         // Unified set logic
         if (is_dict(current)) {
-            prim_dict_set_bang(mk_cell(current, mk_cell(final_key, mk_cell(value, mk_nil()))));
+            prim_dict_set(mk_cell(current, mk_cell(final_key, mk_cell(value, mk_nil()))));
         } else if (is_array(current)) {
-            prim_array_set_bang(mk_cell(current, mk_cell(final_key, mk_cell(value, mk_nil()))));
+            prim_array_set(mk_cell(current, mk_cell(final_key, mk_cell(value, mk_nil()))));
         } else {
             return mk_error("put!: target is not a mutable collection");
         }
@@ -2652,8 +2593,9 @@ static Value* eval_path(Value* args, Env* env) {
 static Value* eval_type(Value* args, Env* env) {
     Value* name_v = car(args);
     if (!name_v || name_v->tag != T_SYM) return mk_error("type: expected name");
-    // Return a type literal object (placeholder for full type system)
-    return mk_type_lit(name_v->s, cdr(args));
+    // For now, just return the symbol as a placeholder for the type
+    // TODO: Implement proper type literals when the type system is ready
+    return name_v;
 }
 
 // Quasiquote evaluation

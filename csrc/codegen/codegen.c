@@ -1132,104 +1132,303 @@ static void codegen_lambda(CodeGenContext* ctx, OmniValue* expr) {
 
 static void codegen_define(CodeGenContext* ctx, OmniValue* expr) {
     OmniValue* args = omni_cdr(expr);
-    OmniValue* name_or_sig = omni_car(args);
-    OmniValue* body = omni_cdr(args);
+    OmniValue* first = omni_car(args);
+    OmniValue* rest = omni_cdr(args);
 
-    if (omni_is_sym(name_or_sig)) {
-        /* Variable define */
-        char* c_name = omni_codegen_mangle(name_or_sig->str_val);
+    if (omni_is_sym(first)) {
+        OmniValue* next = omni_car(rest);
+        /* Check for (define name [args] body...) where [args] is an array */
+        if (next && omni_is_array(next) && !omni_is_nil(omni_cdr(rest))) {
+            OmniValue* fname = first;
+            OmniValue* params = next;
+            OmniValue* fbody = omni_cdr(rest);
+
+            char* c_name = omni_codegen_mangle(fname->str_val);
+            register_symbol(ctx, fname->str_val, c_name);
+
+            /* Emit function with Region-RC support */
+            omni_codegen_emit(ctx, "static Obj* %s(Region* _caller_region", c_name);
+
+            /* Parameters from array */
+            for (size_t i = 0; i < omni_array_len(params); i++) {
+                OmniValue* param = omni_array_get(params, i);
+                if (omni_is_sym(param)) {
+                    char* param_name = omni_codegen_mangle(param->str_val);
+                    omni_codegen_emit_raw(ctx, ", Obj* %s", param_name);
+                    register_symbol(ctx, param->str_val, param_name);
+                    free(param_name);
+                }
+            }
+
+            omni_codegen_emit_raw(ctx, ") {\n");
+            omni_codegen_indent(ctx);
+
+            /* Region-RC prologue */
+            omni_codegen_emit(ctx, "Region* _local_region = region_create();\n");
+            omni_codegen_emit(ctx, "region_tether_start(_caller_region);\n\n");
+
+            /* Body */
+            OmniValue* last_expr = NULL;
+            while (!omni_is_nil(fbody) && omni_is_cell(fbody)) {
+                last_expr = omni_car(fbody);
+                fbody = omni_cdr(fbody);
+                if (!omni_is_nil(fbody)) {
+                    omni_codegen_emit(ctx, "");
+                    codegen_expr(ctx, last_expr);
+                    omni_codegen_emit_raw(ctx, ";\n");
+                }
+            }
+
+            if (last_expr) {
+                omni_codegen_emit(ctx, "Obj* _result = ");
+                codegen_expr(ctx, last_expr);
+                omni_codegen_emit_raw(ctx, ";\n");
+                omni_codegen_emit(ctx, "Obj* _trans = transmigrate(_result, _local_region, _caller_region);\n");
+                omni_codegen_emit(ctx, "region_exit(_local_region);\n");
+                omni_codegen_emit(ctx, "region_destroy_if_dead(_local_region);\n");
+                omni_codegen_emit(ctx, "region_tether_end(_caller_region);\n");
+                omni_codegen_emit(ctx, "return _trans;\n");
+            } else {
+                omni_codegen_emit(ctx, "region_exit(_local_region);\n");
+                omni_codegen_emit(ctx, "region_destroy_if_dead(_local_region);\n");
+                omni_codegen_emit(ctx, "region_tether_end(_caller_region);\n");
+                omni_codegen_emit(ctx, "return NOTHING;\n");
+            }
+
+            omni_codegen_dedent(ctx);
+            omni_codegen_emit(ctx, "}\n\n");
+            free(c_name);
+            return;
+        }
+
+        /* Variable define: (define name value) */
+        char* c_name = omni_codegen_mangle(first->str_val);
         omni_codegen_emit(ctx, "Obj* %s = ", c_name);
-        if (!omni_is_nil(body)) {
-            codegen_expr(ctx, omni_car(body));
+        if (!omni_is_nil(rest)) {
+            codegen_expr(ctx, omni_car(rest));
         } else {
             omni_codegen_emit_raw(ctx, "NOTHING");
         }
         omni_codegen_emit_raw(ctx, ";\n");
-        register_symbol(ctx, name_or_sig->str_val, c_name);
+        register_symbol(ctx, first->str_val, c_name);
         free(c_name);
-    } else if (omni_is_cell(name_or_sig)) {
-        /* Function define with Region-RC support */
-        OmniValue* fname = omni_car(name_or_sig);
-        OmniValue* params = omni_cdr(name_or_sig);
-
+    } else if (omni_is_cell(first)) {
+        /* Old style: (define (name params...) body...) */
+        OmniValue* fname = omni_car(first);
+        OmniValue* params = omni_cdr(first);
+        /* ... (keep old style support for now to avoid breakage) ... */
         if (!omni_is_sym(fname)) return;
-
         char* c_name = omni_codegen_mangle(fname->str_val);
         register_symbol(ctx, fname->str_val, c_name);
-
-        /* Emit function with Region-RC: Include Region* _caller_region as first parameter */
         omni_codegen_emit(ctx, "static Obj* %s(Region* _caller_region", c_name);
-
-        /* Parameters */
-        bool first = false;  /* Already have _caller_region */
         while (!omni_is_nil(params) && omni_is_cell(params)) {
-            if (!first) omni_codegen_emit_raw(ctx, ", ");
-            first = false;
-            OmniValue* param = omni_car(params);
-            if (omni_is_sym(param)) {
-                char* param_name = omni_codegen_mangle(param->str_val);
-                omni_codegen_emit_raw(ctx, "Obj* %s", param_name);
-                register_symbol(ctx, param->str_val, param_name);
-                free(param_name);
+            OmniValue* p = omni_car(params);
+            if (omni_is_sym(p)) {
+                char* pn = omni_codegen_mangle(p->str_val);
+                omni_codegen_emit_raw(ctx, ", Obj* %s", pn);
+                register_symbol(ctx, p->str_val, pn);
+                free(pn);
             }
             params = omni_cdr(params);
         }
-
         omni_codegen_emit_raw(ctx, ") {\n");
         omni_codegen_indent(ctx);
-
-        /* Region-RC: Create local region at function entry */
-        omni_codegen_emit(ctx, "/* Region-RC: Create local region for allocations */\n");
         omni_codegen_emit(ctx, "Region* _local_region = region_create();\n");
-        omni_codegen_emit_raw(ctx, "\n");
-
-        /* Region-RC: Emit tethering for parameters from outer regions */
-        omni_codegen_emit(ctx, "/* Region-RC: Tether parameters from outer regions */\n");
-        omni_codegen_emit(ctx, "/* (All parameters are assumed to come from _caller_region) */\n");
-        omni_codegen_emit(ctx, "region_tether_start(_caller_region);  /* Keep caller region alive */\n");
-        omni_codegen_emit_raw(ctx, "\n");
-
-        /* Body */
-        OmniValue* result = NULL;
-        while (!omni_is_nil(body) && omni_is_cell(body)) {
-            result = omni_car(body);
-            body = omni_cdr(body);
+        omni_codegen_emit(ctx, "region_tether_start(_caller_region);\n");
+        OmniValue* last = NULL;
+        Value* b = rest;
+        while (!omni_is_nil(b) && omni_is_cell(b)) {
+            last = omni_car(b); b = omni_cdr(b);
+            if (!omni_is_nil(b)) { omni_codegen_emit(ctx, ""); codegen_expr(ctx, last); omni_codegen_emit_raw(ctx, ";\n"); }
         }
-
-        if (result) {
-            /* Region-RC: Compute result in local region, transmigrate, cleanup */
-            omni_codegen_emit(ctx, "/* Compute result in local region */\n");
-            omni_codegen_emit(ctx, "Obj* _result = ");
-            codegen_expr(ctx, result);
-            omni_codegen_emit_raw(ctx, ";\n");
-            omni_codegen_emit_raw(ctx, "\n");
-            omni_codegen_emit(ctx, "/* Region-RC: Transmigrate result to caller region */\n");
-            omni_codegen_emit(ctx, "Obj* _transmigrated = transmigrate(_result, _local_region, _caller_region);\n");
-            omni_codegen_emit_raw(ctx, "\n");
-            omni_codegen_emit(ctx, "/* Region-RC: Exit local region */\n");
-            omni_codegen_emit(ctx, "region_exit(_local_region);\n");
-            omni_codegen_emit(ctx, "region_destroy_if_dead(_local_region);\n");
-            omni_codegen_emit_raw(ctx, "\n");
-            omni_codegen_emit(ctx, "/* Region-RC: Release tether on caller region */\n");
-            omni_codegen_emit(ctx, "region_tether_end(_caller_region);\n");
-            omni_codegen_emit_raw(ctx, "\n");
-            omni_codegen_emit(ctx, "return _transmigrated;\n");
+        if (last) {
+            omni_codegen_emit(ctx, "Obj* _res = "); codegen_expr(ctx, last); omni_codegen_emit_raw(ctx, ";\n");
+            omni_codegen_emit(ctx, "Obj* _tr = transmigrate(_res, _local_region, _caller_region);\n");
+            omni_codegen_emit(ctx, "region_exit(_local_region); region_destroy_if_dead(_local_region); region_tether_end(_caller_region);\n");
+            omni_codegen_emit(ctx, "return _tr;\n");
         } else {
-            omni_codegen_emit(ctx, "/* Region-RC: Exit local region */\n");
-            omni_codegen_emit(ctx, "region_exit(_local_region);\n");
-            omni_codegen_emit(ctx, "region_destroy_if_dead(_local_region);\n");
-            omni_codegen_emit_raw(ctx, "\n");
-            omni_codegen_emit(ctx, "/* Region-RC: Release tether on caller region */\n");
-            omni_codegen_emit(ctx, "region_tether_end(_caller_region);\n");
-            omni_codegen_emit_raw(ctx, "\n");
-            omni_codegen_emit(ctx, "return NOTHING;\n");
+            omni_codegen_emit(ctx, "region_exit(_local_region); region_destroy_if_dead(_local_region); region_tether_end(_caller_region); return NOTHING;\n");
         }
-
-        omni_codegen_dedent(ctx);
-        omni_codegen_emit(ctx, "}\n\n");
-
+        omni_codegen_dedent(ctx); omni_codegen_emit(ctx, "}\n\n");
         free(c_name);
     }
+}
+}
+
+/* ============== New Special Form Implementations ============== */
+
+/* Pattern matching: (match expr pattern1 result1 pattern2 result2 ... else-result) */
+static void codegen_match(CodeGenContext* ctx, OmniValue* expr) {
+    /* (match value (Some x) x (None) default) */
+    OmniValue* args = omni_cdr(expr);
+    if (omni_is_nil(args)) {
+        omni_codegen_emit_raw(ctx, "NIL");
+        return;
+    }
+
+    /* Get the value to match on */
+    OmniValue* value_expr = omni_car(args);
+    OmniValue* clauses = omni_cdr(args);
+
+    /* Count clauses (pairs of pattern-result) */
+    size_t clause_count = 0;
+    OmniValue* c = clauses;
+    while (!omni_is_nil(c) && omni_is_cell(c)) {
+        clause_count++;
+        c = omni_cdr(c);
+    }
+    if (clause_count % 2 != 0) clause_count--;  /* Handle odd number (else clause) */
+
+    /* Emit the value expression */
+    omni_codegen_emit(ctx, "({ /* match */\n");
+    omni_codegen_indent(ctx);
+    omni_codegen_emit(ctx, "Obj* _match_value = ");
+    codegen_expr(ctx, value_expr);
+    omni_codegen_emit_raw(ctx, ";\n");
+    omni_codegen_emit_raw(ctx, "\n");
+
+    /* Generate if-else chain for pattern matching */
+    size_t pairs_processed = 0;
+    c = clauses;
+    while (!omni_is_nil(c) && omni_is_cell(c)) {
+        OmniValue* pattern = omni_car(c);
+        c = omni_cdr(c);
+
+        if (!omni_is_nil(c) && omni_is_cell(c)) {
+            OmniValue* result_expr = omni_car(c);
+            c = omni_cdr(c);
+
+            if (pairs_processed > 0) {
+                omni_codegen_emit(ctx, "} else ");
+            }
+
+            /* For now, emit a comment placeholder */
+            /* Full pattern matching would require destructuring logic here */
+            omni_codegen_emit(ctx, "/* pattern: ");
+            codegen_expr(ctx, pattern);
+            omni_codegen_emit_raw(ctx, " */\n");
+
+            if (omni_is_sym(pattern) && strcmp(pattern->str_val, "_") == 0) {
+                /* Wildcard - else clause */
+                omni_codegen_emit(ctx, "{\n");
+                omni_codegen_indent(ctx);
+                omni_codegen_emit(ctx, "/* wildcard */\n");
+            } else {
+                omni_codegen_emit(ctx, "if (is_pattern_match(");
+                codegen_expr(ctx, pattern);
+                omni_codegen_emit_raw(ctx, ", _match_value)) {\n");
+                omni_codegen_indent(ctx);
+            }
+
+            omni_codegen_emit(ctx, "Obj* _result = ");
+            codegen_expr(ctx, result_expr);
+            omni_codegen_emit_raw(ctx, ";\n");
+
+            if (!(omni_is_sym(pattern) && strcmp(pattern->str_val, "_") == 0)) {
+                omni_codegen_dedent(ctx);
+                omni_codegen_emit_raw(ctx, "}\n");
+            }
+
+            pairs_processed++;
+        }
+    }
+
+    omni_codegen_emit(ctx, "return _result;\n");
+    omni_codegen_dedent(ctx);
+    omni_codegen_emit_raw(ctx, "})\n");
+}
+
+/* Mutation operator: (set! var value) */
+static void codegen_set_bang(CodeGenContext* ctx, OmniValue* expr) {
+    /* (set! x 10) - modify a binding */
+    OmniValue* args = omni_cdr(expr);
+    if (omni_is_nil(args) || omni_is_nil(omni_cdr(args))) {
+        omni_codegen_emit_raw(ctx, "NIL");
+        return;
+    }
+
+    OmniValue* var = omni_car(args);
+    OmniValue* value = omni_cdr(args);
+    if (!omni_is_nil(value)) {
+        value = omni_car(value);
+    }
+
+    if (!omni_is_sym(var)) {
+        codegen_apply(ctx, expr);  /* Fall back to function call */
+        return;
+    }
+
+    char* c_name = omni_codegen_mangle(var->str_val);
+    omni_codegen_emit(ctx, "/* set! */\n");
+    omni_codegen_emit(ctx, "%s = ", c_name);
+    codegen_expr(ctx, value);
+    omni_codegen_emit_raw(ctx, ";\n");
+    omni_codegen_emit(ctx, "return ");
+    omni_codegen_emit_raw(ctx, "%s", c_name);
+    omni_codegen_emit_raw(ctx, ";");
+    free(c_name);
+}
+
+/* Mutation operator: (put! obj.field value) */
+static void codegen_put_bang(CodeGenContext* ctx, OmniValue* expr) {
+    /* (put! obj.field value) - modify a slot/path */
+    OmniValue* args = omni_cdr(expr);
+    if (omni_is_nil(args) || omni_is_nil(omni_cdr(args))) {
+        omni_codegen_emit_raw(ctx, "NIL");
+        return;
+    }
+
+    OmniValue* path = omni_car(args);
+    OmniValue* value = omni_cdr(args);
+    if (!omni_is_nil(value)) {
+        value = omni_car(value);
+    }
+
+    omni_codegen_emit(ctx, "/* put! */\n");
+    omni_codegen_emit(ctx, "/* TODO: Implement path mutation */\n");
+    codegen_expr(ctx, path);
+    omni_codegen_emit_raw(ctx, ";\n");
+    omni_codegen_emit_raw(ctx, "return NIL;");
+}
+
+/* Mutation operator: (update! obj.field f) */
+static void codegen_update_bang(CodeGenContext* ctx, OmniValue* expr) {
+    /* (update! obj.field inc) - transform in-place */
+    OmniValue* args = omni_cdr(expr);
+    if (omni_is_nil(args) || omni_is_nil(omni_cdr(args))) {
+        omni_codegen_emit_raw(ctx, "NIL");
+        return;
+    }
+
+    OmniValue* path = omni_car(args);
+    OmniValue* func = omni_cdr(args);
+    if (!omni_is_nil(func)) {
+        func = omni_car(func);
+    }
+
+    omni_codegen_emit(ctx, "/* update! */\n");
+    omni_codegen_emit(ctx, "/* TODO: Implement in-place update */\n");
+    omni_codegen_emit_raw(ctx, "return NIL;");
+}
+
+/* Functional operator: (update obj.field f) */
+static void codegen_update(CodeGenContext* ctx, OmniValue* expr) {
+    /* (update obj.field inc) - functional transform, returns new object */
+    OmniValue* args = omni_cdr(expr);
+    if (omni_is_nil(args) || omni_is_nil(omni_cdr(args))) {
+        omni_codegen_emit_raw(ctx, "NIL");
+        return;
+    }
+
+    OmniValue* path = omni_car(args);
+    OmniValue* func = omni_cdr(args);
+    if (!omni_is_nil(func)) {
+        func = omni_car(func);
+    }
+
+    omni_codegen_emit(ctx, "/* update */\n");
+    omni_codegen_emit(ctx, "/* TODO: Implement functional update */\n");
+    omni_codegen_emit_raw(ctx, "return NIL;");
 }
 
 static void codegen_apply(CodeGenContext* ctx, OmniValue* expr) {
@@ -1301,31 +1500,63 @@ static void codegen_apply(CodeGenContext* ctx, OmniValue* expr) {
         }
     }
 
-    /* Regular function call */
-    codegen_expr(ctx, func);
-    omni_codegen_emit_raw(ctx, "(");
+        /* Regular function call */
 
-    /* Region-RC: Pass _local_region as first argument for user-defined functions */
-    if (is_user_function) {
-        omni_codegen_emit_raw(ctx, "_local_region");
-        while (!omni_is_nil(args) && omni_is_cell(args)) {
-            omni_codegen_emit_raw(ctx, ", ");
-            codegen_expr(ctx, omni_car(args));
-            args = omni_cdr(args);
+        codegen_expr(ctx, func);
+
+        omni_codegen_emit_raw(ctx, "(");
+
+    
+
+        /* Region-RC: Pass _local_region as first argument for user-defined functions */
+
+        if (is_user_function) {
+
+            omni_codegen_emit_raw(ctx, "_local_region");
+
+            if (!omni_is_nil(args)) {
+
+                omni_codegen_emit_raw(ctx, ", ");
+
+            }
+
+            bool first_a = true;
+
+            while (!omni_is_nil(args) && omni_is_cell(args)) {
+
+                if (!first_a) omni_codegen_emit_raw(ctx, ", ");
+
+                first_a = false;
+
+                codegen_expr(ctx, omni_car(args));
+
+                args = omni_cdr(args);
+
+            }
+
+        } else {
+
+            /* Built-in function - no region parameter */
+
+            bool first_a = true;
+
+            while (!omni_is_nil(args) && omni_is_cell(args)) {
+
+                if (!first_a) omni_codegen_emit_raw(ctx, ", ");
+
+                first_a = false;
+
+                codegen_expr(ctx, omni_car(args));
+
+                args = omni_cdr(args);
+
+            }
+
         }
-    } else {
-        /* Built-in function - no region parameter */
-        bool first = true;
-        while (!omni_is_nil(args) && omni_is_cell(args)) {
-            if (!first) omni_codegen_emit_raw(ctx, ", ");
-            first = false;
-            codegen_expr(ctx, omni_car(args));
-            args = omni_cdr(args);
-        }
+
+        omni_codegen_emit_raw(ctx, ")");
+
     }
-
-    omni_codegen_emit_raw(ctx, ")");
-}
 
 static void codegen_list(CodeGenContext* ctx, OmniValue* expr) {
     if (omni_is_nil(expr)) {
@@ -1357,6 +1588,32 @@ static void codegen_list(CodeGenContext* ctx, OmniValue* expr) {
         }
         if (strcmp(name, "define") == 0) {
             codegen_define(ctx, expr);
+            return;
+        }
+        if (strcmp(name, "match") == 0) {
+            /* Pattern matching - generate switch-like structure */
+            codegen_match(ctx, expr);
+            return;
+        }
+        /* Mutation operators */
+        if (strcmp(name, "set!") == 0) {
+            /* Modify a binding */
+            codegen_set_bang(ctx, expr);
+            return;
+        }
+        if (strcmp(name, "put!") == 0) {
+            /* Modify a slot/path */
+            codegen_put_bang(ctx, expr);
+            return;
+        }
+        if (strcmp(name, "update!") == 0) {
+            /* Transform in-place */
+            codegen_update_bang(ctx, expr);
+            return;
+        }
+        if (strcmp(name, "update") == 0) {
+            /* Functional transform */
+            codegen_update(ctx, expr);
             return;
         }
         if (strcmp(name, "do") == 0 || strcmp(name, "begin") == 0) {

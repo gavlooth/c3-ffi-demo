@@ -85,6 +85,8 @@ void arena_rewind(Arena *a, Arena_Mark m);
 void arena_free(Arena *a);
 void arena_trim(Arena *a);
 void arena_promote(Arena *dest, Arena *src);
+void arena_detach_blocks(Arena *a, ArenaChunk *start, ArenaChunk *end);
+void arena_attach_blocks(Arena *a, ArenaChunk *start, ArenaChunk *end);
 
 #ifndef ARENA_DA_INIT_CAP
 #define ARENA_DA_INIT_CAP 256
@@ -460,6 +462,46 @@ void arena_promote(Arena *dest, Arena *src) {
     }
     src->begin = NULL;
     src->end = NULL;
+}
+
+void arena_detach_blocks(Arena *a, ArenaChunk *start, ArenaChunk *end) {
+    if (!a || !start || !end) return;
+
+    // Find the block BEFORE start to stitch the list back together
+    if (a->begin == start) {
+        a->begin = end->next;
+    } else {
+        ArenaChunk *curr = a->begin;
+        while (curr && curr->next != start) {
+            curr = curr->next;
+        }
+        if (curr) curr->next = end->next;
+    }
+
+    if (a->end == end) {
+        // If we detached the end, we need to find the new end
+        if (a->begin == NULL) {
+            a->end = NULL;
+        } else {
+            ArenaChunk *curr = a->begin;
+            while (curr->next) curr = curr->next;
+            a->end = curr;
+        }
+    }
+
+    end->next = NULL; // Isolated the detached chain
+}
+
+void arena_attach_blocks(Arena *a, ArenaChunk *start, ArenaChunk *end) {
+    if (!a || !start || !end) return;
+
+    if (a->end) {
+        a->end->next = start;
+        a->end = end;
+    } else {
+        a->begin = start;
+        a->end = end;
+    }
 }
 
 #endif // ARENA_IMPLEMENTATION

@@ -27,13 +27,17 @@ Value* alloc_val_region(Region* r, Tag tag) {
         // Fallback to malloc if no region (shouldn't happen in practice)
         Value* v = malloc(sizeof(Value));
         if (!v) return NULL;
+        v->mark = 0;
         v->tag = tag;
+        v->type = NULL;
         return v;
     }
 
     Value* v = region_alloc(r, sizeof(Value));
     if (!v) return NULL;
+    v->mark = 0;
     v->tag = tag;
+    v->type = NULL;
     return v;
 }
 
@@ -43,13 +47,13 @@ Value* alloc_val_region(Region* r, Tag tag) {
 
 Value* mk_nil_region(Region* r) {
     (void)r;  // Unused
-    static Value nil_singleton = { .tag = T_NIL };
+    static Value nil_singleton = { .mark = 0, .tag = T_NIL, .type = NULL };
     return &nil_singleton;
 }
 
 Value* mk_nothing_region(Region* r) {
     (void)r;  // Unused
-    static Value nothing_singleton = { .tag = T_NOTHING };
+    static Value nothing_singleton = { .mark = 0, .tag = T_NOTHING, .type = NULL };
     return &nothing_singleton;
 }
 

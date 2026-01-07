@@ -21,8 +21,8 @@ MAIN_OBJECTS = $(MAIN_SOURCES:$(SRCDIR)/%.c=$(BUILDDIR)/%.o)
 
 # Memory module sources - slot pool for sound generational references
 # Also includes continuation-based concurrency (green threads, generators, promises)
-MEMORY_SOURCES = $(SRCDIR)/memory/slot_pool.c $(SRCDIR)/memory/handle.c $(SRCDIR)/memory/region.c $(SRCDIR)/memory/continuation.c $(SRCDIR)/memory/component.c $(SRCDIR)/memory/symmetric.c $(SRCDIR)/memory/arena.c
-MEMORY_OBJECTS = $(BUILDDIR)/memory/slot_pool.o $(BUILDDIR)/memory/handle.o $(BUILDDIR)/memory/region.o $(BUILDDIR)/memory/continuation.o $(BUILDDIR)/memory/component.o $(BUILDDIR)/memory/symmetric.o $(BUILDDIR)/memory/arena.o
+MEMORY_SOURCES = $(SRCDIR)/memory/slot_pool.c $(SRCDIR)/memory/handle.c $(SRCDIR)/memory/region_core.c $(SRCDIR)/memory/continuation.c $(SRCDIR)/memory/arena_core.c $(SRCDIR)/memory/transmigrate.c $(SRCDIR)/memory/region_value.c
+MEMORY_OBJECTS = $(BUILDDIR)/memory/slot_pool.o $(BUILDDIR)/memory/handle.o $(BUILDDIR)/memory/region_core.o $(BUILDDIR)/memory/continuation.o $(BUILDDIR)/memory/arena_core.o $(BUILDDIR)/memory/transmigrate.o $(BUILDDIR)/memory/region_value.o
 
 # Utility module sources - useful helpers for the runtime
 UTIL_SOURCES = $(wildcard $(SRCDIR)/util/*.c)

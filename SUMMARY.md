@@ -7,16 +7,14 @@ See also:
 - `SYNTAX.md` for exhaustive examples.
 - `DESIGN_DECISIONS.md` for the decision log.
 
-## Implemented (C Compiler)
-*   **Memory Management:** ASAP (As Static As Possible) - compile-time free insertion, static symmetric RC with regions for O(1) cycle reclamation, generational refs, and region hierarchy.
-*   **Core syntax:** lists `(...)`, arrays `[...]`, quote `'x`, comments `; ...`
-*   **Special forms:** `define`, `lambda`/`fn`, `let`, `let*`, `if`, `do`/`begin`, `match`, `handle`/`perform`, `with-open-file`
-*   **Bindings:** list-style `(let ((x 1) (y 2)) ...)`, array-style `(let [x 1 y 2] ...)`, destructuring `(define [a b c] xs)`
-*   **Parameters:** default values `[x default]`, named arguments `(f :arg value)`, variadic `.. rest`
-*   **Primitives:** `+ - * / %`, `< > <= >= =`, `cons car cdr empty?`, `print println`, `str`, `map filter reduce partial compose identity`
-*   **Data types:** lists, arrays, dicts - dot notation `obj.field`, `op` vs `op!` mutation convention
-*   **Control:** algebraic effects (`handle`/`perform`/`resume`) for all errors, `with-open-file`, fibers & channels
-*   **Truthiness:** only `false` and `nothing` are falsy; numeric `0` and empty lists are truthy
+## Implemented (C Implementation)
+*   **Toolchain:** Unified C99 pipeline including Pika parser, static analysis, and code generator.
+*   **Memory Management:** ASAP (As Static As Possible) - compile-time free placement, RC-G (Region-Based Reference Counting) with iterative transmigration, bitmap cycle detection, and thread-local tether caching.
+*   **Core syntax:** lists `(...)`, arrays `[...]`, types `{}`.
+*   **Special forms:** `define`, `lambda`, `let`, `if`, `match`, `handle`/`perform`.
+*   **Primitives:** `+ - * / %`, `< > <= >= =`, `cons car cdr empty?`, `print println`, `str`, `map filter reduce`.
+*   **Data types:** lists, arrays, dicts, enums.
+*   **Control:** algebraic effects for error handling, fibers & channels.
 
 ## Planned Design (Not Yet Implemented)
 ### Syntax & Aesthetics (planned)

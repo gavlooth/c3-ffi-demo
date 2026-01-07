@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include "../src/memory/region_core.h"
+#include "../../src/runtime/types.h"
 
 int main(void) {
     printf("Testing RCG Region Logic...\n");
@@ -8,11 +9,11 @@ int main(void) {
     // 1. Basic Lifecycle
     printf("  [1] Basic Lifecycle...\n");
     Region* r1 = region_create();
-    int* p1 = region_alloc(r1, sizeof(int));
-    *p1 = 100;
+    Value* p1 = region_alloc(r1, sizeof(Value));
+    p1->tag = T_INT;
+    p1->i = 100;
     assert(r1->scope_alive == true);
-    region_exit(r1); // Should free immediatey as RC=0 TC=0
-    // Can't check r1 here as it's freed (Valgrind would catch this)
+    region_exit(r1); 
     printf("      Passed.\n");
 
     // 2. RC Retention
@@ -21,11 +22,9 @@ int main(void) {
     region_retain_internal(r2); // RC = 1
     region_exit(r2);            // Scope dies, but Region lives (RC=1)
     
-    // We can still alloc? Technically yes, the arena is there, 
-    // but semantically 'region_exit' implies we stopped writing locals.
-    // However, the memory MUST be valid.
-    int* p2 = region_alloc(r2, sizeof(int));
-    *p2 = 200;
+    Value* p2 = region_alloc(r2, sizeof(Value));
+    p2->tag = T_INT;
+    p2->i = 200;
     
     region_release_internal(r2); // RC -> 0. Should free.
     printf("      Passed.\n");

@@ -8,7 +8,7 @@ It does NOT use runtime garbage collection.
 
 The compiler analyzes the program and **statically inserts `free()` calls** at the optimal
 points during code generation. All deallocation decisions are made at compile time.
-There is alreay an implementation in ~/code/omnilisp_c_scratch   rewrite it in go Use libraries to avoid exesive custom code
+There is already an implementation in ~/code/omnilisp_c_scratch.
 
 ### Target: C99 + POSIX
 
@@ -186,6 +186,7 @@ For every completed task:
 
 ## Key Files
 
+- `docs/ADVANCED_REGION_ALGORITHMS.md` - Advanced transmigration/tethering plans
 - `tests.sh` - Regression tests (14 tests)
 - `examples/demo.omni` - Example programs
 

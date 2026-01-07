@@ -13,18 +13,18 @@
 
 ---
 
-## Current Status (2026-01-05)
+## Current Status (2026-01-07)
 
-The project currently features a robust C99 + POSIX runtime and compiler subset implementing the following:
+The project features a unified C99 + POSIX toolchain (parser, analysis, codegen) and runtime implementing:
 
-### Memory Management (ASAP)
+### Memory Management (ASAP + RC-G)
 | Optimization | Status | Description |
 |---|---|---|
 | **Liveness-Driven Free Insertion** | ✅ | CFG-based analysis for optimal `free()` placement. |
-| **Escape-Aware Stack Allocation** | ✅ | Non-escaping values are stack-allocated (Vale/Ada style). |
-| **Static Symmetric RC** | ✅ | O(1) deterministic cycle collection within region hierarchy. |
-| **Region-Aware RC Elision** | ✅ | Hierarchy-based reference counting optimization. |
-| **Generational References (GenRef)** | ✅ | Vale-style use-after-free detection. |
+| **Iterative Transmigration** | ✅ | Worklist-based deep copy with O(1) **Bitmap Cycle Detection**. |
+| **Region Splicing** | ✅ | O(1) block-level movement of physical memory between regions. |
+| **Thread-Local Tethering** | ✅ | TLS-based caches to elide atomic operations on shared regions. |
+| **Generational References** | ✅ | Sound generational validation via stable slot pools. |
 
 ### Language Features
 *   **Special Forms:** `define`, `lambda`/`fn`, `let`, `if`, `do`/`begin`, `match`, `handle`/`perform`.

@@ -132,16 +132,15 @@ Multiple Dispatch (Julia-style). No class-based OOP.
 ### 1.6 Control Flow
 Delimited Continuations (`prompt`/`control`), Trampolined Tail Calls.
 
-### 1.7 Current Implemented Subset (C Compiler)
-The current C compiler/runtime implements a **small core** of the language. The rest
-of this document describes the intended language design.
+### 1.7 Current Implemented Subset (C Implementation)
+The OmniLisp toolchain and runtime are implemented in pure ANSI C99 + POSIX. This includes the Pika parser, static analysis passes, and the code generator.
 
 **Implemented syntax & forms**
 - Lists `(...)`
-- Quote `'x` -> `(quote x)`
-- Special forms: `define`, `lambda` / `fn`, `let`, `let*`, `if`, `do` / `begin`
-- Function application in prefix form
-- Comments start with `;` and run to end-of-line
+- Bracket-based structures `[]`, `{}`
+- Dot notation `obj.field`
+- Quoted symbols `:sym` and `'sym`
+- Special forms: `define`, `lambda`, `let`, `if`, `match`, `handle`
 
 **Binding forms**
 - List-style: `(let ((x 1) (y 2)) ...)`

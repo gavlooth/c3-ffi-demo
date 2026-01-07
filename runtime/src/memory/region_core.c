@@ -1,6 +1,16 @@
 #include "region_core.h"
 #include <stdio.h>
 
+#define MAX_THREAD_LOCAL_TETHERS 16
+
+typedef struct {
+    Region* regions[MAX_THREAD_LOCAL_TETHERS];
+    int counts[MAX_THREAD_LOCAL_TETHERS];
+    int size;
+} TetherCache;
+
+static __thread TetherCache g_tether_cache = { .size = 0 };
+
 Region* region_create(void) {
     // We allocate the Region struct itself using malloc, 
     // but the contents are managed by the internal Arena.
@@ -67,22 +77,88 @@ void region_release_internal(Region* r) {
 }
 
 void region_tether_start(Region* r) {
-    if (r) {
-        __atomic_add_fetch(&r->tether_count, 1, __ATOMIC_SEQ_CST);
+    if (!r) return;
+
+    // Check local cache
+    for (int i = 0; i < g_tether_cache.size; i++) {
+        if (g_tether_cache.regions[i] == r) {
+            g_tether_cache.counts[i]++;
+            return;
+        }
     }
+
+    // Not in cache, add if possible
+    if (g_tether_cache.size < MAX_THREAD_LOCAL_TETHERS) {
+        int idx = g_tether_cache.size++;
+        g_tether_cache.regions[idx] = r;
+        g_tether_cache.counts[idx] = 1;
+        __atomic_add_fetch(&r->tether_count, 1, __ATOMIC_SEQ_CST);
+        return;
+    }
+
+    // Cache full, fallback to atomic only
+    __atomic_add_fetch(&r->tether_count, 1, __ATOMIC_SEQ_CST);
 }
 
 void region_tether_end(Region* r) {
-    if (r) {
-        int new_tc = __atomic_sub_fetch(&r->tether_count, 1, __ATOMIC_SEQ_CST);
-        if (new_tc == 0) {
-            region_destroy_if_dead(r);
+    if (!r) return;
+
+    // Check local cache
+    for (int i = 0; i < g_tether_cache.size; i++) {
+        if (g_tether_cache.regions[i] == r) {
+            g_tether_cache.counts[i]--;
+            if (g_tether_cache.counts[i] == 0) {
+                // Last local reference, flush to atomic
+                int new_tc = __atomic_sub_fetch(&r->tether_count, 1, __ATOMIC_SEQ_CST);
+                
+                // Remove from cache (swap with last)
+                g_tether_cache.regions[i] = g_tether_cache.regions[g_tether_cache.size - 1];
+                g_tether_cache.counts[i] = g_tether_cache.counts[g_tether_cache.size - 1];
+                g_tether_cache.size--;
+
+                if (new_tc == 0) {
+                    region_destroy_if_dead(r);
+                }
+            }
+            return;
         }
+    }
+
+    // Not in cache (was full or direct), atomic decrement
+    int new_tc = __atomic_sub_fetch(&r->tether_count, 1, __ATOMIC_SEQ_CST);
+    if (new_tc == 0) {
+        region_destroy_if_dead(r);
     }
 }
 
 void* region_alloc(Region* r, size_t size) {
     return arena_alloc(&r->arena, size);
+}
+
+void region_splice(Region* dest, Region* src, void* start_ptr, void* end_ptr) {
+    if (!dest || !src || !start_ptr || !end_ptr) return;
+
+    ArenaChunk *start_chunk = NULL;
+    ArenaChunk *end_chunk = NULL;
+
+    // Find which chunks contain the pointers
+    for (ArenaChunk* c = src->arena.begin; c; c = c->next) {
+        uintptr_t data_start = (uintptr_t)c->data;
+        uintptr_t data_end = data_start + (c->capacity * sizeof(uintptr_t));
+        
+        if ((uintptr_t)start_ptr >= data_start && (uintptr_t)start_ptr < data_end) {
+            start_chunk = c;
+        }
+        if ((uintptr_t)end_ptr >= data_start && (uintptr_t)end_ptr < data_end) {
+            end_chunk = c;
+            break;
+        }
+    }
+
+    if (start_chunk && end_chunk) {
+        arena_detach_blocks(&src->arena, start_chunk, end_chunk);
+        arena_attach_blocks(&dest->arena, start_chunk, end_chunk);
+    }
 }
 
 // -- RegionRef Implementation --

@@ -78,8 +78,283 @@ Replace hybrid memory management with a unified Region-RC architecture.
     - No loss of safety for cyclic data within merged regions.
 
 - [TODO] Label: T-asap-region-main
+
   Objective: Bootstrap the Root Region in the interpreter.
+
   Where: `src/runtime/main.c`
+
   What to change:
+
     - [ ] Implement `region_create()` at main start and `region_destroy()` at exit.
+
   How to verify: Run interpreter; verify all top-level values are reclaimed.
+
+
+
+---
+
+
+
+## Phase 15: Advanced Region Optimization
+
+
+
+**Objective:** Implement high-performance transmigration and tethering algorithms.
+
+**Reference:** `docs/ADVANCED_REGION_ALGORITHMS.md`
+
+
+
+- [DONE] Label: T-opt-bitmap-cycle
+
+
+
+  Objective: Implement Bitmap-based Cycle Detection for transmigration.
+
+
+
+
+
+
+
+  Where: `runtime/src/memory/region_core.c`, `runtime/src/memory/transmigrate.c`
+
+
+
+  What to change:
+
+
+
+    - [x] Add `RegionBitmap` utility to track visited addresses within a region.
+
+
+
+    - [x] Replace `uthash` in `transmigrate.c` with bitmap lookup for internal pointers.
+
+
+
+  How to verify: Run `test_rcg_transmigrate` with large cyclic graphs; verify speedup and reduced allocations.
+
+
+
+  Acceptance:
+
+
+
+    - Zero `malloc` calls for cycle detection during intra-region transmigration.
+
+
+
+
+
+
+
+- [DONE] Label: T-opt-iterative-trans
+
+
+
+
+
+
+
+  Objective: Implement Iterative Worklist Transmigration.
+
+
+
+
+
+
+
+
+
+
+
+  Where: `runtime/src/memory/transmigrate.c`
+
+
+
+  What to change:
+
+
+
+    - [x] Replace recursive `copy_value` with an explicit worklist (stack).
+
+
+
+    - [x] Implement tail-recursion optimization for `T_CELL` chains.
+
+
+
+  How to verify: Run transmigration on a list of 1M elements; verify it doesn't segfault.
+
+
+
+  Acceptance:
+
+
+
+    - O(1) stack usage for deep object graphs.
+
+
+
+
+
+
+
+- [DONE] Label: T-opt-metadata-trace
+
+
+
+
+
+
+
+  Objective: Implement Metadata-Driven Traversal (Trace functions).
+
+
+
+
+
+
+
+
+
+
+
+  Where: `runtime/src/runtime.c`, `runtime/src/memory/transmigrate.c`
+
+
+
+  What to change:
+
+
+
+    - [x] Add `TraceFn` pointer to `TypeInfo` or `Value` structure.
+
+
+
+    - [x] Update `transmigrate.c` to use `obj->trace()` instead of large switch.
+
+
+
+  How to verify: Add a new custom type and verify it can be transmigrated without modifying `transmigrate.c`.
+
+
+
+  Acceptance:
+
+
+
+    - Traversal logic decoupled from the core transmigration loop.
+
+
+
+
+
+
+
+- [DONE] Label: T-opt-region-splicing
+
+
+
+
+
+
+
+  Objective: Implement Block-level Region Splicing.
+
+
+
+
+
+
+
+
+
+
+
+  Where: `runtime/src/memory/arena_core.c`, `runtime/src/memory/region_core.c`
+
+
+
+  What to change:
+
+
+
+    - [x] Modify `Arena` to support detaching and attaching individual memory blocks.
+
+
+
+    - [x] Implement `region_splice(src, dest, blocks)` to move chunks of memory between regions.
+
+
+
+  How to verify: Perform a large transmigration and verify that blocks are moved O(1) instead of copied.
+
+
+
+  Acceptance:
+
+
+
+    - Zero-copy movement of large contiguous data segments between regions.
+
+
+
+
+
+
+
+- [DONE] Label: T-opt-tether-cache
+
+
+
+
+
+
+
+  Objective: Implement Thread-Local Tether Caching.
+
+
+
+
+
+
+
+
+
+
+
+  Where: `runtime/src/memory/region_core.c`
+
+
+
+  What to change:
+
+
+
+    - [x] Add `__thread` local cache for active regions.
+
+
+
+    - [x] Update `region_tether_start/end` to use local cache before atomics.
+
+
+
+  How to verify: Benchmark multi-threaded access to a shared region; verify reduced cache contention.
+
+
+
+  Acceptance:
+
+
+
+    - Reduced atomic operations for redundant tethers in the same thread.
+
+
+
+
+
+
+
+
