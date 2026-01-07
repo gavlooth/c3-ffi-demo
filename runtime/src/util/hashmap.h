@@ -13,6 +13,8 @@ typedef struct HashEntry {
     struct HashEntry* next;  // For collision chaining
 } HashEntry;
 
+struct Region;
+
 typedef struct HashMap {
     HashEntry** buckets;
     size_t bucket_count;
@@ -30,6 +32,7 @@ void hashmap_free_entries(HashMap* map);  // Free entries but not values
 // Operations (pointer keys)
 void* hashmap_get(HashMap* map, void* key);
 void hashmap_put(HashMap* map, void* key, void* value);
+void hashmap_put_region(HashMap* map, void* key, void* value, void* r);
 void* hashmap_remove(HashMap* map, void* key);
 int hashmap_contains(HashMap* map, void* key);
 

@@ -147,7 +147,7 @@ void test_tag_detection_bool(void) {
 }
 
 void test_tag_detection_boxed(void) {
-    Obj* x = mk_int(42);
+    Obj* x = mk_float(42.0); // mk_int(42) is immediate now
     ASSERT(!IS_IMMEDIATE(x));
     ASSERT(IS_BOXED(x));
     ASSERT(!IS_IMMEDIATE_INT(x));
@@ -328,18 +328,18 @@ void test_is_int_null(void) {
 
 void test_is_char_immediate(void) {
     Obj* c = mk_char_unboxed('A');
-    ASSERT(is_char(c));
+    ASSERT(is_char_val(c));
     PASS();
 }
 
 void test_is_char_int(void) {
     Obj* x = mk_int_unboxed(65);
-    ASSERT(!is_char(x));
+    ASSERT(!is_char_val(x));
     PASS();
 }
 
 void test_is_char_null(void) {
-    ASSERT(!is_char(NULL));
+    ASSERT(!is_char_val(NULL));
     PASS();
 }
 
@@ -348,7 +348,7 @@ void test_is_char_null(void) {
 void test_add_immediates(void) {
     Obj* a = mk_int_unboxed(10);
     Obj* b = mk_int_unboxed(20);
-    Obj* result = add(a, b);
+    Obj* result = prim_add(a, b);
     ASSERT(IS_IMMEDIATE_INT(result));
     ASSERT_EQ(obj_to_int(result), 30);
     PASS();
@@ -357,7 +357,7 @@ void test_add_immediates(void) {
 void test_sub_immediates(void) {
     Obj* a = mk_int_unboxed(50);
     Obj* b = mk_int_unboxed(30);
-    Obj* result = sub(a, b);
+    Obj* result = prim_sub(a, b);
     ASSERT(IS_IMMEDIATE_INT(result));
     ASSERT_EQ(obj_to_int(result), 20);
     PASS();
@@ -366,7 +366,7 @@ void test_sub_immediates(void) {
 void test_mul_immediates(void) {
     Obj* a = mk_int_unboxed(7);
     Obj* b = mk_int_unboxed(6);
-    Obj* result = mul(a, b);
+    Obj* result = prim_mul(a, b);
     ASSERT(IS_IMMEDIATE_INT(result));
     ASSERT_EQ(obj_to_int(result), 42);
     PASS();
@@ -375,7 +375,7 @@ void test_mul_immediates(void) {
 void test_div_immediates(void) {
     Obj* a = mk_int_unboxed(100);
     Obj* b = mk_int_unboxed(10);
-    Obj* result = div_op(a, b);
+    Obj* result = prim_div(a, b);
     ASSERT(IS_IMMEDIATE_INT(result));
     ASSERT_EQ(obj_to_int(result), 10);
     PASS();
@@ -384,7 +384,7 @@ void test_div_immediates(void) {
 void test_mod_immediates(void) {
     Obj* a = mk_int_unboxed(17);
     Obj* b = mk_int_unboxed(5);
-    Obj* result = mod_op(a, b);
+    Obj* result = prim_mod(a, b);
     ASSERT(IS_IMMEDIATE_INT(result));
     ASSERT_EQ(obj_to_int(result), 2);
     PASS();
@@ -393,7 +393,7 @@ void test_mod_immediates(void) {
 void test_add_mixed_imm_boxed(void) {
     Obj* a = mk_int_unboxed(10);
     Obj* b = mk_int(20);
-    Obj* result = add(a, b);
+    Obj* result = prim_add(a, b);
     ASSERT(IS_IMMEDIATE_INT(result));
     ASSERT_EQ(obj_to_int(result), 30);
     dec_ref(b);
@@ -405,7 +405,7 @@ void test_add_mixed_imm_boxed(void) {
 void test_lt_immediates(void) {
     Obj* a = mk_int_unboxed(5);
     Obj* b = mk_int_unboxed(10);
-    Obj* result = lt_op(a, b);
+    Obj* result = prim_lt(a, b);
     ASSERT(obj_to_bool(result) == 1);
     PASS();
 }
@@ -413,7 +413,7 @@ void test_lt_immediates(void) {
 void test_gt_immediates(void) {
     Obj* a = mk_int_unboxed(10);
     Obj* b = mk_int_unboxed(5);
-    Obj* result = gt_op(a, b);
+    Obj* result = prim_gt(a, b);
     ASSERT(obj_to_bool(result) == 1);
     PASS();
 }
@@ -421,7 +421,7 @@ void test_gt_immediates(void) {
 void test_eq_immediates(void) {
     Obj* a = mk_int_unboxed(42);
     Obj* b = mk_int_unboxed(42);
-    Obj* result = eq_op(a, b);
+    Obj* result = prim_eq(a, b);
     ASSERT(obj_to_bool(result) == 1);
     PASS();
 }
@@ -429,7 +429,7 @@ void test_eq_immediates(void) {
 void test_le_immediates(void) {
     Obj* a = mk_int_unboxed(5);
     Obj* b = mk_int_unboxed(5);
-    Obj* result = le_op(a, b);
+    Obj* result = prim_le(a, b);
     ASSERT(obj_to_bool(result) == 1);
     PASS();
 }
@@ -437,7 +437,7 @@ void test_le_immediates(void) {
 void test_ge_immediates(void) {
     Obj* a = mk_int_unboxed(10);
     Obj* b = mk_int_unboxed(5);
-    Obj* result = ge_op(a, b);
+    Obj* result = prim_ge(a, b);
     ASSERT(obj_to_bool(result) == 1);
     PASS();
 }
@@ -447,28 +447,28 @@ void test_ge_immediates(void) {
 void test_inc_ref_immediate(void) {
     Obj* x = mk_int_unboxed(42);
     inc_ref(x);  /* Should be no-op */
-    ASSERT_EQ(INT_IMM_VALUE(x), 42);  /* Still valid */
+    ASSERT_EQ(obj_to_int(x), 42);  /* Still valid */
     PASS();
 }
 
 void test_dec_ref_immediate(void) {
     Obj* x = mk_int_unboxed(42);
     dec_ref(x);  /* Should be no-op */
-    ASSERT_EQ(INT_IMM_VALUE(x), 42);  /* Still valid */
+    ASSERT_EQ(obj_to_int(x), 42);  /* Still valid */
     PASS();
 }
 
 void test_free_obj_immediate(void) {
     Obj* x = mk_int_unboxed(42);
     free_obj(x);  /* Should be no-op */
-    ASSERT_EQ(INT_IMM_VALUE(x), 42);  /* Still valid */
+    ASSERT_EQ(obj_to_int(x), 42);  /* Still valid */
     PASS();
 }
 
 void test_free_unique_immediate(void) {
     Obj* x = mk_int_unboxed(42);
     free_unique(x);  /* Should be no-op */
-    ASSERT_EQ(INT_IMM_VALUE(x), 42);  /* Still valid */
+    ASSERT_EQ(obj_to_int(x), 42);  /* Still valid */
     PASS();
 }
 
@@ -487,7 +487,7 @@ void test_tagged_stress_mixed_ops(void) {
     for (int i = 0; i < 1000; i++) {
         Obj* a = mk_int_unboxed(i);
         Obj* b = mk_int_unboxed(i + 1);
-        Obj* sum = add(a, b);
+        Obj* sum = prim_add(a, b);
         ASSERT_EQ(obj_to_int(sum), 2 * i + 1);
     }
     PASS();

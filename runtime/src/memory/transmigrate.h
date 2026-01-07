@@ -2,7 +2,7 @@
 #define OMNI_TRANSMIGRATE_H
 
 #include "region_core.h"
-#include "../../../src/runtime/types.h" // For full Value definition
+#include "../../include/omni.h" // For Obj definition and types
 
 // Forward declaration to avoid circular dependency
 // Value is defined in src/runtime/types.h but transmigrate operates

@@ -147,6 +147,8 @@ void arena_attach_blocks(Arena *a, ArenaChunk *start, ArenaChunk *end);
 #endif // ARENA_H_
 
 #ifdef ARENA_IMPLEMENTATION
+#ifndef ARENA_IMPLEMENTED_GUARD
+#define ARENA_IMPLEMENTED_GUARD
 
 #if ARENA_BACKEND == ARENA_BACKEND_LIBC_MALLOC
 #include <stdlib.h>
@@ -504,4 +506,5 @@ void arena_attach_blocks(Arena *a, ArenaChunk *start, ArenaChunk *end) {
     }
 }
 
+#endif // ARENA_IMPLEMENTED_GUARD
 #endif // ARENA_IMPLEMENTATION

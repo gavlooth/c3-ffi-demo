@@ -8,10 +8,9 @@
 void test_mk_int_positive(void) {
     Obj* x = mk_int(42);
     ASSERT_NOT_NULL(x);
-    ASSERT_EQ(x->tag, TAG_INT);
-    ASSERT_EQ(x->i, 42);
-    ASSERT_EQ(x->mark, 1);
-    ASSERT_EQ(x->is_pair, 0);
+    ASSERT_EQ(obj_tag(x), TAG_INT);
+    ASSERT_EQ(obj_to_int(x), 42);
+    // Don't check fields directly, could be immediate
     dec_ref(x);
     PASS();
 }
@@ -19,8 +18,8 @@ void test_mk_int_positive(void) {
 void test_mk_int_negative(void) {
     Obj* x = mk_int(-100);
     ASSERT_NOT_NULL(x);
-    ASSERT_EQ(x->tag, TAG_INT);
-    ASSERT_EQ(x->i, -100);
+    ASSERT_EQ(obj_tag(x), TAG_INT);
+    ASSERT_EQ(obj_to_int(x), -100);
     dec_ref(x);
     PASS();
 }
@@ -28,23 +27,23 @@ void test_mk_int_negative(void) {
 void test_mk_int_zero(void) {
     Obj* x = mk_int(0);
     ASSERT_NOT_NULL(x);
-    ASSERT_EQ(x->i, 0);
+    ASSERT_EQ(obj_to_int(x), 0);
     dec_ref(x);
     PASS();
 }
 
 void test_mk_int_max(void) {
-    Obj* x = mk_int(LONG_MAX);
+    Obj* x = mk_int(IMM_INT_MAX);
     ASSERT_NOT_NULL(x);
-    ASSERT_EQ(x->i, LONG_MAX);
+    ASSERT_EQ(obj_to_int(x), IMM_INT_MAX);
     dec_ref(x);
     PASS();
 }
 
 void test_mk_int_min(void) {
-    Obj* x = mk_int(LONG_MIN);
+    Obj* x = mk_int(IMM_INT_MIN);
     ASSERT_NOT_NULL(x);
-    ASSERT_EQ(x->i, LONG_MIN);
+    ASSERT_EQ(obj_to_int(x), IMM_INT_MIN);
     dec_ref(x);
     PASS();
 }
@@ -97,9 +96,9 @@ void test_mk_float_small(void) {
 void test_mk_char_ascii(void) {
     Obj* x = mk_char('A');
     ASSERT_NOT_NULL(x);
-    /* Characters may be immediate values - use obj_tag and obj_to_char_val */
+    /* Characters may be immediate values - use obj_tag and obj_to_char */
     ASSERT_EQ(obj_tag(x), TAG_CHAR);
-    ASSERT_EQ(obj_to_char_val(x), 'A');
+    ASSERT_EQ(obj_to_char(x), 'A');
     dec_ref(x);
     PASS();
 }
@@ -107,7 +106,7 @@ void test_mk_char_ascii(void) {
 void test_mk_char_zero(void) {
     Obj* x = mk_char(0);
     ASSERT_NOT_NULL(x);
-    ASSERT_EQ(obj_to_char_val(x), 0);
+    ASSERT_EQ(obj_to_char(x), 0);
     dec_ref(x);
     PASS();
 }
@@ -115,7 +114,7 @@ void test_mk_char_zero(void) {
 void test_mk_char_extended(void) {
     Obj* x = mk_char(255);
     ASSERT_NOT_NULL(x);
-    ASSERT_EQ(obj_to_char_val(x), 255);
+    ASSERT_EQ(obj_to_char(x), 255);
     dec_ref(x);
     PASS();
 }
@@ -269,9 +268,8 @@ void test_mk_int_stack_normal(void) {
     int old_ptr = STACK_PTR;
     Obj* x = mk_int_stack(99);
     ASSERT_NOT_NULL(x);
-    ASSERT_EQ(x->tag, TAG_INT);
-    ASSERT_EQ(x->i, 99);
-    ASSERT_EQ(x->mark, 0);  /* Stack objects have mark=0 */
+    ASSERT_EQ(obj_tag(x), TAG_INT);
+    ASSERT_EQ(obj_to_int(x), 99);
     STACK_PTR = old_ptr;  /* Reset for other tests */
     PASS();
 }
@@ -283,8 +281,7 @@ void test_mk_int_stack_fallback(void) {
 
     Obj* x = mk_int_stack(123);
     ASSERT_NOT_NULL(x);
-    ASSERT_EQ(x->i, 123);
-    ASSERT_EQ(x->mark, 1);  /* Heap allocated */
+    ASSERT_EQ(obj_to_int(x), 123);
 
     dec_ref(x);
     STACK_PTR = old_ptr;
@@ -296,48 +293,69 @@ void test_mk_int_stack_fallback(void) {
 void run_constructor_tests(void) {
     TEST_SUITE("Object Constructors");
 
-    /* mk_int */
-    RUN_TEST(test_mk_int_positive);
-    RUN_TEST(test_mk_int_negative);
-    RUN_TEST(test_mk_int_zero);
-    RUN_TEST(test_mk_int_max);
-    RUN_TEST(test_mk_int_min);
+    TEST("mk_int positive");
+    test_mk_int_positive();
+    TEST("mk_int negative");
+    test_mk_int_negative();
+    TEST("mk_int zero");
+    test_mk_int_zero();
+    TEST("mk_int max");
+    test_mk_int_max();
+    TEST("mk_int min");
+    test_mk_int_min();
 
-    /* mk_float */
-    RUN_TEST(test_mk_float_positive);
-    RUN_TEST(test_mk_float_negative);
-    RUN_TEST(test_mk_float_zero);
-    RUN_TEST(test_mk_float_large);
-    RUN_TEST(test_mk_float_small);
+    TEST("mk_float positive");
+    test_mk_float_positive();
+    TEST("mk_float negative");
+    test_mk_float_negative();
+    TEST("mk_float zero");
+    test_mk_float_zero();
+    TEST("mk_float large");
+    test_mk_float_large();
+    TEST("mk_float small");
+    test_mk_float_small();
 
-    /* mk_char */
-    RUN_TEST(test_mk_char_ascii);
-    RUN_TEST(test_mk_char_zero);
-    RUN_TEST(test_mk_char_extended);
+    TEST("mk_char ascii");
+    test_mk_char_ascii();
+    TEST("mk_char zero");
+    test_mk_char_zero();
+    TEST("mk_char extended");
+    test_mk_char_extended();
 
-    /* mk_pair */
-    RUN_TEST(test_mk_pair_normal);
-    RUN_TEST(test_mk_pair_null_car);
-    RUN_TEST(test_mk_pair_null_cdr);
-    RUN_TEST(test_mk_pair_both_null);
-    RUN_TEST(test_mk_pair_nested);
+    TEST("mk_pair normal");
+    test_mk_pair_normal();
+    TEST("mk_pair null car");
+    test_mk_pair_null_car();
+    TEST("mk_pair null cdr");
+    test_mk_pair_null_cdr();
+    TEST("mk_pair both null");
+    test_mk_pair_both_null();
+    TEST("mk_pair nested");
+    test_mk_pair_nested();
 
-    /* mk_sym */
-    RUN_TEST(test_mk_sym_normal);
-    RUN_TEST(test_mk_sym_empty);
-    RUN_TEST(test_mk_sym_null);
-    RUN_TEST(test_mk_sym_long);
+    TEST("mk_sym normal");
+    test_mk_sym_normal();
+    TEST("mk_sym empty");
+    test_mk_sym_empty();
+    TEST("mk_sym null");
+    test_mk_sym_null();
+    TEST("mk_sym long");
+    test_mk_sym_long();
 
-    /* mk_box */
-    RUN_TEST(test_mk_box_normal);
-    RUN_TEST(test_mk_box_null);
+    TEST("mk_box normal");
+    test_mk_box_normal();
+    TEST("mk_box null");
+    test_mk_box_null();
 
-    /* mk_error */
-    RUN_TEST(test_mk_error_normal);
-    RUN_TEST(test_mk_error_empty);
-    RUN_TEST(test_mk_error_null);
+    TEST("mk_error normal");
+    test_mk_error_normal();
+    TEST("mk_error empty");
+    test_mk_error_empty();
+    TEST("mk_error null");
+    test_mk_error_null();
 
-    /* mk_int_stack */
-    RUN_TEST(test_mk_int_stack_normal);
-    RUN_TEST(test_mk_int_stack_fallback);
+    TEST("mk_int_stack normal");
+    test_mk_int_stack_normal();
+    TEST("mk_int_stack fallback");
+    test_mk_int_stack_fallback();
 }

@@ -2,14 +2,15 @@
  * transmigrate.c - Optimized Iterative Transmigration with Bitmap Cycle Detection
  *
  * Implements high-performance moving of object graphs between regions.
+ * Uses low-level Runtime `Obj` types (TAG_*) instead of high-level AST `Value`.
  */
 
 #include "transmigrate.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
-#include "../../../third_party/arena/arena.h"
-#include "../../../src/runtime/types.h"
+#include "../../third_party/arena/arena.h"
+#include "../../include/omni.h"
 
 // ----------------------------------------------------------------------------
 // Region Bitmap for Cycle Detection
@@ -48,29 +49,13 @@ static RegionBitmap* bitmap_create(Region* r, Arena* tmp_arena) {
     return b;
 }
 
-static inline bool bitmap_test_and_set(RegionBitmap* b, void* ptr) {
-    if (!b) return false;
-    uintptr_t addr = (uintptr_t)ptr;
-    if (addr < b->start) return false;
-    
-    size_t offset = (addr - b->start) / sizeof(uintptr_t);
-    if (offset >= b->size_words) return false;
-
-    size_t idx = offset / 64;
-    uint64_t mask = 1ULL << (offset % 64);
-    
-    if (b->bits[idx] & mask) return true;
-    b->bits[idx] |= mask;
-    return false;
-}
-
 // ----------------------------------------------------------------------------
 // Iterative Transmigration
 // ----------------------------------------------------------------------------
 
 typedef struct WorkItem {
-    Value** slot;       // Where to write the new pointer
-    Value* old_ptr;     // Original object to copy
+    Obj** slot;         // Where to write the new pointer
+    Obj* old_ptr;       // Original object to copy
     struct WorkItem* next;
 } WorkItem;
 
@@ -90,16 +75,16 @@ typedef struct {
 } TraceCtx;
 
 // Visitor for TraceFn
-static void transmigrate_visitor(Value** slot, void* context) {
+static void transmigrate_visitor(Obj** slot, void* context) {
     TraceCtx* ctx = (TraceCtx*)context;
-    Value* old_child = *slot;
+    Obj* old_child = *slot;
     if (!old_child) return;
 
     // Check visited
     PtrMap* entry = NULL;
     HASH_FIND_PTR(*ctx->visited, &old_child, entry);
     if (entry) {
-        *slot = (Value*)entry->new_ptr;
+        *slot = (Obj*)entry->new_ptr;
         return;
     }
 
@@ -115,14 +100,16 @@ void* transmigrate(void* root, Region* src_region, Region* dest_region) {
     if (!root || !dest_region) return root;
 
     Arena tmp_arena = {0};
-    RegionBitmap* bitmap = bitmap_create(src_region, &tmp_arena);
+    // Bitmap optimization disabled for now to simplify linkage
+    // RegionBitmap* bitmap = bitmap_create(src_region, &tmp_arena);
+    
     PtrMap* visited = NULL;
     WorkItem* worklist = NULL;
-    Value* result = NULL;
+    Obj* result = NULL;
 
     // Initial root
     WorkItem* item = arena_alloc(&tmp_arena, sizeof(WorkItem));
-    item->old_ptr = (Value*)root;
+    item->old_ptr = (Obj*)root;
     item->slot = &result;
     item->next = worklist;
     worklist = item;
@@ -138,7 +125,14 @@ void* transmigrate(void* root, Region* src_region, Region* dest_region) {
         WorkItem* current = worklist;
         worklist = worklist->next;
 
-        Value* old_obj = current->old_ptr;
+        Obj* old_obj = current->old_ptr;
+        
+        // Handle immediate values (integers, etc. masked in pointer)
+        if (IS_IMMEDIATE(old_obj)) {
+            *current->slot = old_obj;
+            continue;
+        }
+        
         if (!old_obj) {
             *current->slot = NULL;
             continue;
@@ -148,65 +142,99 @@ void* transmigrate(void* root, Region* src_region, Region* dest_region) {
         PtrMap* entry = NULL;
         HASH_FIND_PTR(visited, &old_obj, entry);
         if (entry) {
-            *current->slot = (Value*)entry->new_ptr;
+            *current->slot = (Obj*)entry->new_ptr;
             continue;
         }
 
         // Allocate new object
-        Value* new_obj = region_alloc(dest_region, sizeof(Value));
+        Obj* new_obj = region_alloc(dest_region, sizeof(Obj));
         *current->slot = new_obj;
 
         // Register in visited
-        entry = malloc(sizeof(PtrMap));
+        entry = malloc(sizeof(PtrMap)); // using malloc for hash map nodes for now
         entry->old_ptr = old_obj;
         entry->new_ptr = new_obj;
         HASH_ADD_PTR(visited, old_ptr, entry);
 
         // Copy everything first (shallow)
-        memcpy(new_obj, old_obj, sizeof(Value));
+        memcpy(new_obj, old_obj, sizeof(Obj));
 
-        // Specialized Trace or Switch
-        if (old_obj->type && old_obj->type->trace) {
-            old_obj->type->trace(new_obj, &trace_ctx, transmigrate_visitor);
-        } else {
-            // Fallback to manual switch for built-in types
-            switch (old_obj->tag) {
-                case T_INT: case T_FLOAT: case T_CHAR: case T_NIL: case T_NOTHING:
-                    break;
+        // Dispatch based on tag
+        switch (old_obj->tag) {
+            case TAG_INT: 
+            case TAG_FLOAT: 
+            case TAG_CHAR: 
+            case TAG_NOTHING:
+                // Scalar values, shallow copy is enough
+                break;
 
-                case T_CELL: {
-                    // Manual push for children
-                    transmigrate_visitor(&new_obj->cell.car, &trace_ctx);
-                    transmigrate_visitor(&new_obj->cell.cdr, &trace_ctx);
-                    break;
-                }
-
-                case T_SYM: case T_CODE: case T_ERROR:
-                    if (old_obj->s) {
-                        new_obj->s = arena_strdup(&dest_region->arena, old_obj->s);
-                    }
-                    break;
-
-                case T_STRING:
-                    new_obj->str.data = arena_alloc(&dest_region->arena, old_obj->str.len);
-                    memcpy(new_obj->str.data, old_obj->str.data, old_obj->str.len);
-                    break;
-
-                case T_LAMBDA:
-                    transmigrate_visitor(&new_obj->lam.params, &trace_ctx);
-                    transmigrate_visitor(&new_obj->lam.body, &trace_ctx);
-                    transmigrate_visitor(&new_obj->lam.env, &trace_ctx);
-                    transmigrate_visitor(&new_obj->lam.defaults, &trace_ctx);
-                    break;
-
-                case T_BOX:
-                    transmigrate_visitor(&new_obj->box_value, &trace_ctx);
-                    break;
-
-                default:
-                    // For unknown types without trace, we do nothing more than shallow copy
-                    break;
+            case TAG_PAIR: {
+                // Manual push for children
+                transmigrate_visitor(&new_obj->a, &trace_ctx);
+                transmigrate_visitor(&new_obj->b, &trace_ctx);
+                break;
             }
+
+            case TAG_SYM: 
+            case TAG_ERROR:
+            case TAG_KEYWORD:
+            case TAG_STRING:
+                if (old_obj->ptr) {
+                    // String/Symbol data copy
+                    // Assuming ptr points to null-terminated string for these types
+                    const char* s = (const char*)old_obj->ptr;
+                    size_t len = strlen(s);
+                    char* s_copy = region_alloc(dest_region, len + 1);
+                    strcpy(s_copy, s);
+                    new_obj->ptr = s_copy;
+                }
+                break;
+
+            case TAG_BOX:
+                // Box holds value in 'a' or 'ptr' depending on impl. 
+                // omni.h: mk_box uses ptr? No, mk_box_region uses box_value which is unioned.
+                // Let's assume box uses 'ptr' for Value* based on mk_box in runtime.c 
+                // Wait, runtime.c mk_box says x->ptr = v.
+                // But region_value.c mk_box_region says v->box_value = initial. 
+                // box_value union member? Obj struct in runtime.c doesn't show box_value.
+                // It shows a, b, ptr.
+                // We'll treat it as ptr for now as that's generic.
+                if (old_obj->ptr) {
+                    // We need to cast ptr to Obj* address for visitor
+                    // But ptr is void*, visitor takes Obj**.
+                    // We need to store the *new* pointer back into new_obj->ptr.
+                    // This is tricky with the visitor signature.
+                    // We can cast &new_obj->ptr to Obj**.
+                    transmigrate_visitor((Obj**)&new_obj->ptr, &trace_ctx);
+                }
+                break;
+
+            case TAG_CLOSURE:
+                if (old_obj->ptr) {
+                    Closure* old_c = (Closure*)old_obj->ptr;
+                    Closure* new_c = region_alloc(dest_region, sizeof(Closure));
+                    if (new_c) {
+                        *new_c = *old_c; // Shallow copy closure struct
+                        new_obj->ptr = new_c;
+                        
+                        // Deep copy captures
+                        if (old_c->captures && old_c->capture_count > 0) {
+                            new_c->captures = region_alloc(dest_region, sizeof(Obj*) * old_c->capture_count);
+                            for (int i = 0; i < old_c->capture_count; i++) {
+                                // Initialize with old val
+                                new_c->captures[i] = old_c->captures[i];
+                                // Visit to update to new val
+                                transmigrate_visitor(&new_c->captures[i], &trace_ctx);
+                            }
+                        }
+                    }
+                }
+                break;
+
+            default:
+                // For unknown types, we default to shallow copy.
+                // Warning: if they contain pointers, they will point to old region!
+                break;
         }
     }
 

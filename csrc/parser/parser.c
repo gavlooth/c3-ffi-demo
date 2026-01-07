@@ -16,19 +16,25 @@
 /* ============== Grammar Rule IDs ============== */
 
 enum {
-    R_EPSILON,
+    R_EPSILON, R_ANY,
     R_CHAR_SPACE, R_CHAR_TAB, R_CHAR_NL, R_CHAR_CR, R_SEMICOLON,
+    R_NOT_NL, R_OPT_NL, R_COMMENT_CHAR, R_COMMENT_BODY,
     R_SPACE,
     R_COMMENT,
+    R_WS_ITEM,
     R_WS,
 
     R_DIGIT, R_DIGIT1, R_INT, R_SIGN, R_SIGNED_INT,
+    R_LT, R_GT, R_EQ, R_QUESTION, R_AT,
     R_FLOAT_FRAC, R_FLOAT,
 
     R_ALPHA, R_ALPHA_UPPER, R_SYM_SPECIAL, R_SYM_CHAR, R_SYM_FIRST, R_SYM,
     R_KEYWORD,
 
-    R_CHAR_ESCAPE, R_CHAR_LIT, R_STRING_CHAR, R_STRING_INNER, R_STRING,
+    R_CHAR_ESCAPE, R_CHAR_LIT, R_NOT_DQUOTE, R_STRING_CHAR, R_STRING_INNER, R_STRING,
+
+    /* Named character literals: #\newline, #\space, #\tab */
+    R_NAMED_CHAR,
 
     /* String formatting */
     R_FMT_STRING, R_CLF_STRING,
@@ -205,9 +211,29 @@ static OmniValue* act_type(PikaState* state, size_t pos, PikaMatch match) {
     
     PikaMatch* inner_m = pika_get_match(state, current, R_TYPE_INNER);
     if (inner_m && inner_m->matched && inner_m->val) {
-        return omni_new_cell(omni_new_sym("type"), inner_m->val);
+        /* inner_m->val is a list of expressions inside { } */
+        /* First expression is the type name, rest are parameters */
+        OmniValue* list = inner_m->val;
+        if (omni_is_cell(list)) {
+            OmniValue* first = omni_car(list);
+            if (omni_is_sym(first)) {
+                const char* type_name = first->str_val;
+                OmniValue* params_list = omni_cdr(list);
+                size_t param_count = omni_list_len(params_list);
+                OmniValue** params = NULL;
+                if (param_count > 0) {
+                    params = omni_list_to_array(params_list, &param_count);
+                }
+                return omni_new_type_lit(type_name, params, param_count);
+            }
+        }
+        /* Fallback: use the whole list as a type name if not a standard list */
+        char* str = omni_value_to_string(list);
+        OmniValue* v = omni_new_type_lit(str, NULL, 0);
+        free(str);
+        return v;
     }
-    return omni_new_cell(omni_new_sym("type"), omni_nil);
+    return omni_new_type_lit("Any", NULL, 0);
 }
 
 static OmniValue* act_metadata(PikaState* state, size_t pos, PikaMatch match) {
@@ -346,7 +372,7 @@ static OmniValue* extract_string_content(PikaState* state, size_t pos, size_t le
 
     /* Create a symbol to represent the string content */
     /* Note: In a full implementation, we'd have a dedicated string type */
-    OmniValue* sym = omni_new_sym(result);
+    OmniValue* sym = omni_new_string(result);
     free(result);
     return sym;
 }
@@ -460,6 +486,56 @@ static OmniValue* act_clf_string(PikaState* state, size_t pos, PikaMatch match) 
                          omni_new_cell(content, omni_nil));
 }
 
+/* Named character literal: #\newline, #\space, #\tab, etc. */
+static OmniValue* act_named_char(PikaState* state, size_t pos, PikaMatch match) {
+    /* Pattern matched: HASH + SYM (where SYM is the character name) */
+    size_t current = pos;
+
+    /* Skip HASH */
+    PikaMatch* hash_m = pika_get_match(state, current, R_HASH);
+    if (!hash_m || !hash_m->matched) return omni_nil;
+    current += hash_m->len;
+
+    /* Get the character name symbol */
+    PikaMatch* sym_m = pika_get_match(state, current, R_SYM);
+    if (!sym_m || !sym_m->matched) return omni_nil;
+
+    OmniValue* sym_val = sym_m->val;
+    if (!omni_is_sym(sym_val)) return omni_nil;
+
+    const char* name = sym_val->str_val;
+
+    /* Map named characters to their character codes */
+    long char_code = -1;
+    if (strcmp(name, "newline") == 0) {
+        char_code = 10;  /* '\n' */
+    } else if (strcmp(name, "space") == 0) {
+        char_code = 32;  /* ' ' */
+    } else if (strcmp(name, "tab") == 0) {
+        char_code = 9;   /* '\t' */
+    } else if (strcmp(name, "return") == 0) {
+        char_code = 13;  /* '\r' */
+    } else if (strcmp(name, "nul") == 0) {
+        char_code = 0;   /* '\0' */
+    } else if (strcmp(name, "bell") == 0) {
+        char_code = 7;   /* '\a' */
+    } else if (strcmp(name, "backspace") == 0) {
+        char_code = 8;   /* '\b' */
+    } else if (strcmp(name, "escape") == 0) {
+        char_code = 27;  /* '\e' (ESC) */
+    } else if (strcmp(name, "delete") == 0) {
+        char_code = 127; /* DEL */
+    }
+
+    /* If we found a valid named character, return as integer */
+    if (char_code >= 0) {
+        return omni_new_int(char_code);
+    }
+
+    /* Otherwise, return an error or nil for unknown character names */
+    return omni_nil;
+}
+
 /* ============== Grammar Initialization ============== */
 
 void omni_grammar_init(void) {
@@ -467,24 +543,45 @@ void omni_grammar_init(void) {
 
     /* Epsilon */
     g_rules[R_EPSILON] = (PikaRule){ PIKA_TERMINAL, .data.str = "" };
+    g_rules[R_ANY] = (PikaRule){ PIKA_ANY };
 
-    /* Whitespace characters */
+    /* Individual characters */
     g_rules[R_CHAR_SPACE] = (PikaRule){ PIKA_TERMINAL, .data.str = " " };
     g_rules[R_CHAR_TAB] = (PikaRule){ PIKA_TERMINAL, .data.str = "\t" };
     g_rules[R_CHAR_NL] = (PikaRule){ PIKA_TERMINAL, .data.str = "\n" };
     g_rules[R_CHAR_CR] = (PikaRule){ PIKA_TERMINAL, .data.str = "\r" };
     g_rules[R_SEMICOLON] = (PikaRule){ PIKA_TERMINAL, .data.str = ";" };
 
+    /* Negative lookahead for newline */
+    g_rule_ids[R_NOT_NL] = ids(1, R_CHAR_NL);
+    g_rules[R_NOT_NL] = (PikaRule){ PIKA_NOT, .data.children = { g_rule_ids[R_NOT_NL], 1 } };
+
+    /* Optional newline */
+    g_rule_ids[R_OPT_NL] = ids(1, R_CHAR_NL);
+    g_rules[R_OPT_NL] = (PikaRule){ PIKA_OPT, .data.children = { g_rule_ids[R_OPT_NL], 1 } };
+
+    /* Comment char: any char that is NOT a newline */
+    g_rule_ids[R_COMMENT_CHAR] = ids(2, R_NOT_NL, R_ANY);
+    g_rules[R_COMMENT_CHAR] = (PikaRule){ PIKA_SEQ, .data.children = { g_rule_ids[R_COMMENT_CHAR], 2 } };
+
+    /* Comment body: sequence of comment chars */
+    g_rule_ids[R_COMMENT_BODY] = ids(1, R_COMMENT_CHAR);
+    g_rules[R_COMMENT_BODY] = (PikaRule){ PIKA_REP, .data.children = { g_rule_ids[R_COMMENT_BODY], 1 } };
+
     /* Single whitespace */
     g_rule_ids[R_SPACE] = ids(4, R_CHAR_SPACE, R_CHAR_TAB, R_CHAR_NL, R_CHAR_CR);
     g_rules[R_SPACE] = (PikaRule){ PIKA_ALT, .data.children = { g_rule_ids[R_SPACE], 4 } };
 
-    /* Comments: ; to end of line */
-    g_rule_ids[R_COMMENT] = ids(2, R_SEMICOLON, R_CHAR_NL);
-    g_rules[R_COMMENT] = (PikaRule){ PIKA_SEQ, .data.children = { g_rule_ids[R_COMMENT], 2 } };
+    /* Comments: ; to end of line or EOF */
+    g_rule_ids[R_COMMENT] = ids(3, R_SEMICOLON, R_COMMENT_BODY, R_OPT_NL);
+    g_rules[R_COMMENT] = (PikaRule){ PIKA_SEQ, .data.children = { g_rule_ids[R_COMMENT], 3 } };
+
+    /* Whitespace item: space or comment */
+    g_rule_ids[R_WS_ITEM] = ids(2, R_SPACE, R_COMMENT);
+    g_rules[R_WS_ITEM] = (PikaRule){ PIKA_ALT, .data.children = { g_rule_ids[R_WS_ITEM], 2 } };
 
     /* Whitespace sequence */
-    g_rule_ids[R_WS] = ids(1, R_SPACE);
+    g_rule_ids[R_WS] = ids(1, R_WS_ITEM);
     g_rules[R_WS] = (PikaRule){ PIKA_REP, .data.children = { g_rule_ids[R_WS], 1 } };
 
     /* Digits */
@@ -502,6 +599,13 @@ void omni_grammar_init(void) {
     g_rules[R_ALPHA] = (PikaRule){ PIKA_RANGE, .data.range = { 'a', 'z' } };
     g_rules[R_ALPHA_UPPER] = (PikaRule){ PIKA_RANGE, .data.range = { 'A', 'Z' } };
 
+    /* Specific operators to avoid range issues with ; */
+    g_rules[R_LT] = (PikaRule){ PIKA_TERMINAL, .data.str = "<" };
+    g_rules[R_GT] = (PikaRule){ PIKA_TERMINAL, .data.str = ">" };
+    g_rules[R_EQ] = (PikaRule){ PIKA_TERMINAL, .data.str = "=" };
+    g_rules[R_QUESTION] = (PikaRule){ PIKA_TERMINAL, .data.str = "?" };
+    g_rules[R_AT] = (PikaRule){ PIKA_TERMINAL, .data.str = "@" };
+
     /* Symbol characters: alpha, alpha-upper, digit, and common operators
      * We need to EXCLUDE delimiters: ( ) [ ] { } and whitespace
      * Valid symbol chars (by ASCII range):
@@ -513,8 +617,9 @@ void omni_grammar_init(void) {
      * We use multiple rules and combine with ALT
      */
     /* We'll define the ranges we need as temporary rules using R_SIGN, R_FLOAT_FRAC, etc. */
-    /* R_SIGN (12) - range ':'  to '@' for < > = etc */
-    g_rules[R_SIGN] = (PikaRule){ PIKA_RANGE, .data.range = { ':', '@' } };  /* :;<=>?@ */
+    /* R_SIGN (12) - range ':'  to '@' for < > = etc - EXCLUDING ; */
+    g_rule_ids[R_SIGN] = ids(6, R_COLON, R_LT, R_GT, R_EQ, R_QUESTION, R_AT);
+    g_rules[R_SIGN] = (PikaRule){ PIKA_ALT, .data.children = { g_rule_ids[R_SIGN], 6 } };
     /* R_FLOAT_FRAC (15) - range '!' to '!' for ! (excluding ") */
     /* We need to exclude " (ASCII 34) from symbol characters */
     /* Old range was '!' to '\'' (33-39) which included " (34) */
@@ -628,12 +733,13 @@ void omni_grammar_init(void) {
     /* R_QUOTE_CHAR is for single quote (quoted expressions like 'x) */
     /* R_DQUOTE is for double quote (string literals like "text") */
 
-    /* STRING_CHAR: matches any character that can appear in a string */
-    /* ALT of: SPACE, DIGIT, ALPHA, ALPHA_UPPER, SYM_SPECIAL, SIGN, FLOAT_FRAC, LBRACE, RBRACE */
-    /* This covers most printable characters including { } for format strings */
-    int* str_char_ids = ids(9, R_SPACE, R_DIGIT, R_ALPHA, R_ALPHA_UPPER, R_SYM_SPECIAL, R_SIGN, R_FLOAT_FRAC, R_LBRACE, R_RBRACE);
-    g_rule_ids[R_STRING_CHAR] = str_char_ids;
-    g_rules[R_STRING_CHAR] = (PikaRule){ PIKA_ALT, .data.children = { str_char_ids, 9 } };
+    /* Negative lookahead for double quote */
+    g_rule_ids[R_NOT_DQUOTE] = ids(1, R_DQUOTE);
+    g_rules[R_NOT_DQUOTE] = (PikaRule){ PIKA_NOT, .data.children = { g_rule_ids[R_NOT_DQUOTE], 1 } };
+
+    /* STRING_CHAR: matches any character except DQUOTE */
+    g_rule_ids[R_STRING_CHAR] = ids(2, R_NOT_DQUOTE, R_ANY);
+    g_rules[R_STRING_CHAR] = (PikaRule){ PIKA_SEQ, .data.children = { g_rule_ids[R_STRING_CHAR], 2 } };
 
     /* STRING_INNER = STRING_CHAR* (zero or more) */
     int* string_inner_ids = ids(1, R_STRING_CHAR);
@@ -659,11 +765,19 @@ void omni_grammar_init(void) {
     g_rule_ids[R_CLF_STRING] = clf_string_ids;
     g_rules[R_CLF_STRING] = (PikaRule){ PIKA_SEQ, .data.children = { clf_string_ids, 5 }, .action = act_clf_string };
 
+    /* ============== Named Character Literals ============== */
+
+    /* Named characters: #\newline, #\space, #\tab, etc. */
+    /* Pattern: HASH + SYM (where SYM is the character name) */
+    int* named_char_ids = ids(2, R_HASH, R_SYM);
+    g_rule_ids[R_NAMED_CHAR] = named_char_ids;
+    g_rules[R_NAMED_CHAR] = (PikaRule){ PIKA_SEQ, .data.children = { named_char_ids, 2 }, .action = act_named_char };
+
     /* ============== Expression ============== */
 
-    /* EXPR = PATH / LIST / ARRAY / TYPE / METADATA / QUOTED / STRING / FMT_STRING / CLF_STRING / ATOM */
-    g_rule_ids[R_EXPR] = ids(10, R_PATH, R_LIST, R_ARRAY, R_TYPE, R_METADATA, R_QUOTED, R_STRING, R_FMT_STRING, R_CLF_STRING, R_ATOM);
-    g_rules[R_EXPR] = (PikaRule){ PIKA_ALT, .data.children = { g_rule_ids[R_EXPR], 10 } };
+    /* EXPR = PATH / LIST / ARRAY / TYPE / METADATA / QUOTED / STRING / FMT_STRING / CLF_STRING / NAMED_CHAR / ATOM */
+    g_rule_ids[R_EXPR] = ids(11, R_PATH, R_LIST, R_ARRAY, R_TYPE, R_METADATA, R_QUOTED, R_STRING, R_FMT_STRING, R_CLF_STRING, R_NAMED_CHAR, R_ATOM);
+    g_rules[R_EXPR] = (PikaRule){ PIKA_ALT, .data.children = { g_rule_ids[R_EXPR], 11 } };
 
     /* PROGRAM_SEQ = EXPR WS PROGRAM_INNER */
     g_rule_ids[R_PROGRAM_SEQ] = ids(3, R_EXPR, R_WS, R_PROGRAM_INNER);

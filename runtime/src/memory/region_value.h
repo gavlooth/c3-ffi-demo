@@ -103,4 +103,15 @@ Obj* mk_syntax_region(Region* r, const char* name, Obj* literals, Obj* rules, Ob
 Obj* mk_ffi_lib_region(Region* r, void* handle, const char* name);
 Obj* mk_ffi_ptr_region(Region* r, void* ptr, const char* type_name, int owned);
 
+/*
+ * Collection constructors
+ */
+Obj* mk_array_region(Region* r, int capacity);
+Obj* mk_dict_region(Region* r);
+Obj* mk_keyword_region(Region* r, const char* name);
+Obj* mk_tuple_region(Region* r, Obj** items, int count);
+Obj* mk_named_tuple_region(Region* r, Obj** keys, Obj** values, int count);
+Obj* mk_generic_region(Region* r, const char* name);
+Obj* mk_kind_region(Region* r, const char* name, Obj** params, int param_count);
+
 #endif // OMNI_REGION_VALUE_H

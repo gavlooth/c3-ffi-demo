@@ -4,7 +4,7 @@
 /* Helper to count list length (returns int instead of Obj*) */
 static int count_list_length(Obj* xs) {
     int len = 0;
-    while (xs && xs->tag == TAG_PAIR) {
+    while (xs && IS_BOXED(xs) && xs->tag == TAG_PAIR) {
         len++;
         xs = xs->b;
     }
@@ -714,7 +714,7 @@ void test_deeply_nested_list(void) {
     /* 100 levels of nesting */
     Obj* p = list;
     int depth = 0;
-    while (p && p->tag == TAG_PAIR) {
+    while (p && IS_BOXED(p) && p->tag == TAG_PAIR) {
         depth++;
         p = raw_car(p);
     }

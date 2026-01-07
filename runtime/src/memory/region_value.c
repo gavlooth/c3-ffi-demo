@@ -5,6 +5,7 @@
  */
 
 #include "region_value.h"
+#include "../internal_types.h"
 
 // ============================================================================
 // Primitive Allocator
@@ -24,7 +25,7 @@ Obj* alloc_obj_region(Region* r, int tag) {
 
     Obj* o = region_alloc(r, sizeof(Obj));
     if (!o) return NULL;
-    o->mark = 0;
+    o->mark = 1;
     o->tag = tag;
     o->generation = 0; // Should ideally use region's generation or global
     o->tethered = 0;
@@ -77,12 +78,12 @@ Obj* mk_float_region(Region* r, double f) {
 // ============================================================================
 
 Obj* mk_sym_region(Region* r, const char* s) {
-    if (!s) s = "";
+    if (!s) return NULL;
     Obj* o = alloc_obj_region(r, TAG_SYM);
     if (!o) return NULL;
 
     size_t len = strlen(s);
-    char* buf = region_alloc(r, len + 1);
+    char* buf = (char*)region_alloc(r, len + 1);
     if (!buf) return NULL;
     strcpy(buf, s);
     o->ptr = buf;
@@ -104,14 +105,27 @@ Obj* mk_code_region(Region* r, const char* s) {
 }
 
 Obj* mk_error_region(Region* r, const char* msg) {
-    if (!msg) msg = "unknown error";
+    if (!msg) return NULL;
     Obj* o = alloc_obj_region(r, TAG_ERROR);
     if (!o) return NULL;
 
     size_t len = strlen(msg);
-    char* buf = region_alloc(r, len + 1);
+    char* buf = (char*)region_alloc(r, len + 1);
     if (!buf) return NULL;
     strcpy(buf, msg);
+    o->ptr = buf;
+    return o;
+}
+
+Obj* mk_keyword_region(Region* r, const char* name) {
+    if (!name) name = "";
+    Obj* o = alloc_obj_region(r, TAG_KEYWORD);
+    if (!o) return NULL;
+
+    size_t len = strlen(name);
+    char* buf = region_alloc(r, len + 1);
+    if (!buf) return NULL;
+    strcpy(buf, name);
     o->ptr = buf;
     return o;
 }
@@ -137,19 +151,134 @@ Obj* mk_box_region(Region* r, Obj* initial) {
 }
 
 // ============================================================================
+// Collections
+// ============================================================================
+
+Obj* mk_array_region(Region* r, int capacity) {
+    Obj* o = alloc_obj_region(r, TAG_ARRAY);
+    if (!o) return NULL;
+
+    Array* arr = region_alloc(r, sizeof(Array));
+    if (!arr) return NULL;
+    
+    arr->capacity = capacity > 0 ? capacity : 8;
+    arr->len = 0;
+    arr->data = region_alloc(r, arr->capacity * sizeof(Obj*));
+    
+    o->ptr = arr;
+    return o;
+}
+
+Obj* mk_dict_region(Region* r) {
+    Obj* o = alloc_obj_region(r, TAG_DICT);
+    if (!o) return NULL;
+
+    Dict* d = region_alloc(r, sizeof(Dict));
+    if (!d) return NULL;
+
+    // Initialize region-resident hash map
+    d->map.bucket_count = 16;
+    d->map.entry_count = 0;
+    d->map.load_factor = 0.75f;
+    d->map.buckets = region_alloc(r, sizeof(HashEntry*) * d->map.bucket_count);
+    memset(d->map.buckets, 0, sizeof(HashEntry*) * d->map.bucket_count);
+    d->map.had_alloc_failure = 0;
+    
+    o->ptr = d;
+    return o;
+}
+
+Obj* mk_tuple_region(Region* r, Obj** items, int count) {
+    Obj* o = alloc_obj_region(r, TAG_TUPLE);
+    if (!o) return NULL;
+
+    Tuple* t = region_alloc(r, sizeof(Tuple) + count * sizeof(Obj*));
+    if (!t) return NULL;
+
+    t->count = count;
+    for (int i = 0; i < count; i++) {
+        t->items[i] = items[i];
+    }
+
+    o->ptr = t;
+    return o;
+}
+
+Obj* mk_named_tuple_region(Region* r, Obj** keys, Obj** values, int count) {
+    Obj* o = alloc_obj_region(r, TAG_NAMED_TUPLE);
+    if (!o) return NULL;
+
+    NamedTuple* nt = region_alloc(r, sizeof(NamedTuple));
+    if (!nt) return NULL;
+
+    nt->count = count;
+    // Separate arrays for keys and values
+    nt->keys = region_alloc(r, count * sizeof(Obj*));
+    nt->values = region_alloc(r, count * sizeof(Obj*));
+
+    if (nt->keys && nt->values) {
+        for (int i = 0; i < count; i++) {
+            nt->keys[i] = keys[i];
+            nt->values[i] = values[i];
+        }
+    }
+
+    o->ptr = nt;
+    return o;
+}
+
+Obj* mk_generic_region(Region* r, const char* name) {
+    Obj* o = alloc_obj_region(r, TAG_GENERIC);
+    if (!o) return NULL;
+    
+    Generic* g = region_alloc(r, sizeof(Generic));
+    if (!g) return NULL;
+    
+    size_t len = strlen(name);
+    g->name = (char*)region_alloc(r, len + 1);
+    strcpy((char*)g->name, name);
+    
+    o->ptr = g;
+    return o;
+}
+
+Obj* mk_kind_region(Region* r, const char* name, Obj** params, int param_count) {
+    Obj* o = alloc_obj_region(r, TAG_KIND);
+    if (!o) return NULL;
+    
+    Kind* k = region_alloc(r, sizeof(Kind));
+    if (!k) return NULL;
+    
+    size_t len = strlen(name);
+    k->name = (char*)region_alloc(r, len + 1);
+    strcpy((char*)k->name, name);
+
+    k->param_count = param_count;
+    if (param_count > 0 && params) {
+        k->params = region_alloc(r, sizeof(Obj*) * param_count);
+        for (int i = 0; i < param_count; i++) {
+            k->params[i] = params[i];
+        }
+    } else {
+        k->params = NULL;
+    }
+    
+    o->ptr = k;
+    return o;
+}
+
+// ============================================================================
 // Lambda/Closure - Simplified/Stubs
 // ============================================================================
 
-// Legacy mk_lambda was for AST interpreter. 
-// New runtime uses compiled closures via mk_closure (not region-specific yet).
 Obj* mk_lambda_region(Region* r, Obj* params, Obj* body, Obj* env) {
     (void)r; (void)params; (void)body; (void)env;
-    return NULL; // Deprecated
+    return NULL;
 }
 
 Obj* mk_lambda_with_defaults_region(Region* r, Obj* params, Obj* body, Obj* env, Obj* defaults) {
     (void)r; (void)params; (void)body; (void)env; (void)defaults;
-    return NULL; // Deprecated
+    return NULL;
 }
 
 // ============================================================================

@@ -24,6 +24,7 @@ extern "C" {
 typedef struct Obj Obj;
 typedef struct Closure Closure;
 typedef struct Arena Arena;
+typedef struct Region Region;
 
 /* Forward declaration for internal GenObj (legacy) */
 struct GenObj;
@@ -51,6 +52,53 @@ typedef struct BorrowRef {
 /* Closure function signature */
 typedef Obj* (*ClosureFn)(Obj** captures, Obj** args, int argc);
 
+/* ========== Closure and Generic Structures ========== */
+
+/*
+ * Closure - Single-dispatch function (traditional Lisp)
+ * Stored in an Obj with tag=TAG_CLOSURE, using the obj->a field for the closure pointer.
+ */
+typedef struct Closure {
+    ClosureFn fn;           /* Function pointer */
+    Obj** captures;         /* Captured variables (boxed array) */
+    int capture_count;      /* Number of captures */
+    int arity;              /* Expected number of arguments */
+    const char* name;      /* Function name (for debugging) */
+} Closure;
+
+/*
+ * MethodInfo - A single method in a generic function's method table.
+ * Methods are specialized for specific argument types.
+ */
+typedef struct MethodInfo {
+    Obj** param_kinds;     /* Array of Kind objects for each parameter */
+    int param_count;        /* Number of parameters */
+    ClosureFn impl;         /* Method implementation */
+    int specificity;        /* Specificity score (higher = more specific) */
+    struct MethodInfo* next; /* Next method in the table */
+} MethodInfo;
+
+/*
+ * Generic - Multi-dispatch generic function.
+ * Contains a method table sorted by specificity.
+ * Stored in an Obj with tag=TAG_GENERIC, using the obj->a field for the generic pointer.
+ */
+typedef struct Generic {
+    const char* name;       /* Generic function name */
+    MethodInfo* methods;    /* Method table (sorted by specificity) */
+    int method_count;       /* Total number of methods */
+} Generic;
+
+/*
+ * Kind - Type object representing a primitive or parametric type.
+ * Stored in an Obj with tag=TAG_KIND, using the obj->ptr field (or a) for the Kind*.
+ */
+typedef struct Kind {
+    char* name;            /* Type name (e.g., "Int", "List", "Pair") */
+    Obj** params;          /* Type parameters (for parametric types) */
+    int param_count;       /* Number of parameters */
+} Kind;
+
 /* ========== Object Tags ========== */
 
 typedef enum {
@@ -65,6 +113,14 @@ typedef enum {
     TAG_ERROR,
     TAG_ATOM,
     TAG_THREAD,
+    TAG_ARRAY,
+    TAG_DICT,
+    TAG_STRING,
+    TAG_KEYWORD,
+    TAG_TUPLE,
+    TAG_NAMED_TUPLE,
+    TAG_GENERIC,
+    TAG_KIND,
     TAG_NOTHING
 } ObjTag;
 
@@ -104,6 +160,9 @@ typedef enum {
 #define IS_BOXED(p)          (GET_IMM_TAG(p) == IMM_TAG_PTR && (p) != NULL)
 
 /* ---- Immediate Integers ---- */
+#define IMM_INT_MAX      ((1LL << 60) - 1)
+#define IMM_INT_MIN      (-(1LL << 60))
+
 #define MAKE_INT_IMM(n)      ((Obj*)(((uintptr_t)(n) << 3) | IMM_TAG_INT))
 #define INT_IMM_VALUE(p)     ((long)((intptr_t)(p) >> 3))
 
@@ -299,10 +358,27 @@ static inline void tether_release(TetheredRef ref) {
 
 /* Safe integer extraction - works for all immediate types */
 static inline long obj_to_int(Obj* p) {
+    if (p == NULL) return 0;
     if (IS_IMMEDIATE_INT(p)) return INT_IMM_VALUE(p);
     if (IS_IMMEDIATE_BOOL(p)) return p == OMNI_TRUE ? 1 : 0;
     if (IS_IMMEDIATE_CHAR(p)) return CHAR_IMM_VALUE(p);
-    return p ? p->i : 0;
+    if (IS_BOXED(p)) {
+        if (p->tag == TAG_INT) return p->i;
+        if (p->tag == TAG_FLOAT) return (long)p->f;
+    }
+    return 0;
+}
+
+static inline double obj_to_float(Obj* p) {
+    if (p == NULL) return 0.0;
+    if (IS_IMMEDIATE_INT(p)) return (double)INT_IMM_VALUE(p);
+    if (IS_IMMEDIATE_BOOL(p)) return p == OMNI_TRUE ? 1.0 : 0.0;
+    if (IS_IMMEDIATE_CHAR(p)) return (double)CHAR_IMM_VALUE(p);
+    if (IS_BOXED(p)) {
+        if (p->tag == TAG_FLOAT) return p->f;
+        if (p->tag == TAG_INT) return (double)p->i;
+    }
+    return 0.0;
 }
 
 /* Safe tag extraction - works for all immediate types */
@@ -317,13 +393,13 @@ static inline int obj_tag(Obj* p) {
 /* Check if value is an integer (boxed or immediate) */
 static inline int is_int(Obj* p) {
     if (IS_IMMEDIATE_INT(p) || IS_IMMEDIATE_BOOL(p)) return 1;
-    return p && p->tag == TAG_INT;
+    return p && IS_BOXED(p) && p->tag == TAG_INT;
 }
 
 /* Check if value is a character (boxed or immediate) */
 static inline int is_char_val(Obj* p) {
     if (IS_IMMEDIATE_CHAR(p)) return 1;
-    return p && p->tag == TAG_CHAR;
+    return p && IS_BOXED(p) && p->tag == TAG_CHAR;
 }
 
 /* Safe inc_ref that handles immediates */
@@ -345,7 +421,7 @@ static inline void dec_ref_safe(Obj* x) {
 /* Character extraction (needs Obj defined) */
 static inline long obj_to_char(Obj* p) {
     if (IS_IMMEDIATE_CHAR(p)) return CHAR_IMM_VALUE(p);
-    if (p && p->tag == TAG_CHAR) return p->i;
+    if (p && IS_BOXED(p) && p->tag == TAG_CHAR) return p->i;
     return 0;
 }
 
@@ -502,6 +578,105 @@ Obj* prim_compose(Obj* f, Obj* g);
 
 Obj* call_closure(Obj* clos, Obj** args, int argc);
 
+/* ========== Generic Function Operations (Multiple Dispatch) ========== */
+
+/* Create a new generic function object */
+Obj* mk_generic(const char* name);
+
+/* Add a method to a generic function. Returns the generic object for chaining. */
+Obj* generic_add_method(Obj* generic_obj, Obj** param_kinds, int param_count, ClosureFn impl);
+
+/* Call a generic function with multiple dispatch. Selects the most specific method. */
+Obj* call_generic(Obj* generic_obj, Obj** args, int argc);
+
+/* Compute specificity score for a method (higher = more specific) */
+int compute_specificity(Obj** param_kinds, int param_count);
+
+/* Check if a method is more specific than another (for sorting) */
+int is_more_specific(Obj* kind_a, Obj* kind_b);
+
+/* ========== Kind (Type) Operations for Parametric Types ========== */
+
+/* Create a Kind object representing a type */
+Obj* mk_kind(const char* name, Obj** params, int param_count);
+
+/* Check if two Kinds are equal */
+int kind_equals(Obj* a, Obj* b);
+
+/* Check if kind_a is a subtype of kind_b (for specificity calculation) */
+int is_subtype(Obj* kind_a, Obj* kind_b);
+
+/* ========== Pika Grammar Engine Integration ========== */
+
+/*
+ * Parse a grammar specification string into a grammar object.
+ * The spec string uses the Pika meta-grammar format.
+ * Returns a grammar object wrapped in an Obj (TAG_BOX).
+ *
+ * Note: Only available when compiled with OMNI_PIKA_ENABLED.
+ */
+Obj* prim_pika_parse_grammar(Obj* spec_str);
+
+/*
+ * Match a string against a grammar rule.
+ * Args:
+ *   - grammar_obj: Grammar object from prim_pika_parse_grammar
+ *   - rule_name: Symbol naming the rule to match
+ *   - input_str: String to parse
+ * Returns: List of match results (each as a pair of (start . matched-text))
+ *          or nil if no matches.
+ *
+ * Note: Only available when compiled with OMNI_PIKA_ENABLED.
+ */
+Obj* prim_pika_match(Obj* grammar_obj, Obj* rule_name, Obj* input_str);
+
+/* ========== Deep Path Mutation ========== */
+
+/*
+ * Mutate a nested field path in a data structure.
+ * Args:
+ *   - root: The root object (dict/record)
+ *   - path_str: Dotted path string (e.g., "user.address.city")
+ *   - new_value: The value to set at the leaf
+ * Returns: The modified root object
+ *
+ * Note: This is a simplified implementation; full support requires
+ * proper dict/record representation and get/set operations.
+ */
+Obj* prim_deep_put(Obj* root, const char* path_str, Obj* new_value);
+
+/* ========== Infinite Iterators ========== */
+
+/*
+ * Create an infinite lazy sequence from a function and seed.
+ * Args:
+ *   - fn: Closure function that takes current value and returns next
+ *   - seed: Starting value
+ * Returns: Iterator object
+ *
+ * Example: (iterate inc 0) produces sequence: 0, 1, 2, 3, ...
+ */
+Obj* prim_iterate(Obj* fn, Obj* seed);
+
+/*
+ * Get the next value from an iterator.
+ * Args:
+ *   - iter_obj: Iterator from prim_iterate
+ * Returns: Current value and advances the iterator
+ */
+Obj* prim_iter_next(Obj* iter_obj);
+
+/*
+ * Take n elements from a sequence/iterator.
+ * Args:
+ *   - n: Number of elements to take
+ *   - seq: Iterator or list
+ * Returns: List of first n elements
+ *
+ * For iterators, advances the iterator. For lists, returns first n elements.
+ */
+Obj* prim_take(long n, Obj* seq);
+
 /* ========== Truthiness ========== */
 
 int is_truthy(Obj* x);
@@ -586,35 +761,65 @@ extern int STACK_PTR;
 
 /* ========== Region-RC: Region-based memory management ========== */
 
-typedef struct Region Region;
+struct Region;
 
 // Lifecycle
-Region* region_create(void);
-void region_destroy_if_dead(Region* r);
+struct Region* region_create(void);
+void region_destroy_if_dead(struct Region* r);
 
 // Scope Management
-void region_exit(Region* r);
+void region_exit(struct Region* r);
 
 // RC Management (Internal - use RegionRef for high level)
-void region_retain_internal(Region* r);
-void region_release_internal(Region* r);
+void region_retain_internal(struct Region* r);
+void region_release_internal(struct Region* r);
 
 // Tethering
-void region_tether_start(Region* r);
-void region_tether_end(Region* r);
+void region_tether_start(struct Region* r);
+void region_tether_end(struct Region* r);
 
 // Allocation
-void* region_alloc(Region* r, size_t size);
-void* transmigrate(void* root, Region* src_region, Region* dest_region);
+void* region_alloc(struct Region* r, size_t size);
+void* transmigrate(void* root, struct Region* src_region, struct Region* dest_region);
 
 /* Region-aware constructors */
-Obj* mk_int_region(Region* r, long i);
-Obj* mk_char_region(Region* r, long codepoint);
-Obj* mk_float_region(Region* r, double f);
-Obj* mk_sym_region(Region* r, const char* s);
-Obj* mk_cell_region(Region* r, Obj* car, Obj* cdr);
-Obj* mk_box_region(Region* r, Obj* initial);
-Obj* mk_error_region(Region* r, const char* msg);
+Obj* mk_int_region(struct Region* r, long i);
+Obj* mk_char_region(struct Region* r, long codepoint);
+Obj* mk_float_region(struct Region* r, double f);
+Obj* mk_sym_region(struct Region* r, const char* s);
+Obj* mk_cell_region(struct Region* r, Obj* car, Obj* cdr);
+Obj* mk_box_region(struct Region* r, Obj* initial);
+Obj* mk_error_region(struct Region* r, const char* msg);
+
+// Collection constructors
+Obj* mk_array_region(struct Region* r, int capacity);
+Obj* mk_dict_region(struct Region* r);
+Obj* mk_keyword_region(struct Region* r, const char* name);
+Obj* mk_tuple_region(struct Region* r, Obj** items, int count);
+Obj* mk_named_tuple_region(struct Region* r, Obj** keys, Obj** values, int count);
+Obj* mk_generic_region(struct Region* r, const char* name);
+Obj* mk_kind_region(struct Region* r, const char* name, Obj** params, int param_count);
+
+Obj* mk_array(int capacity);
+void array_push(Obj* arr, Obj* val);
+Obj* array_get(Obj* arr, int idx);
+void array_set(Obj* arr, int idx, Obj* val);
+int array_length(Obj* arr);
+
+Obj* mk_dict(void);
+void dict_set(Obj* dict, Obj* key, Obj* val);
+Obj* dict_get(Obj* dict, Obj* key);
+
+Obj* mk_keyword(const char* name);
+
+Obj* mk_tuple(Obj** items, int count);
+Obj* tuple_get(Obj* tup, int idx);
+int tuple_length(Obj* tup);
+
+Obj* mk_named_tuple(Obj** keys, Obj** values, int count);
+Obj* named_tuple_get(Obj* tup, Obj* key);
+
+Obj* mk_generic(const char* name);
 
 #ifdef __cplusplus
 }

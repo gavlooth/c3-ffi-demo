@@ -24,6 +24,7 @@ typedef struct OmniArena OmniArena;
 typedef enum {
     OMNI_INT = 0,      /* Integer */
     OMNI_SYM,          /* Symbol */
+    OMNI_STRING,       /* String literal */
     OMNI_CELL,         /* Cons cell */
     OMNI_NIL,          /* Nil/empty list */
     OMNI_PRIM,         /* Primitive function */
@@ -251,6 +252,7 @@ OmniArena* omni_ast_arena_get(void);
 OmniValue* omni_new_int(int64_t i);
 OmniValue* omni_new_float(double f);
 OmniValue* omni_new_sym(const char* s);
+OmniValue* omni_new_string(const char* s);
 OmniValue* omni_new_char(int32_t c);
 OmniValue* omni_new_cell(OmniValue* car, OmniValue* cdr);
 OmniValue* omni_new_prim(OmniPrimFn fn);
@@ -282,6 +284,7 @@ static inline bool omni_is_nil(OmniValue* v) { return v == NULL || v == omni_nil
 static inline bool omni_is_int(OmniValue* v) { return v != NULL && v->tag == OMNI_INT; }
 static inline bool omni_is_float(OmniValue* v) { return v != NULL && v->tag == OMNI_FLOAT; }
 static inline bool omni_is_sym(OmniValue* v) { return v != NULL && v->tag == OMNI_SYM; }
+static inline bool omni_is_string(OmniValue* v) { return v != NULL && v->tag == OMNI_STRING; }
 static inline bool omni_is_char(OmniValue* v) { return v != NULL && v->tag == OMNI_CHAR; }
 static inline bool omni_is_cell(OmniValue* v) { return v != NULL && v->tag == OMNI_CELL; }
 static inline bool omni_is_prim(OmniValue* v) { return v != NULL && v->tag == OMNI_PRIM; }

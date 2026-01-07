@@ -30,7 +30,7 @@ void test_prim_add_floats(void) {
     Obj* r = prim_add(a, b);
     ASSERT_NOT_NULL(r);
     ASSERT_EQ(obj_tag(r), TAG_FLOAT);
-    ASSERT_EQ_FLOAT(num_to_double(r), 6.0, 0.0001);
+    ASSERT_EQ_FLOAT(r->f, 6.0, 0.0001);
     dec_ref(a); dec_ref(b); dec_ref(r);
     PASS();
 }
@@ -41,7 +41,7 @@ void test_prim_add_int_float(void) {
     Obj* r = prim_add(a, b);
     ASSERT_NOT_NULL(r);
     ASSERT_EQ(obj_tag(r), TAG_FLOAT);
-    ASSERT_EQ_FLOAT(num_to_double(r), 5.5, 0.0001);
+    ASSERT_EQ_FLOAT(r->f, 5.5, 0.0001);
     dec_ref(a); dec_ref(b); dec_ref(r);
     PASS();
 }
@@ -148,7 +148,7 @@ void test_prim_div_floats(void) {
     Obj* a = mk_float(10.0);
     Obj* b = mk_float(4.0);
     Obj* r = prim_div(a, b);
-    ASSERT_EQ_FLOAT(num_to_double(r), 2.5, 0.0001);
+    ASSERT_EQ_FLOAT(r->f, 2.5, 0.0001);
     dec_ref(a); dec_ref(b); dec_ref(r);
     PASS();
 }
@@ -475,7 +475,7 @@ void test_int_to_char(void) {
     Obj* n = mk_int(65);
     Obj* r = int_to_char(n);
     ASSERT_EQ(obj_tag(r), TAG_CHAR);
-    ASSERT_EQ(obj_to_char_val(r), 65);
+    ASSERT_EQ(obj_to_char(r), 65);
     dec_ref(n); dec_ref(r);
     PASS();
 }
@@ -484,7 +484,7 @@ void test_int_to_char_immediate(void) {
     Obj* n = mk_int_unboxed(66);
     Obj* r = int_to_char(n);
     ASSERT_EQ(obj_tag(r), TAG_CHAR);
-    ASSERT_EQ(obj_to_char_val(r), 66);
+    ASSERT_EQ(obj_to_char(r), 66);
     dec_ref(r);
     PASS();
 }
@@ -493,7 +493,7 @@ void test_int_to_float(void) {
     Obj* n = mk_int(42);
     Obj* r = int_to_float(n);
     ASSERT_EQ(obj_tag(r), TAG_FLOAT);
-    ASSERT_EQ_FLOAT(num_to_double(r), 42.0, 0.0001);
+    ASSERT_EQ_FLOAT(r->f, 42.0, 0.0001);
     dec_ref(n); dec_ref(r);
     PASS();
 }
@@ -510,7 +510,7 @@ void test_float_to_int(void) {
 void test_prim_floor(void) {
     Obj* f = mk_float(3.7);
     Obj* r = prim_floor(f);
-    ASSERT_EQ_FLOAT(num_to_double(r), 3.0, 0.0001);
+    ASSERT_EQ_FLOAT(r->f, 3.0, 0.0001);
     dec_ref(f); dec_ref(r);
     PASS();
 }
@@ -518,7 +518,7 @@ void test_prim_floor(void) {
 void test_prim_floor_negative(void) {
     Obj* f = mk_float(-3.2);
     Obj* r = prim_floor(f);
-    ASSERT_EQ_FLOAT(num_to_double(r), -4.0, 0.0001);
+    ASSERT_EQ_FLOAT(r->f, -4.0, 0.0001);
     dec_ref(f); dec_ref(r);
     PASS();
 }
@@ -526,7 +526,7 @@ void test_prim_floor_negative(void) {
 void test_prim_ceil(void) {
     Obj* f = mk_float(3.2);
     Obj* r = prim_ceil(f);
-    ASSERT_EQ_FLOAT(num_to_double(r), 4.0, 0.0001);
+    ASSERT_EQ_FLOAT(r->f, 4.0, 0.0001);
     dec_ref(f); dec_ref(r);
     PASS();
 }
@@ -534,7 +534,7 @@ void test_prim_ceil(void) {
 void test_prim_ceil_negative(void) {
     Obj* f = mk_float(-3.7);
     Obj* r = prim_ceil(f);
-    ASSERT_EQ_FLOAT(num_to_double(r), -3.0, 0.0001);
+    ASSERT_EQ_FLOAT(r->f, -3.0, 0.0001);
     dec_ref(f); dec_ref(r);
     PASS();
 }

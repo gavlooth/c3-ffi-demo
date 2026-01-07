@@ -78,22 +78,68 @@ OmniLisp functions support **Multiple Dispatch**, allowing a single name to refe
 
 ## 3. The Type System (Kind Domain)
 
-### 3.1 Annotations vs. Constructors
+OmniLisp adopts a **Julia-compatible Type System** defined via the Uniform Definition syntax `(define {Kind ...} ...)`.
+
+### 3.1 Type Definitions
+
+#### Abstract Types
+Abstract types cannot be instantiated. They serve as nodes in the type graph.
+
+```lisp
+;; Abstract type 'Number'
+(define {abstract Number})
+
+;; Abstract type with parent
+(define {abstract Integer :< Number})
+```
+
+#### Primitive Types
+Types with a fixed bit-width representation, usually provided by the host/compiler.
+
+```lisp
+;; Define a 64-bit primitive type
+(define {primitive Int64 :< Integer} 64)
+```
+
+#### Composite Types (Structs)
+Product types that hold named fields. Immutable by default.
+
+```lisp
+;; Immutable Struct
+(define {struct Point :< Any}
+  [x {Int}]
+  [y {Int}])
+
+;; Mutable Struct
+(define {mutable-struct Person}
+  [name {String}]
+  [age  {Int}])
+```
+
+#### Union Types
+Represents a value that can be one of several types.
+
+```lisp
+(define {union IntOrString} {Int} {String})
+```
+
+#### Parametric Types
+Types that take type parameters (Generics).
+
+```lisp
+;; Parametric Struct
+(define {struct Node [T]}
+  [value {T}]
+  [next  {Option {Node T}}])
+```
+
+### 3.2 Annotations vs. Constructors
 *   **Annotation `{}`**: Used in definitions to restrict a slot.
 *   **Constructor `()`**: Used at the value level to create instances.
 
 ```lisp
 (define x {Int} 5)           ; {Int} is an annotation
 (define p (Point 10 20))     ; (Point) is a constructor (Flow)
-```
-
-### 3.2 Parametric Types
-Parameters inside an annotation use the **Slot `[]`** to signify a type variable.
-
-```lisp
-{Iter Int}                   ; Concrete: Iter applied to Int
-{Iter [T]}                   ; Parametric: T is a type variable Slot
-{Option {List [T]}}          ; Recursive parametric
 ```
 
 ### 3.3 First-Class Kinds
@@ -151,7 +197,7 @@ OmniLisp uses **Algebraic Effects** as its primary mechanism for non-local contr
 *   **`resume`**: Resumes the suspended computation from within a handler.
 
 ```lisp
-(defeffect ask :one-shot)
+(define {effect ask} :one-shot)
 
 (handle
   (+ 1 (perform ask nothing))
@@ -184,6 +230,8 @@ Fibers communicate via **Channels**, enabling ownership transfer without shared-
 (with-fibers
   (define c (chan 3))
   (spawn (fiber (lambda [] (send c "ping"))))
+```
+
 #### Ownership Transfer
 Sending a value through a channel performs an **Ownership Transfer**. The sending fiber/thread yields control of the object's lifetime to the receiver, preventing data races by ensuring only one owner exists at any time. Immutable objects (frozen) can be shared safely across Tier 1 threads.
 
@@ -222,3 +270,71 @@ For dynamic data, OmniLisp uses **Region-Based Reference Counting**.
 The following are legacy and should not be used:
 *   `violet.*`: Use core primitives instead.
 *   `scicomp.*`: Pending modern refactor.
+
+
+### Revisions
+
+The `(define ...)` form unifies all top-level definitions.
+
+#### Abstract Types
+```lisp
+(define {abstract Animal} Any)            
+(define {abstract Mammal} Animal)
+```
+
+#### Concrete Structs (Immutable Default)
+```lisp
+(define {struct Point}
+  [x {Float}]
+  [y {Float}])
+
+;; With Parent Type (Metadata Syntax)
+(define ^:parent {Shape} {struct Circle}
+  [center {Point}]
+  [radius {Float}])
+```
+
+#### Parametric Types
+```lisp
+(define {struct [Pair T]}
+  [first {T}]
+  [second {T}])
+
+;; Parametric with Parent
+(define ^:parent {Any} {struct [Entry K V]}
+  [key {K}]
+  [value {V}])
+```
+
+#### Mutable Structs
+```lisp
+(define {struct Player}
+  [^:mutable hp {Int}]  ; Field-level mutability
+  [name {String}])
+
+;; Whole struct mutable sugar
+(define ^:mutable {struct Player} ...)
+```
+
+#### Enums (Sum Types)
+```lisp
+(define {enum Color} Red Green Blue)
+
+(define {enum Option T}
+  (Some [value {T}])
+  None)
+```
+
+---
+
+
+## 2. Function Definitions & Signatures
+
+use these
+### 2.1 Parameter Forms
+| Syntax | Meaning |
+|--------|---------|
+| `x` | Untyped parameter |
+| `[x {Int}]` | Typed parameter |
+| `[x 10]` | Parameter with default value |
+| `[x {Int} 10]` | Typed parameter with default |

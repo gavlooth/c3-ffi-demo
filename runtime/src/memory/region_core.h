@@ -26,6 +26,10 @@ void region_exit(Region* r);
 void region_retain_internal(Region* r);
 void region_release_internal(Region* r);
 
+// Global Region Support
+Region* region_get_or_create(void);
+char* region_strdup(Region* r, const char* s);
+
 // Tethering
 void region_tether_start(Region* r);
 void region_tether_end(Region* r);

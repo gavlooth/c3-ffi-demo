@@ -40,6 +40,7 @@ extern const char* current_suite;
     do { \
         tests_run++; \
         printf("  %s: ", name); \
+        fflush(stdout); \
     } while(0)
 
 #define PASS() \

@@ -53,6 +53,13 @@ void omni_codegen_free(CodeGenContext* ctx) {
     }
     free(ctx->lambda_defs.defs);
 
+    /* Free function tracking for multiple dispatch */
+    for (size_t i = 0; i < ctx->defined_functions.count; i++) {
+        free(ctx->defined_functions.names[i]);
+    }
+    free(ctx->defined_functions.names);
+    free(ctx->defined_functions.definition_count);
+
     if (ctx->analysis) {
         omni_analysis_free(ctx->analysis);
     }
@@ -130,7 +137,7 @@ void omni_codegen_dedent(CodeGenContext* ctx) {
 
 char* omni_codegen_mangle(const char* name) {
     size_t len = strlen(name);
-    char* result = malloc(len * 2 + 8);  /* Worst case expansion */
+    char* result = malloc(len * 5 + 8);  /* Worst case expansion */
     char* p = result;
 
     *p++ = 'o';
@@ -278,41 +285,41 @@ void omni_codegen_runtime_header(CodeGenContext* ctx) {
         omni_codegen_emit_raw(ctx, "} Region;\n");
         omni_codegen_emit_raw(ctx, "\n");
         omni_codegen_emit_raw(ctx, "/* Region-RC forward declarations */\n");
-        omni_codegen_emit_raw(ctx, "Region* region_create(void);\n");
-        omni_codegen_emit_raw(ctx, "void region_exit(Region* r);\n");
-        omni_codegen_emit_raw(ctx, "void region_destroy_if_dead(Region* r);\n");
-        omni_codegen_emit_raw(ctx, "void* transmigrate(void* root, Region* src_region, Region* dest_region);\n");
-        omni_codegen_emit_raw(ctx, "void* region_alloc(Region* r, size_t size);\n");
-        omni_codegen_emit_raw(ctx, "void region_tether_start(Region* r);\n");
-        omni_codegen_emit_raw(ctx, "void region_tether_end(Region* r);\n");
+        omni_codegen_emit_raw(ctx, "struct Region* region_create(void);\n");
+        omni_codegen_emit_raw(ctx, "void region_exit(struct Region* r);\n");
+        omni_codegen_emit_raw(ctx, "void region_destroy_if_dead(struct Region* r);\n");
+        omni_codegen_emit_raw(ctx, "void* transmigrate(void* root, struct Region* src_region, struct Region* dest_region);\n");
+        omni_codegen_emit_raw(ctx, "void* region_alloc(struct Region* r, size_t size);\n");
+        omni_codegen_emit_raw(ctx, "void region_tether_start(struct Region* r);\n");
+        omni_codegen_emit_raw(ctx, "void region_tether_end(struct Region* r);\n");
         omni_codegen_emit_raw(ctx, "\n");
 
         /* Region-RC: Region-aware constructors (allocate from region) */
         omni_codegen_emit_raw(ctx, "/* Region-aware constructors */\n");
-        omni_codegen_emit_raw(ctx, "static Obj* mk_int_region(Region* r, int64_t i) {\n");
+        omni_codegen_emit_raw(ctx, "static Obj* mk_int_region(struct Region* r, int64_t i) {\n");
         omni_codegen_emit_raw(ctx, "    Obj* o = region_alloc(r, sizeof(Obj));\n");
         omni_codegen_emit_raw(ctx, "    o->tag = T_INT; o->rc = 1; o->i = i;\n");
         omni_codegen_emit_raw(ctx, "    return o;\n");
         omni_codegen_emit_raw(ctx, "}\n\n");
 
-        omni_codegen_emit_raw(ctx, "static Obj* mk_sym_region(Region* r, const char* s) {\n");
+        omni_codegen_emit_raw(ctx, "static Obj* mk_sym_region(struct Region* r, const char* s) {\n");
         omni_codegen_emit_raw(ctx, "    Obj* o = region_alloc(r, sizeof(Obj));\n");
         omni_codegen_emit_raw(ctx, "    o->tag = T_SYM; o->rc = 1; o->s = strdup(s);\n");
         omni_codegen_emit_raw(ctx, "    return o;\n");
         omni_codegen_emit_raw(ctx, "}\n\n");
 
-        omni_codegen_emit_raw(ctx, "static Obj* mk_bool_region(Region* r, int v) {\n");
+        omni_codegen_emit_raw(ctx, "static Obj* mk_bool_region(struct Region* r, int v) {\n");
         omni_codegen_emit_raw(ctx, "    return mk_sym_region(r, v ? \"true\" : \"false\");\n");
         omni_codegen_emit_raw(ctx, "}\n\n");
 
-        omni_codegen_emit_raw(ctx, "static Obj* mk_cell_region(Region* r, Obj* car, Obj* cdr) {\n");
+        omni_codegen_emit_raw(ctx, "static Obj* mk_cell_region(struct Region* r, Obj* car, Obj* cdr) {\n");
         omni_codegen_emit_raw(ctx, "    Obj* o = region_alloc(r, sizeof(Obj));\n");
         omni_codegen_emit_raw(ctx, "    o->tag = T_CELL; o->rc = 1;\n");
         omni_codegen_emit_raw(ctx, "    o->cell.car = car; o->cell.cdr = cdr;\n");
         omni_codegen_emit_raw(ctx, "    return o;\n");
         omni_codegen_emit_raw(ctx, "}\n\n");
 
-        omni_codegen_emit_raw(ctx, "static Obj* mk_float_region(Region* r, double f) {\n");
+        omni_codegen_emit_raw(ctx, "static Obj* mk_float_region(struct Region* r, double f) {\n");
         omni_codegen_emit_raw(ctx, "    Obj* o = region_alloc(r, sizeof(Obj));\n");
         omni_codegen_emit_raw(ctx, "    o->tag = T_FLOAT; o->rc = 1; o->f = f;\n");
         omni_codegen_emit_raw(ctx, "    return o;\n");
@@ -454,7 +461,7 @@ void omni_codegen_runtime_header(CodeGenContext* ctx) {
         omni_codegen_emit_raw(ctx, " */\n\n");
 
         omni_codegen_emit_raw(ctx, "/* Reuse an object's memory for an integer */\n");
-        omni_codegen_emit_raw(ctx, "static Obj* reuse_as_int(Region* r, Obj* old, int64_t val) {\n");
+        omni_codegen_emit_raw(ctx, "static Obj* reuse_as_int(struct Region* r, Obj* old, int64_t val) {\n");
         omni_codegen_emit_raw(ctx, "    if (!old || old == NIL || old == NOTHING) return mk_int_region(r, val);\n");
         omni_codegen_emit_raw(ctx, "    /* Clear old content if needed */\n");
         omni_codegen_emit_raw(ctx, "    if (old->tag == T_SYM && old->s) free(old->s);\n");
@@ -469,7 +476,7 @@ void omni_codegen_runtime_header(CodeGenContext* ctx) {
         omni_codegen_emit_raw(ctx, "}\n\n");
 
         omni_codegen_emit_raw(ctx, "/* Reuse an object's memory for a cell/cons */\n");
-        omni_codegen_emit_raw(ctx, "static Obj* reuse_as_cell(Region* r, Obj* old, Obj* car, Obj* cdr) {\n");
+        omni_codegen_emit_raw(ctx, "static Obj* reuse_as_cell(struct Region* r, Obj* old, Obj* car, Obj* cdr) {\n");
         omni_codegen_emit_raw(ctx, "    if (!old || old == NIL || old == NOTHING) return mk_cell_region(r, car, cdr);\n");
         omni_codegen_emit_raw(ctx, "    /* Clear old content if needed */\n");
         omni_codegen_emit_raw(ctx, "    if (old->tag == T_SYM && old->s) free(old->s);\n");
@@ -485,7 +492,7 @@ void omni_codegen_runtime_header(CodeGenContext* ctx) {
         omni_codegen_emit_raw(ctx, "}\n\n");
 
         omni_codegen_emit_raw(ctx, "/* Reuse an object's memory for a float */\n");
-        omni_codegen_emit_raw(ctx, "static Obj* reuse_as_float(Region* r, Obj* old, double val) {\n");
+        omni_codegen_emit_raw(ctx, "static Obj* reuse_as_float(struct Region* r, Obj* old, double val) {\n");
         omni_codegen_emit_raw(ctx, "    if (!old || old == NIL || old == NOTHING) return mk_float_region(r, val);\n");
         omni_codegen_emit_raw(ctx, "    /* Clear old content if needed */\n");
         omni_codegen_emit_raw(ctx, "    if (old->tag == T_SYM && old->s) free(old->s);\n");
@@ -548,10 +555,10 @@ void omni_codegen_runtime_header(CodeGenContext* ctx) {
         omni_codegen_emit_raw(ctx, "    struct Region* parent;  /* Enclosing region */\n");
         omni_codegen_emit_raw(ctx, "} Region;\n\n");
 
-        omni_codegen_emit_raw(ctx, "static Region* _current_region = NULL;\n\n");
+        omni_codegen_emit_raw(ctx, "static struct Region* _current_region = NULL;\n\n");
 
-        omni_codegen_emit_raw(ctx, "static Region* region_new(int id) {\n");
-        omni_codegen_emit_raw(ctx, "    Region* r = malloc(sizeof(Region));\n");
+        omni_codegen_emit_raw(ctx, "static struct Region* region_new(int id) {\n");
+        omni_codegen_emit_raw(ctx, "    struct Region* r = malloc(sizeof(Region));\n");
         omni_codegen_emit_raw(ctx, "    r->id = id;\n");
         omni_codegen_emit_raw(ctx, "    r->external_refcount = 0;\n");
         omni_codegen_emit_raw(ctx, "    r->arena = NULL;  /* Could use arena allocator */\n");
@@ -560,7 +567,7 @@ void omni_codegen_runtime_header(CodeGenContext* ctx) {
         omni_codegen_emit_raw(ctx, "    return r;\n");
         omni_codegen_emit_raw(ctx, "}\n\n");
 
-        omni_codegen_emit_raw(ctx, "static void region_end(Region* r) {\n");
+        omni_codegen_emit_raw(ctx, "static void region_end(struct Region* r) {\n");
         omni_codegen_emit_raw(ctx, "    if (!r) return;\n");
         omni_codegen_emit_raw(ctx, "    _current_region = r->parent;\n");
         omni_codegen_emit_raw(ctx, "    /* If no external refs, could bulk-free arena here */\n");
@@ -881,6 +888,29 @@ static void codegen_sym(CodeGenContext* ctx, OmniValue* expr) {
     }
 }
 
+static void codegen_string(CodeGenContext* ctx, OmniValue* expr) {
+    /* TODO: Use mk_string when runtime support is complete */
+    omni_codegen_emit_raw(ctx, "mk_sym(\"%s\")", expr->str_val);
+}
+
+static void codegen_type_lit(CodeGenContext* ctx, OmniValue* expr) {
+    if (expr->type_lit.param_count == 0) {
+        omni_codegen_emit_raw(ctx, "mk_kind(\"%s\", NULL, 0)", expr->type_lit.type_name);
+    } else {
+        /* Emit code to create parameter array */
+        char* params_name = omni_codegen_temp(ctx);
+        omni_codegen_emit(ctx, "Obj* %s[] = {", params_name);
+        for (size_t i = 0; i < expr->type_lit.param_count; i++) {
+            if (i > 0) omni_codegen_emit_raw(ctx, ", ");
+            codegen_expr(ctx, expr->type_lit.params[i]);
+        }
+        omni_codegen_emit_raw(ctx, "};\n");
+        omni_codegen_emit(ctx, "mk_kind(\"%s\", %s, %zu)", 
+                         expr->type_lit.type_name, params_name, expr->type_lit.param_count);
+        free(params_name);
+    }
+}
+
 static void codegen_quote(CodeGenContext* ctx, OmniValue* expr) {
     /* (quote x) */
     OmniValue* args = omni_cdr(expr);
@@ -1021,7 +1051,7 @@ static void codegen_lambda(CodeGenContext* ctx, OmniValue* expr) {
     char* p = def;
 
     /* Function signature: Include Region* _caller_region as first parameter */
-    p += sprintf(p, "static Obj* %s(Region* _caller_region", fn_name);
+    p += sprintf(p, "static Obj* %s(struct Region* _caller_region", fn_name);
 
     /* Parameters - register them before generating body */
     bool first = false;  /* Already have _caller_region */
@@ -1044,7 +1074,7 @@ static void codegen_lambda(CodeGenContext* ctx, OmniValue* expr) {
 
     /* Region-RC: Create local region at function entry */
     p += sprintf(p, "    /* Region-RC: Create local region for allocations */\n");
-    p += sprintf(p, "    Region* _local_region = region_create();\n");
+    p += sprintf(p, "    struct Region* _local_region = region_create();\n");
     p += sprintf(p, "    \n");
 
     /* Region-RC: Emit tethering for parameters from outer regions
@@ -1130,6 +1160,47 @@ static void codegen_lambda(CodeGenContext* ctx, OmniValue* expr) {
     omni_codegen_emit_raw(ctx, "%s(_local_region", fn_name);
 }
 
+/* ============== Multiple Dispatch Support ============== */
+
+/*
+ * check_function_defined - Check if a function has been defined before.
+ * Returns the number of times the function has been defined (0 if not defined).
+ */
+static int check_function_defined(CodeGenContext* ctx, const char* c_name) {
+    for (size_t i = 0; i < ctx->defined_functions.count; i++) {
+        if (strcmp(ctx->defined_functions.names[i], c_name) == 0) {
+            return ctx->defined_functions.definition_count[i];
+        }
+    }
+    return 0;
+}
+
+/*
+ * track_function_definition - Record that a function has been defined.
+ * Increments the definition count for the function.
+ */
+static void track_function_definition(CodeGenContext* ctx, const char* c_name) {
+    /* Check if already tracked */
+    for (size_t i = 0; i < ctx->defined_functions.count; i++) {
+        if (strcmp(ctx->defined_functions.names[i], c_name) == 0) {
+            ctx->defined_functions.definition_count[i]++;
+            return;
+        }
+    }
+
+    /* Add new entry */
+    if (ctx->defined_functions.count >= ctx->defined_functions.capacity) {
+        size_t new_capacity = ctx->defined_functions.capacity == 0 ? 16 : ctx->defined_functions.capacity * 2;
+        ctx->defined_functions.names = realloc(ctx->defined_functions.names, new_capacity * sizeof(char*));
+        ctx->defined_functions.definition_count = realloc(ctx->defined_functions.definition_count, new_capacity * sizeof(int));
+        ctx->defined_functions.capacity = new_capacity;
+    }
+
+    ctx->defined_functions.names[ctx->defined_functions.count] = strdup(c_name);
+    ctx->defined_functions.definition_count[ctx->defined_functions.count] = 1;
+    ctx->defined_functions.count++;
+}
+
 static void codegen_define(CodeGenContext* ctx, OmniValue* expr) {
     OmniValue* args = omni_cdr(expr);
     OmniValue* first = omni_car(args);
@@ -1144,10 +1215,26 @@ static void codegen_define(CodeGenContext* ctx, OmniValue* expr) {
             OmniValue* fbody = omni_cdr(rest);
 
             char* c_name = omni_codegen_mangle(fname->str_val);
+
+            /* Check if this is a redefinition (multiple dispatch) */
+            int definition_count = check_function_defined(ctx, c_name);
+            track_function_definition(ctx, c_name);
+
             register_symbol(ctx, fname->str_val, c_name);
 
-            /* Emit function with Region-RC support */
-            omni_codegen_emit(ctx, "static Obj* %s(Region* _caller_region", c_name);
+            /* For redefinitions, use a unique internal name for the implementation */
+            char* impl_name;
+            if (definition_count > 0) {
+                /* Subsequent definition: append method number to internal name */
+                impl_name = malloc(strlen(c_name) + 32);
+                sprintf(impl_name, "%s_method_%d", c_name, definition_count);
+            } else {
+                /* First definition: use the original name */
+                impl_name = strdup(c_name);
+            }
+
+            /* Emit function implementation with Region-RC support */
+            omni_codegen_emit(ctx, "static Obj* %s(Region* _caller_region", impl_name);
 
             /* Parameters from array */
             for (size_t i = 0; i < omni_array_len(params); i++) {
@@ -1164,7 +1251,7 @@ static void codegen_define(CodeGenContext* ctx, OmniValue* expr) {
             omni_codegen_indent(ctx);
 
             /* Region-RC prologue */
-            omni_codegen_emit(ctx, "Region* _local_region = region_create();\n");
+            omni_codegen_emit(ctx, "struct Region* _local_region = region_create();\n");
             omni_codegen_emit(ctx, "region_tether_start(_caller_region);\n\n");
 
             /* Body */
@@ -1197,6 +1284,98 @@ static void codegen_define(CodeGenContext* ctx, OmniValue* expr) {
 
             omni_codegen_dedent(ctx);
             omni_codegen_emit(ctx, "}\n\n");
+
+            /* Emit initialization code based on whether this is first or redefinition */
+            if (definition_count == 0) {
+                /* First definition: For multiple dispatch, we emit a wrapper trampoline
+                 * that converts from ClosureFn signature to Region* signature.
+                 * The trampoline has signature: Obj* tramp(Obj** captures, Obj** args, int argc)
+                 * and calls: Obj* impl(Region* _caller_region, Obj* arg1, Obj* arg2, ...) */
+
+                /* Generate parameter count for the trampoline */
+                size_t param_count = omni_array_len(params);
+
+                /* Emit trampoline function with ClosureFn signature */
+                omni_codegen_emit(ctx, "/* Trampoline for multiple dispatch: converts ClosureFn to Region* signature */\n");
+                omni_codegen_emit(ctx, "static Obj* %s_trampoline(Obj** captures, Obj** args, int argc) {\n", impl_name);
+                omni_codegen_indent(ctx);
+                omni_codegen_emit(ctx, "(void)captures;  /* No captures */\n");
+                omni_codegen_emit(ctx, "Region* _r = region_get_or_create();\n");
+                omni_codegen_emit(ctx, "if (argc != %zu) return mk_error(\"arity mismatch\");\n", param_count);
+
+                /* Emit call to implementation with unpacked arguments */
+                if (param_count == 0) {
+                    omni_codegen_emit(ctx, "return %s(_r);\n", impl_name);
+                } else if (param_count == 1) {
+                    omni_codegen_emit(ctx, "return %s(_r, args[0]);\n", impl_name);
+                } else if (param_count == 2) {
+                    omni_codegen_emit(ctx, "return %s(_r, args[0], args[1]);\n", impl_name);
+                } else if (param_count == 3) {
+                    omni_codegen_emit(ctx, "return %s(_r, args[0], args[1], args[2]);\n", impl_name);
+                } else if (param_count == 4) {
+                    omni_codegen_emit(ctx, "return %s(_r, args[0], args[1], args[2], args[3]);\n", impl_name);
+                } else {
+                    /* For more params, emit a loop to build array - not ideal but works */
+                    omni_codegen_emit(ctx, "/* TODO: Handle more than 4 parameters */\n");
+                    omni_codegen_emit(ctx, "return mk_error(\"too many parameters\");\n");
+                }
+
+                omni_codegen_dedent(ctx);
+                omni_codegen_emit(ctx, "}\n\n");
+
+                /* First definition: wrap trampoline in TAG_CLOSURE */
+                omni_codegen_emit(ctx, "/* First definition of %s: wrap trampoline as closure */\n", c_name);
+                omni_codegen_emit(ctx, "static Obj* %s_closure = NULL;\n", c_name);
+                omni_codegen_emit(ctx, "if (%s_closure == NULL) {\n", c_name);
+                omni_codegen_indent(ctx);
+                omni_codegen_emit(ctx, "%s_closure = mk_closure(%s_trampoline, NULL, NULL, 0, %d);\n", c_name, impl_name, (int)param_count);
+                omni_codegen_dedent(ctx);
+                omni_codegen_emit(ctx, "}\n");
+                omni_codegen_emit(ctx, "Obj* %s = %s_closure;\n\n", c_name, c_name);
+            } else {
+                /* Redefinition: convert to TAG_GENERIC and add method */
+                omni_codegen_emit(ctx, "/* Redefinition #%d of %s: add method to generic */\n", definition_count, c_name);
+
+                /* Generate parameter count */
+                size_t param_count = omni_array_len(params);
+
+                /* Emit trampoline for this method */
+                omni_codegen_emit(ctx, "/* Trampoline for method #%d */\n", definition_count);
+                omni_codegen_emit(ctx, "static Obj* %s_trampoline_m%d(Obj** captures, Obj** args, int argc) {\n", impl_name, definition_count);
+                omni_codegen_indent(ctx);
+                omni_codegen_emit(ctx, "(void)captures;\n");
+                omni_codegen_emit(ctx, "Region* _r = region_get_or_create();\n");
+                omni_codegen_emit(ctx, "if (argc != %zu) return mk_error(\"arity mismatch\");\n", param_count);
+                if (param_count == 0) {
+                    omni_codegen_emit(ctx, "return %s(_r);\n", impl_name);
+                } else if (param_count == 1) {
+                    omni_codegen_emit(ctx, "return %s(_r, args[0]);\n", impl_name);
+                } else if (param_count == 2) {
+                    omni_codegen_emit(ctx, "return %s(_r, args[0], args[1]);\n", impl_name);
+                } else if (param_count == 3) {
+                    omni_codegen_emit(ctx, "return %s(_r, args[0], args[1], args[2]);\n", impl_name);
+                } else if (param_count == 4) {
+                    omni_codegen_emit(ctx, "return %s(_r, args[0], args[1], args[2], args[3]);\n", impl_name);
+                } else {
+                    omni_codegen_emit(ctx, "return mk_error(\"too many parameters\");\n");
+                }
+                omni_codegen_dedent(ctx);
+                omni_codegen_emit(ctx, "}\n\n");
+
+                omni_codegen_emit(ctx, "static Obj* %s_generic = NULL;\n", c_name);
+                omni_codegen_emit(ctx, "if (%s_generic == NULL) {\n", c_name);
+                omni_codegen_indent(ctx);
+                /* First redefinition: create generic function */
+                omni_codegen_emit(ctx, "%s_generic = mk_generic(\"%s\");\n", c_name, fname->str_val);
+                omni_codegen_dedent(ctx);
+                omni_codegen_emit(ctx, "}\n");
+                /* Add the new method (using the trampoline) */
+                omni_codegen_emit(ctx, "generic_add_method(%s_generic, NULL, 0, (ClosureFn)%s_trampoline_m%d);\n",
+                                 c_name, impl_name, definition_count);
+                omni_codegen_emit(ctx, "Obj* %s = %s_generic;\n\n", c_name, c_name);
+            }
+
+            free(impl_name);
             free(c_name);
             return;
         }
@@ -1213,14 +1392,49 @@ static void codegen_define(CodeGenContext* ctx, OmniValue* expr) {
         register_symbol(ctx, first->str_val, c_name);
         free(c_name);
     } else if (omni_is_cell(first)) {
-        /* Old style: (define (name params...) body...) */
+        /* Scheme style: (define (name params...) body...) */
         OmniValue* fname = omni_car(first);
-        OmniValue* params = omni_cdr(first);
-        /* ... (keep old style support for now to avoid breakage) ... */
+        OmniValue* params_val = omni_cdr(first);
         if (!omni_is_sym(fname)) return;
+
         char* c_name = omni_codegen_mangle(fname->str_val);
+        int definition_count = check_function_defined(ctx, c_name);
+        track_function_definition(ctx, c_name);
         register_symbol(ctx, fname->str_val, c_name);
-        omni_codegen_emit(ctx, "static Obj* %s(Region* _caller_region", c_name);
+
+        /* For redefinitions, use a unique internal name */
+        char* impl_name;
+        if (definition_count > 0) {
+            impl_name = malloc(strlen(c_name) + 32);
+            sprintf(impl_name, "%s_method_%d", c_name, definition_count);
+        } else {
+            impl_name = strdup(c_name);
+        }
+
+        /* Collect parameter names and kinds */
+        size_t param_count = omni_list_len(params_val);
+        OmniValue** param_names = malloc(param_count * sizeof(OmniValue*));
+        OmniValue** param_kinds = malloc(param_count * sizeof(OmniValue*));
+        
+        OmniValue* p_iter = params_val;
+        for (size_t i = 0; i < param_count; i++) {
+            OmniValue* p = omni_car(p_iter);
+            if (omni_is_sym(p)) {
+                param_names[i] = p;
+                param_kinds[i] = NULL; /* Defaults to Any */
+            } else if (omni_is_cell(p) && omni_is_sym(omni_car(p))) {
+                /* Specialized parameter: (x {Int}) */
+                param_names[i] = omni_car(p);
+                param_kinds[i] = omni_car(omni_cdr(p));
+            } else {
+                param_names[i] = omni_new_sym("unused");
+                param_kinds[i] = NULL;
+            }
+            p_iter = omni_cdr(p_iter);
+        }
+
+        /* Emit function implementation */
+        omni_codegen_emit(ctx, "static Obj* %s(struct Region* _caller_region", c_name);
         while (!omni_is_nil(params) && omni_is_cell(params)) {
             OmniValue* p = omni_car(params);
             if (omni_is_sym(p)) {
@@ -1233,7 +1447,7 @@ static void codegen_define(CodeGenContext* ctx, OmniValue* expr) {
         }
         omni_codegen_emit_raw(ctx, ") {\n");
         omni_codegen_indent(ctx);
-        omni_codegen_emit(ctx, "Region* _local_region = region_create();\n");
+        omni_codegen_emit(ctx, "struct Region* _local_region = region_create();\n");
         omni_codegen_emit(ctx, "region_tether_start(_caller_region);\n");
         OmniValue* last = NULL;
         OmniValue* b = rest;
@@ -1373,6 +1587,7 @@ static void codegen_set_bang(CodeGenContext* ctx, OmniValue* expr) {
 /* Mutation operator: (put! obj.field value) */
 static void codegen_put_bang(CodeGenContext* ctx, OmniValue* expr) {
     /* (put! obj.field value) - modify a slot/path */
+    /* Supports deep path mutation: (put! obj.field.subfield value) */
     OmniValue* args = omni_cdr(expr);
     if (omni_is_nil(args) || omni_is_nil(omni_cdr(args))) {
         omni_codegen_emit_raw(ctx, "NIL");
@@ -1385,11 +1600,27 @@ static void codegen_put_bang(CodeGenContext* ctx, OmniValue* expr) {
         value = omni_car(value);
     }
 
-    omni_codegen_emit(ctx, "/* put! */\n");
-    omni_codegen_emit(ctx, "/* TODO: Implement path mutation */\n");
-    codegen_expr(ctx, path);
-    omni_codegen_emit_raw(ctx, ";\n");
-    omni_codegen_emit_raw(ctx, "return NIL;");
+    omni_codegen_emit(ctx, "/* put! - deep path mutation */\n");
+
+    /* Check if path is a symbol (e.g., "data.user.address.city") */
+    if (omni_is_sym(path)) {
+        /* Use runtime helper for deep path mutation */
+        char* c_name = omni_codegen_mangle(path->str_val);
+
+        omni_codegen_emit(ctx, "/* Deep path mutation: %s */\n", path->str_val);
+        omni_codegen_emit(ctx, "%s = prim_deep_put(%s, \"%s\", ", c_name, c_name, path->str_val);
+        codegen_expr(ctx, value);
+        omni_codegen_emit_raw(ctx, ");\n");
+        omni_codegen_emit(ctx, "return %s;\n", c_name);
+
+        free(c_name);
+    } else {
+        /* For complex path expressions, fall back to evaluation */
+        omni_codegen_emit(ctx, "/* Complex path expression - not yet supported */\n");
+        codegen_expr(ctx, path);
+        omni_codegen_emit_raw(ctx, ";\n");
+        omni_codegen_emit_raw(ctx, "return NIL;");
+    }
 }
 
 /* Mutation operator: (update! obj.field f) */
@@ -1655,6 +1886,12 @@ static void codegen_expr(CodeGenContext* ctx, OmniValue* expr) {
     case OMNI_SYM:
         codegen_sym(ctx, expr);
         break;
+    case OMNI_STRING:
+        codegen_string(ctx, expr);
+        break;
+    case OMNI_TYPE_LIT:
+        codegen_type_lit(ctx, expr);
+        break;
     case OMNI_NOTHING:
         omni_codegen_emit_raw(ctx, "NOTHING");
         break;
@@ -1683,7 +1920,7 @@ void omni_codegen_main(CodeGenContext* ctx, OmniValue** exprs, size_t count) {
 
     /* Region-RC: Create global region for main's scope */
     omni_codegen_emit(ctx, "/* Region-RC: Create global region for main() */\n");
-    omni_codegen_emit(ctx, "Region* _local_region = region_create();\n");
+    omni_codegen_emit(ctx, "struct Region* _local_region = region_create();\n");
     omni_codegen_emit(ctx, "\n");
 
     for (size_t i = 0; i < count; i++) {

@@ -59,6 +59,15 @@ typedef struct CodeGenContext {
         size_t capacity;
     } lambda_defs;
 
+    /* Function definition tracking for multiple dispatch */
+    /* Tracks which functions have been defined to detect redefinitions */
+    struct {
+        char** names;          /* Function names (mangled) */
+        int* definition_count; /* Number of times each function was defined */
+        size_t count;
+        size_t capacity;
+    } defined_functions;
+
     /* Flags */
     bool in_tail_position;
     bool generating_header;

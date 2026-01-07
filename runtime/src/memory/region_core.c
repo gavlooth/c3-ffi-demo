@@ -1,5 +1,6 @@
 #include "region_core.h"
 #include <stdio.h>
+#include <string.h>
 
 #define MAX_THREAD_LOCAL_TETHERS 16
 
@@ -169,4 +170,34 @@ void region_retain(RegionRef ref) {
 
 void region_release(RegionRef ref) {
     region_release_internal(ref.region);
+}
+
+// ========== Global Region Support ==========
+
+/* Thread-local global region for fallback allocations */
+static __thread Region* g_global_region = NULL;
+
+/*
+ * region_get_or_create - Get or create the thread-local global region.
+ * This provides a fallback region for allocations that don't have a specific region.
+ */
+Region* region_get_or_create(void) {
+    if (!g_global_region) {
+        g_global_region = region_create();
+    }
+    return g_global_region;
+}
+
+/*
+ * region_strdup - Duplicate a string in a region.
+ * Returns a pointer to the duplicated string, allocated in the region.
+ */
+char* region_strdup(Region* r, const char* s) {
+    if (!s) return NULL;
+    size_t len = strlen(s) + 1;
+    char* copy = (char*)region_alloc(r, len);
+    if (copy) {
+        memcpy(copy, s, len);
+    }
+    return copy;
 }

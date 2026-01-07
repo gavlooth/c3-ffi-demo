@@ -133,6 +133,14 @@ OmniValue* omni_new_sym(const char* s) {
     return v;
 }
 
+OmniValue* omni_new_string(const char* s) {
+    OmniValue* v = omni_alloc_value();
+    if (!v) return NULL;
+    v->tag = OMNI_STRING;
+    v->str_val = omni_arena_strdup(omni_ast_arena_get(), s);
+    return v;
+}
+
 OmniValue* omni_new_char(int32_t c) {
     OmniValue* v = omni_alloc_value();
     if (!v) return NULL;
@@ -638,6 +646,13 @@ static char* value_to_string_impl(OmniValue* v) {
     case OMNI_SYM:
         return strdup(v->str_val);
 
+    case OMNI_STRING:
+        string_builder_init(&buf, &cap, &len);
+        string_builder_append_char(&buf, &cap, &len, '"');
+        string_builder_append(&buf, &cap, &len, v->str_val);
+        string_builder_append_char(&buf, &cap, &len, '"');
+        return buf;
+
     case OMNI_CHAR:
         if (v->int_val == '\n') return strdup("#\\newline");
         if (v->int_val == '\t') return strdup("#\\tab");
@@ -832,6 +847,7 @@ const char* omni_tag_name(OmniTag tag) {
     switch (tag) {
     case OMNI_INT: return "INT";
     case OMNI_SYM: return "SYM";
+    case OMNI_STRING: return "STRING";
     case OMNI_CELL: return "CELL";
     case OMNI_NIL: return "NIL";
     case OMNI_PRIM: return "PRIM";

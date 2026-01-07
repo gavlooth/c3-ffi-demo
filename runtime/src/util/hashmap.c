@@ -1,4 +1,5 @@
 #include "hashmap.h"
+#include "../memory/region_core.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -93,6 +94,74 @@ static void hashmap_resize(HashMap* map) {
     free(map->buckets);
     map->buckets = new_buckets;
     map->bucket_count = new_count;
+}
+
+// Resize when load factor exceeded (region-aware)
+static void hashmap_resize_region(HashMap* map, struct Region* r) {
+    if (map->bucket_count > SIZE_MAX / 2) {
+        map->had_alloc_failure = 1;
+        return;
+    }
+    size_t new_count = map->bucket_count * 2;
+    // We don't have region_calloc, so we use region_alloc + memset
+    HashEntry** new_buckets = (HashEntry**)region_alloc(r, new_count * sizeof(HashEntry*));
+    if (!new_buckets) {
+        map->had_alloc_failure = 1;
+        return;
+    }
+    memset(new_buckets, 0, new_count * sizeof(HashEntry*));
+
+    // Rehash all entries
+    for (size_t i = 0; i < map->bucket_count; i++) {
+        HashEntry* entry = map->buckets[i];
+        while (entry) {
+            HashEntry* next = entry->next;
+            size_t idx = hash_ptr(entry->key) % new_count;
+            entry->next = new_buckets[idx];
+            new_buckets[idx] = entry;
+            entry = next;
+        }
+    }
+
+    // In a region, we don't "free" the old buckets, they stay until region dies
+    map->buckets = new_buckets;
+    map->bucket_count = new_count;
+}
+
+// Put key-value pair (region-aware)
+void hashmap_put_region(HashMap* map, void* key, void* value, void* r_void) {
+    struct Region* r = (struct Region*)r_void;
+    if (!map) return;
+
+    // Check if need to resize
+    if ((float)map->entry_count / map->bucket_count > map->load_factor) {
+        hashmap_resize_region(map, r);
+    }
+
+    size_t idx = hash_ptr(key) % map->bucket_count;
+    HashEntry* entry = map->buckets[idx];
+
+    // Check if key exists
+    while (entry) {
+        if (entry->key == key) {
+            entry->value = value;
+            return;
+        }
+        entry = entry->next;
+    }
+
+    // Create new entry in region
+    entry = (HashEntry*)region_alloc(r, sizeof(HashEntry));
+    if (!entry) {
+        map->had_alloc_failure = 1;
+        return;
+    }
+
+    entry->key = key;
+    entry->value = value;
+    entry->next = map->buckets[idx];
+    map->buckets[idx] = entry;
+    map->entry_count++;
 }
 
 // Get value by key

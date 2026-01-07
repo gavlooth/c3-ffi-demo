@@ -26,7 +26,7 @@ void omni_codegen_region_create(CodeGenContext* ctx, RegionInfo* region) {
                           region->start_pos, region->end_pos);
 
     /* Emit region_create() call */
-    omni_codegen_emit(ctx, "Region* %s = region_create();\n", region_var);
+    omni_codegen_emit(ctx, "struct Region* %s = region_create();\n", region_var);
 
     /* Emit variable list comment */
     if (region->var_count > 0) {

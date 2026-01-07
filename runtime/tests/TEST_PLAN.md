@@ -291,6 +291,74 @@
 5. **SCC with many nodes** - Algorithm correctness
 6. **Long-running with many safe_points** - Deferred processing
 
+### Advanced Memory Stress Tests (test_stress_memory.c)
+
+| Category | Tests | Description |
+|----------|-------|-------------|
+| Memory Pressure | 5 | OOM patterns, large lists, small allocations, nested structures, interleaved types |
+| Reference Counting | 3 | Extreme refcount values, shared refs, rapid cycles |
+| Free List | 2 | Capacity limits, interleaved operations |
+| Deferred RC | 3 | Large batches, coalescing, safe points |
+| Arena | 3 | Large blocks, reset cycles, multiple arenas |
+| Slot Pool | 2 | Alloc/free cycles, pool growth |
+| Concurrent | 1 | Multi-threaded alloc/free |
+| Memory Patterns | 2 | Wave and random allocation patterns |
+| Complex Structures | 2 | Shared graphs, deep chains |
+| Boxes | 2 | Many boxes, update stress |
+| Symbols | 2 | Many symbols, interning stress |
+| Lists | 2 | Append and reverse on large lists |
+| Integration | 1 | Mixed operations |
+| **Total** | **33** | Comprehensive stress testing |
+
+### Memory Edge Cases (test_edge_cases_memory.c)
+
+| Category | Tests | Description |
+|----------|-------|-------------|
+| NULL Pointers | 11 | All NULL handling edge cases |
+| Immediate Values | 7 | Immediate value operations |
+| Integer Edge Cases | 5 | Zero, negatives, large values |
+| Float Edge Cases | 5 | Zero, infinity, NaN, limits |
+| Character Edge Cases | 4 | Null, max, extended, immediates |
+| Pair Edge Cases | 5 | NULL components, self-referential |
+| Symbol Edge Cases | 4 | Empty, NULL, very long, special chars |
+| Box Edge Cases | 5 | NULL values, immediates, wrong types |
+| Reference Counting | 4 | Underflow, overflow, zero, stack objects |
+| Free List | 3 | Empty flush, single item, multiple flushes |
+| Deferred RC | 4 | NULL, immediate, empty flush, coalescing |
+| Arena | 5 | Zero size, small blocks, empty reset, NULL ops |
+| List Operations | 7 | Empty lists, circular, append edge cases, reverse |
+| Arithmetic | 7 | Overflow, underflow, divide by zero, mod edge cases |
+| Comparisons | 4 | NULL handling, different types, not with zero |
+| Type Predicates | 2 | NULL and immediates |
+| IPGE/BorrowedRef | 4 | NULL, immediate, invalid borrow, evolution |
+| Tethering | 4 | NULL, immediate, edge cases |
+| Stack Pool | 1 | Exhaustion |
+| Concurrency | 6 | Channel edge cases, atom CAS failures |
+| Safe Points | 2 | No deferred, many safe points |
+| Booleans | 3 | True/false, mk_bool |
+| Truthiness | 6 | NULL, zero, bools, empty list, pairs |
+| **Total** | **106** | Comprehensive edge case coverage |
+
+### Performance Benchmarks (test_performance.c)
+
+| Category | Tests | Description |
+|----------|-------|-------------|
+| Allocation | 5 | Int/float/pair/list/mixed allocation throughput |
+| Reference Counting | 2 | Inc/dec ref cycles, cascade frees |
+| Immediate Values | 2 | Immediate int ops, boxed vs immediate comparison |
+| List Operations | 5 | Traversal, length, map, reverse, append |
+| Symbol Operations | 2 | Creation, interning |
+| Box Operations | 1 | Get/set performance |
+| Free List | 1 | Batch alloc/free reuse |
+| Deferred RC | 2 | Defer decrement, safe points |
+| Arena | 3 | Alloc, vs heap comparison, reset |
+| Arithmetic | 3 | Int, float, mixed operations |
+| Comparison | 2 | Integer compare, immediate eq |
+| Deep Structures | 2 | Deep lists, tree building |
+| Concurrency | 1 | Multi-threaded allocation |
+| Memory Pressure | 1 | Stress test with alloc/free cycles |
+| **Total** | **35** | Comprehensive performance benchmarks |
+
 ## Memory Safety Tests (with sanitizers)
 
 1. **AddressSanitizer** - Buffer overflows, use-after-free
@@ -302,23 +370,32 @@
 
 ```
 runtime/tests/
-├── test_main.c                  # Test runner (446 tests)
+├── test_main.c                  # Test runner
 ├── test_constructors.c          # Object constructor tests
 ├── test_memory.c                # Memory management tests
 ├── test_primitives.c            # Primitive operation tests
 ├── test_lists.c                 # List operation tests
 ├── test_closures.c              # Closure tests
-├── test_arena.c                 # Arena allocator tests
-├── test_scc.c                   # SCC detection tests
+├── test_tagged_pointers.c       # Tagged pointer tests
 ├── test_concurrency.c           # Channel, atom, thread tests
-├── test_edge_cases.c            # Edge cases and error handling
 ├── test_stress.c                # Stress tests
+├── test_weak_refs.c             # Weak reference tests
+├── test_borrowref.c             # BorrowRef tests
+├── test_deferred.c              # Deferred RC tests
+├── test_channel_semantics.c     # Channel semantics tests
+├── test_sym_concurrency.c       # Symbol concurrency tests
+├── test_component.c             # Component tethering tests
+├── test_stress_memory.c         # Advanced memory stress tests (33 tests)
+├── test_edge_cases_memory.c     # Memory edge cases (106 tests)
+├── test_performance.c           # Performance benchmarks (35 tests)
 ├── test_iregion.c               # IRegion vtable tests (17 tests) ✅
 ├── test_weak_control_blocks.c   # Weak ref control block tests (21 tests) ✅
 ├── test_transmigration.c        # Transmigration/isolation tests (17 tests) ✅
 ├── test_external_handles.c      # External handle indexing tests (27 tests) ✅
 └── Makefile                     # Build tests
 ```
+
+**Note**: `test_arena.c` and `test_scc.c` are commented out as they test internal APIs that have been removed or significantly changed.
 
 ### New Region Infrastructure Tests (99 tests total)
 
@@ -336,4 +413,4 @@ runtime/tests/
 - **Function coverage**: 100%
 
 Total functions to test: ~180 (increased with region infrastructure)
-Total test cases: **545+** (446 main + 99 region tests)
+Total test cases: **719+** (446 main + 99 region tests + 33 stress memory + 106 edge cases + 35 performance)
