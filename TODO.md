@@ -202,18 +202,20 @@ Replace hybrid memory management with a unified Region-RC architecture.
     - Promotion is seamless and preserves all allocated data.
     - Most small regions never promote (common case stays lightweight).
 
-- [TODO] Label: T-adaptive-geometric-arena
-  Objective: Implement geometric arena growth for adaptive block sizing.
+- [TODO] Label: T-adaptive-polynomial-arena
+  Objective: Implement polynomial (√n) arena growth for adaptive block sizing.
   Where: `src/runtime/memory/arena_core.c`
   What to change:
-    - [ ] Replace fixed block size with initial size + doubling on exhaustion.
-    - [ ] Initial block: 256 bytes, max block: 64KB (configurable).
-    - [ ] Track block count for O(log n) overhead accounting.
-  How to verify: Allocate varying amounts in region; verify block sizes follow geometric growth.
+    - [ ] Implement polynomial growth: block sizes b, b·√n, b·n (2-3 blocks typical).
+    - [ ] Initial block: 256 bytes, growth factor based on target size estimate.
+    - [ ] Cap individual blocks at 64KB, link blocks beyond that.
+    - [ ] Track block count (expect O(1) blocks, not O(log n)).
+  How to verify: Allocate varying amounts in region; verify 2-3 blocks for realistic sizes.
   Acceptance:
-    - Small regions use small blocks (reduced memory waste).
-    - Large regions grow efficiently via doubling.
+    - O(1) metadata overhead (constant number of blocks).
+    - O(√n) slack overhead (sublinear, not O(n)).
     - Amortized O(1) allocation maintained.
+    - Fewer blocks than geometric growth for same data size.
 
 - [TODO] Label: T-adaptive-non-atomic-tiny
   Objective: Use non-atomic RC for TINY regions (single-threaded optimization).

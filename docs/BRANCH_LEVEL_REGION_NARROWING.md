@@ -454,23 +454,89 @@ Promote to full Region (64+ bytes)
 
 Most small lifecycle groups never promote.
 
-### 12.6 Geometric Arena Growth
+### 12.6 Arena Growth Strategies
 
-Instead of fixed-size arena blocks:
+Instead of fixed-size arena blocks, use dynamic growth. The choice of growth strategy affects overhead characteristics.
+
+#### 12.6.1 Growth Strategy Comparison
+
+| Strategy | Block Sizes | # Blocks | Metadata | Slack (worst) |
+|----------|-------------|----------|----------|---------------|
+| **Geometric (2×)** | b, 2b, 4b, 8b, ... | O(log n) | O(log n) | O(n) |
+| **Polynomial (n^(1/k))** | b, b·n^(1/k), b·n^(2/k), ... | O(k) = O(1) | O(1) | O(n^(1/k)) |
+| **Square Root (n^(1/2))** | b, b·√n, b·n | O(1) ~2-3 | O(1) | O(√n) |
+| **Linear (+c)** | b, b+c, b+2c, ... | O(√n) | O(√n) | O(√n) |
+
+#### 12.6.2 Geometric Growth (Standard)
 
 ```text
-Initial block:  256 bytes
-Growth:         double on exhaustion (256 → 512 → 1024 → ...)
+Block sizes: 256 → 512 → 1024 → 2048 → ...
 
-Space overhead for n bytes of data:
-  - At most 2n allocated (standard doubling amortization)
-  - Number of blocks: O(log n)
-  - Metadata per block: O(1)
-
-Total overhead: O(log n) metadata + O(n) slack space (amortized)
+For n bytes of data:
+  - Blocks needed: O(log n)
+  - Metadata overhead: O(log n)
+  - Slack space: up to 2n allocated (amortized O(1) per allocation)
+  - Amortized allocation: O(1)
 ```
 
-Small regions get small arenas. Large regions grow as needed.
+**Pros:** Simple, well-understood, good amortized performance.
+**Cons:** Many small blocks for large regions, O(n) slack worst case.
+
+#### 12.6.3 Polynomial Growth (n^(1/k)) - Recommended
+
+```text
+For k=2 (square root growth):
+  Block 1: b           = 256 B
+  Block 2: b · √n      ≈ 256 · √n
+  Block 3: b · n       ≈ 256 · n (covers remaining)
+
+For n = 64 KB:
+  Block 1: 256 B
+  Block 2: 256 · 256 = 64 KB
+  Block 3: (rarely needed)
+
+Total: 2-3 blocks for any realistic size
+```
+
+**Analysis:**
+```text
+Blocks needed:        O(k) = O(1) for fixed k
+Metadata overhead:    O(1) - constant number of blocks
+Slack per block:      O(n^(1/k)) worst case
+Total slack:          O(n^((k-1)/k)) - sublinear for k > 1
+```
+
+For k=2: O(√n) slack instead of O(n).
+For k=3: O(n^(2/3)) slack.
+
+**Pros:**
+- Constant metadata overhead regardless of region size
+- Sublinear slack waste
+- Fewer blocks = simpler management, better cache behavior
+
+**Cons:**
+- Larger jumps between block sizes (if estimate is wrong, waste more)
+- Requires size hint for optimal block sizing
+
+#### 12.6.4 Recommended Strategy: Adaptive Polynomial
+
+Use compile-time size estimation to select growth strategy:
+
+```text
+Size estimate available and confident:
+  → Pre-allocate single block of estimated size
+  → Fallback to √n growth if exceeded
+
+Size estimate uncertain:
+  → Start with TINY (256 B)
+  → Use √n growth: next block = current · √(target)
+  → Cap at 64 KB per block, then link blocks
+```
+
+This gives:
+- O(1) metadata overhead (2-3 blocks typical)
+- O(√n) slack overhead (sublinear)
+- Good cache locality (fewer, larger blocks)
 
 ### 12.7 Revised Decision Framework
 
@@ -488,13 +554,17 @@ The compile-time decision simplifies to pure lifecycle analysis. Runtime sizing 
 
 ### 12.8 Asymptotic Comparison
 
-| Operation | Fixed Model | Adaptive Model |
-|-----------|-------------|----------------|
-| Create region | O(1) fixed | O(1), smaller constant for small regions |
-| Allocate | O(1) bump | O(1) bump, amortized block growth |
-| Destroy | O(blocks) | O(blocks), fewer blocks for small regions |
-| RC increment | O(1) atomic | O(1), non-atomic possible for tiny regions |
-| Total overhead | C per region | O(log n) scaling with data |
+| Operation | Fixed Model | Geometric (2×) | Polynomial (√n) |
+|-----------|-------------|----------------|-----------------|
+| Create region | O(1) fixed | O(1) | O(1) |
+| Allocate | O(1) bump | O(1) amortized | O(1) amortized |
+| Destroy | O(1) | O(log n) blocks | O(1) blocks |
+| # Blocks | 1 | O(log n) | O(1) ~2-3 |
+| Metadata overhead | C constant | O(log n) | O(1) |
+| Slack overhead | 0 or huge | O(n) worst | O(√n) worst |
+| RC increment | O(1) atomic | O(1) atomic | O(1), non-atomic for TINY |
+
+**Recommendation:** Polynomial (√n) growth gives O(1) metadata with O(√n) slack - best tradeoff for region-based allocation where sizes vary widely.
 
 ---
 
