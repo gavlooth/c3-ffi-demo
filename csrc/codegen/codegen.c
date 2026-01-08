@@ -363,6 +363,7 @@ void omni_codegen_runtime_header(CodeGenContext* ctx) {
         omni_codegen_emit_raw(ctx, "/* Backward compatibility wrappers */\n");
         omni_codegen_emit_raw(ctx, "static Obj* mk_int(int64_t i) { return mk_int_region(_local_region, i); }\n");
         omni_codegen_emit_raw(ctx, "static Obj* mk_sym(const char* s) { return mk_sym_region(_local_region, s); }\n");
+        omni_codegen_emit_raw(ctx, "static Obj* mk_string(const char* s) { return mk_string_cstr_region(_local_region, s); }\n");
         omni_codegen_emit_raw(ctx, "static Obj* mk_cell(Obj* a, Obj* b) { return mk_cell_region(_local_region, a, b); }\n");
         omni_codegen_emit_raw(ctx, "static Obj* mk_float(double f) { return mk_float_region(_local_region, f); }\n\n");
 
@@ -986,7 +987,8 @@ static void codegen_sym(CodeGenContext* ctx, OmniValue* expr) {
 }
 
 static void codegen_string(CodeGenContext* ctx, OmniValue* expr) {
-    /* Emit string literal using mk_string (proper TAG_STRING support) */
+    /* Emit string literal using mk_string wrapper (proper TAG_STRING support) */
+    /* T-wire-string-literal-01: mk_string wrapper uses mk_string_cstr_region(_local_region, ...) */
     omni_codegen_emit_raw(ctx, "mk_string(\"%s\")", expr->str_val);
 }
 

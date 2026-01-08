@@ -2158,7 +2158,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
 
 ### Category A: String Literals & Print Output (BLOCKING END-TO-END TESTING)
 
-- [TODO] Label: T-wire-string-literal-01
+- [R] Label: T-wire-string-literal-01
   Objective: Fix string literal generation in codegen.
   Reference: csrc/codegen/codegen.c:891-894
   Where: csrc/codegen/codegen.c (codegen_string function)
@@ -2169,6 +2169,13 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
     - To: `omni_codegen_emit_raw(ctx, "mk_string_region(_local_region, \"%s\", %d)", expr->str_val, strlen(expr->str_val));`
     - Or use mk_string() if not region-based
   Verification: (println "hello") should print as string, not symbol
+
+  Implementation (2026-01-09):
+  - Added `mk_string` wrapper to generated code (codegen.c:366)
+  - Wrapper: `static Obj* mk_string(const char* s) { return mk_string_cstr_region(_local_region, s); }`
+  - Updated codegen_string to use mk_string() instead of mk_sym() (codegen.c:992)
+  - String literals now emit as TAG_STRING instead of TAG_SYM
+  - Verification: (println "hello") correctly prints "hello" as string
 
 - [TODO] Label: T-wire-string-literal-02
   Objective: Implement TAG_STRING support in region_value.c.
