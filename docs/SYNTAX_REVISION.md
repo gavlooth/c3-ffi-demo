@@ -85,9 +85,137 @@ Parameters are Slots. Variance is metadata on the parameter.
   (consume [self {Self} val {T}]))
 ```
 
+### 3.7 Value-to-Type Conversion (`value->type` and `#val`)
+To encode a specific value into the type system for dispatch, use the `value->type` **Flow constructor**. The reader tag `#val` is provided as a shorthand.
+
+```lisp
+;; Flow constructor
+(define Three (value->type 3))
+
+;; Reader shorthand (expands to the above)
+(define Four #val 4)
+
+;; Dispatch based on specific value
+(define [x {#val 3}] {String}
+  (describe x)
+  "The number three")
+```
+
+### 3.8 Type-level Dispatch (`Type`)
+To dispatch on a **type itself** (rather than an instance of that type), use the `Type` Flow constructor.
+
+```lisp
+;; This method matches when the ARGUMENT is the Kind object 'Int32'
+(define [t {(Type {Int32})}] {String}
+  (type-name t)
+  "You passed the actual Int32 type object")
+```
+
 ---
 
-## 4. Type Algebra (Flow Constructors)
+## 4. Collections & Core Module
+
+OmniLisp provides a unified interface for collection management within the `core` module.
+
+### 4.1 Unified Collection (`collect`)
+The specialized `collect-list` and `collect-array` are removed in favor of a single `collect` function that uses dispatch on symbols.
+
+```lisp
+;; Default: collects to an Array []
+(collect (range 10))
+(collect (range 10) 'array)
+
+;; Collect to a List ()
+(collect (range 10) 'list)
+```
+
+---
+
+## 5. Subtyping & Variance Rules
+
+OmniLisp follows Julia's rules for how container types relate to their parameters.
+
+### 4.1 Covariance (The `()` Rule)
+Flow-based containers (Lists, Tuples) are **Covariant**.
+*   `(Tuple {Int})` **is a subtype of** `(Tuple {Any})`.
+*   Reason: Immutable structures are safe to treat as containers of their supertypes.
+
+### 4.2 Invariance (The `[]` Rule)
+Slot-based containers (Arrays, Mutable Structs) are **Invariant**.
+*   `[Array {Int}]` **is NOT a subtype of** `[Array {Any}]`.
+*   Reason: If you treat an `Array{Int}` as an `Array{Any}`, you might try to push a `String` into it, which violates memory safety.
+
+---
+
+## 2. Bindings & Function Definitions
+
+### 2.3 Lambda Shorthands (`fn` and `λ`)
+The symbols `fn` and `λ` are reserved for lambda construction.
+
+```lisp
+;; Single argument
+(fn [x] (* x x))
+(λ [x] (* x x))
+
+;; Multiple arguments
+(fn [x y] (+ x y))
+```
+
+---
+
+## 3. The Type System (Julia-Style)
+
+### 3.5 Struct Construction
+Structs support positional arguments, named arguments via `&`, or a mix.
+
+```lisp
+;; Definition
+(define {struct Point} [x {Float64} y {Float64}])
+
+;; Positional
+(Point 10.0 20.0)
+
+;; Named (using &)
+(Point & :x 10.0 :y 20.0)
+
+;; Mixed
+(Point 10.0 & :y 20.0)
+```
+
+### 3.6 Multiple Dispatch (Julia-Style)
+OmniLisp does not have class-based methods or an implicit `self`. Instead, it uses multiple dispatch on regular functions.
+
+```lisp
+;; Define a generic function for Circle
+(define [c {Circle}] {Float64}
+  (area c)
+  (* 3.14 (* c.radius c.radius)))
+
+;; Define the same function for Rectangle
+(define [r {Rect}] {Float64}
+  (area r)
+  (* r.width r.height))
+```
+
+---
+
+## 4. Type Algebra & Parser Modes
+
+### 4.3 Pika Parser Modes
+The Pika engine supports two output modes, selectable via metadata.
+
+*   `^:ast` - Returns high-level AST nodes (processed by semantic actions).
+*   `^:string` - Returns the raw matched text as an `OMNI_STRING` (bypassing actions).
+
+```lisp
+;; Returns AST nodes
+(pika-match ^:ast my-grammar "rule" "input")
+
+;; Returns "matched text"
+(pika-match ^:string my-grammar "rule" "input")
+```
+
+---
 
 Unions and Function Signatures are **Flow** calculations `()` that return a **Kind** `{}`.
 

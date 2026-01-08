@@ -927,6 +927,137 @@ Obj* prim_union(Obj* types_list);
  */
 Obj* prim_fn(Obj* params_and_ret);
 
+/* ========== Phase 18: Math and Numerics Library ========== */
+
+/* Basic Arithmetic */
+Obj* prim_add(Obj* a, Obj* b);
+Obj* prim_sub(Obj* a, Obj* b);
+Obj* prim_mul(Obj* a, Obj* b);
+Obj* prim_div(Obj* a, Obj* b);
+Obj* prim_mod(Obj* a, Obj* b);
+Obj* prim_pow(Obj* base, Obj* exp);
+
+/* Trigonometric Functions */
+Obj* prim_sin(Obj* x);
+Obj* prim_cos(Obj* x);
+Obj* prim_tan(Obj* x);
+Obj* prim_asin(Obj* x);
+Obj* prim_acos(Obj* x);
+Obj* prim_atan(Obj* x);
+Obj* prim_atan2(Obj* y, Obj* x);
+
+/* Hyperbolic Functions */
+Obj* prim_sinh(Obj* x);
+Obj* prim_cosh(Obj* x);
+Obj* prim_tanh(Obj* x);
+
+/* Exponential/Logarithmic Functions */
+Obj* prim_exp(Obj* x);
+Obj* prim_log(Obj* x);
+Obj* prim_log10(Obj* x);
+Obj* prim_log2(Obj* x);
+Obj* prim_sqrt(Obj* x);
+
+/* Rounding Functions */
+Obj* prim_floor(Obj* x);
+Obj* prim_ceil(Obj* x);
+Obj* prim_round(Obj* x);
+Obj* prim_trunc(Obj* x);
+
+/* Math Constants */
+Obj* prim_pi(void);
+Obj* prim_e(void);
+Obj* prim_inf(void);
+Obj* prim_nan(void);
+
+/* Comparison Functions */
+Obj* prim_min(Obj* a, Obj* b);
+Obj* prim_max(Obj* a, Obj* b);
+Obj* prim_clamp(Obj* x, Obj* min_val, Obj* max_val);
+
+/* Bitwise Operations */
+Obj* prim_band(Obj* a, Obj* b);
+Obj* prim_bor(Obj* a, Obj* b);
+Obj* prim_bxor(Obj* a, Obj* b);
+Obj* prim_bnot(Obj* x);
+Obj* prim_lshift(Obj* x, Obj* n);
+Obj* prim_rshift(Obj* x, Obj* n);
+
+/* Numeric Predicates */
+Obj* prim_is_nan(Obj* x);
+Obj* prim_is_inf(Obj* x);
+Obj* prim_is_finite(Obj* x);
+
+/* Absolute Value */
+Obj* prim_abs(Obj* x);
+
+/* Sign Function */
+Obj* prim_signum(Obj* x);
+
+/* GCD and LCM */
+Obj* prim_gcd(Obj* a, Obj* b);
+Obj* prim_lcm(Obj* a, Obj* b);
+
+/* ========== Phase 23: Trampoline for Stack-Safe Recursion ========== */
+
+/* Check if value is a bounce (thunk) */
+Obj* prim_is_bounce(Obj* obj);
+
+/* Create a bounce (thunk) for delayed computation */
+Obj* prim_bounce(Obj* func, Obj* arg);
+
+/* Execute thunks until final result */
+Obj* prim_trampoline(Obj* initial);
+
+/* Example: Factorial using trampoline */
+Obj* prim_fact_trampoline(Obj* n);
+
+/* Example: Even/Odd using trampoline (mutual recursion) */
+Obj* prim_even_trampoline(Obj* n);
+Obj* prim_odd_trampoline(Obj* n);
+
+/* ========== Phase 22: Pipe Operator and Syntax Refinement ========== */
+
+/* Pipe operator for function chaining */
+Obj* prim_pipe(Obj* value, Obj* func);
+Obj* prim_pipe_many(Obj* value, Obj* functions);
+
+/* Function composition */
+Obj* prim_compose(Obj* f, Obj* g);
+Obj* prim_compose_many(Obj* functions);
+
+/* Leading dot field access */
+Obj* prim_dot_field(Obj* field_name, Obj* obj);
+Obj* prim_dot_field_chain(Obj* obj, Obj* field_names);
+
+/* Method chaining */
+Obj* prim_method_chain(Obj* obj, Obj* method_calls);
+
+/* Flip operator */
+Obj* prim_flip(Obj* func);
+
+/* Apply and partial application */
+Obj* prim_apply(Obj* func, Obj* args);
+Obj* prim_partial(Obj* func, Obj* fixed_args);
+
+/* ========== Phase 22: Module and Import System ========== */
+
+/* Module management */
+Obj* prim_module_begin(Obj* name_obj);
+Obj* prim_module_end(void);
+Obj* prim_module_get(Obj* name_obj);
+Obj* prim_module_exports(Obj* name_obj);
+Obj* prim_module_list(void);
+
+/* Export and import */
+Obj* prim_export(Obj* symbol_name, Obj* value);
+Obj* prim_import(Obj* name_obj, Obj* options);
+Obj* prim_use(Obj* name_obj);
+Obj* prim_require(Obj* name_obj);
+
+/* Qualified name resolution */
+Obj* prim_resolve(Obj* qualified_name);
+
 #ifdef __cplusplus
 }
 #endif

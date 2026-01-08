@@ -33,6 +33,42 @@ Source.omni ──► [Compiler] ──► Intermediate.c ──► [GCC + libom
 
 The runtime provides the physical foundation for the ASAP model.
 
+### 2.1 Memory Model Visualization
+
+```text
+┌────────────────────────────────────────────────────────────────────────┐
+│                          MEMORY MODEL (RC-G)                           │
+└────────────────────────────────────────────────────────────────────────┘
+
+      THREAD STACK                     LOGICAL REGIONS (RC-G)
+    ┌──────────────┐                ┌───────────────────────────┐
+    │   Frame 1    │                │         REGION A          │
+    ├──────────────┤                │  (External RC: 2)         │
+    │   Tether 1 ──┼───────┐        │  ┌───────┐     ┌───────┐  │
+    ├──────────────┤       └────────┼─►│ Obj 1 │────►│ Obj 2 │  │
+    │   Frame 2    │                │  └───────┘     └───────┘  │
+    ├──────────────┤                └──────┬─────────────▲──────┘
+    │   Tether 2 ──┼─────────────┐         │             │
+    └──────────────┘             │         │ Cross-      │
+                                 │         │ Region      │
+                                 │         │ Ref         │
+                                 ▼         ▼             │
+    ┌────────────────────────────┴─────────┴─────────────┴──────┐
+    │                         REGION B                          │
+    │  (External RC: 1)                                         │
+    │  ┌───────┐      ┌───────┐      ┌───────┐                  │
+    │  │ Obj 3 │─────►│ Obj 4 │◄─────│ Obj 5 │                  │
+    │  └───────┘      └───────┘      └───────┘                  │
+    └─────────────────────┬─────────────────────────────────────┘
+                          │
+                          ▼
+    ┌───────────────────────────────────────────────────────────┐
+    │                    PHYSICAL ARENA (Bump)                  │
+    ├───────────────────────────────────────────────────────────┤
+    │ [ Block 1 ] [ Block 2 ] [ Block 3 ] [ Block 4 ] [  FREE  ]│
+    └───────────────────────────────────────────────────────────┘
+```
+
 - **Regions**: Logical owners of memory blocks (`Region` struct).
 - **Arenas**: Physical storage backend (bump-pointer allocation).
 - **Tethers**: Thread-local mechanisms for safe concurrent access without global locks.
