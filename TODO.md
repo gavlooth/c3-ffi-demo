@@ -2569,7 +2569,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
     - Handle missing intermediate keys
   Verification: (put! data.user.address.city "NY") should work
 
-- [TODO] Label: T-wire-char-literal-01
+- [R] Label: T-wire-char-literal-01
   Objective: Implement character literals (#\char).
   Reference: tests/unwired_features.omni:44-47 (commented out)
   Where: csrc/parser/parser.c
@@ -2580,6 +2580,15 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
     - Map names to char values
     - Support #\xNN hex syntax
   Verification: #\newline should equal char(10)
+
+  Implementation (2026-01-09):
+    - Added R_BACKSLASH terminal to parser enum (parser.c:48)
+    - Added backslash terminal rule initialization (parser.c:758)
+    - Updated R_NAMED_CHAR rule to use HASH + BACKSLASH + SYM (parser.c:868)
+    - Updated act_named_char to skip BACKSLASH token (parser.c:554-557)
+    - Added hex syntax #\xNN support (parser.c:571-579)
+    - Tests: #\newline=10, #\tab=9, #\space=32, #\x41=65, #\x00=0, #\xFF=255
+  Status: Character literals fully implemented and tested.
 
 - [TODO] Label: T-wire-fmt-string-01
   Objective: Implement format strings (#fmt"...").

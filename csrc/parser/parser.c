@@ -45,7 +45,7 @@ enum {
     R_LPAREN, R_RPAREN,
     R_LBRACKET, R_RBRACKET,
     R_LBRACE, R_RBRACE,
-    R_DOT, R_CARET, R_COLON, R_EXCLAM, R_HASH,
+    R_DOT, R_CARET, R_COLON, R_EXCLAM, R_HASH, R_BACKSLASH,
     R_HASHBRACE, R_HASHPAREN, R_HASHBRACKET,
     R_HASH_FMT, R_HASH_CLF,
 
@@ -543,13 +543,18 @@ static OmniValue* act_clf_string(PikaState* state, size_t pos, PikaMatch match) 
 
 /* Named character literal: #\newline, #\space, #\tab, etc. */
 static OmniValue* act_named_char(PikaState* state, size_t pos, PikaMatch match) {
-    /* Pattern matched: HASH + SYM (where SYM is the character name) */
+    /* Pattern matched: HASH + BACKSLASH + SYM (where SYM is the character name) */
     size_t current = pos;
 
     /* Skip HASH */
     PikaMatch* hash_m = pika_get_match(state, current, R_HASH);
     if (!hash_m || !hash_m->matched) return omni_nil;
     current += hash_m->len;
+
+    /* Skip BACKSLASH */
+    PikaMatch* backslash_m = pika_get_match(state, current, R_BACKSLASH);
+    if (!backslash_m || !backslash_m->matched) return omni_nil;
+    current += backslash_m->len;
 
     /* Get the character name symbol */
     PikaMatch* sym_m = pika_get_match(state, current, R_SYM);
@@ -562,7 +567,17 @@ static OmniValue* act_named_char(PikaState* state, size_t pos, PikaMatch match) 
 
     /* Map named characters to their character codes */
     long char_code = -1;
-    if (strcmp(name, "newline") == 0) {
+
+    /* Check for hex syntax: #\xNN (e.g., #\x41 = 65 = 'A') */
+    if (strlen(name) >= 2 && name[0] == 'x' && isxdigit(name[1]) && isxdigit(name[2])) {
+        /* Parse hex value: xNN -> NN in hex */
+        char hex_str[3] = { name[1], name[2], '\0' };
+        char_code = strtol(hex_str, NULL, 16);
+        /* Ensure it's a valid byte (0-255) */
+        if (char_code < 0 || char_code > 255) {
+            char_code = -1;  /* Invalid */
+        }
+    } else if (strcmp(name, "newline") == 0) {
         char_code = 10;  /* '\n' */
     } else if (strcmp(name, "space") == 0) {
         char_code = 32;  /* ' ' */
@@ -755,6 +770,7 @@ void omni_grammar_init(void) {
     g_rules[R_COLON] = (PikaRule){ PIKA_TERMINAL, .data.str = ":" };
     g_rules[R_EXCLAM] = (PikaRule){ PIKA_TERMINAL, .data.str = "!" };
     g_rules[R_HASH] = (PikaRule){ PIKA_TERMINAL, .data.str = "#" };
+    g_rules[R_BACKSLASH] = (PikaRule){ PIKA_TERMINAL, .data.str = "\\" };
 
     /* Format strings: #fmt"..." and #clf"..." */
     g_rule_ids[R_HASH_FMT] = ids(2, R_HASH, R_SYM);
@@ -863,10 +879,10 @@ void omni_grammar_init(void) {
     /* ============== Named Character Literals ============== */
 
     /* Named characters: #\newline, #\space, #\tab, etc. */
-    /* Pattern: HASH + SYM (where SYM is the character name) */
-    int* named_char_ids = ids(2, R_HASH, R_SYM);
+    /* Pattern: HASH + BACKSLASH + SYM (where SYM is the character name) */
+    int* named_char_ids = ids(3, R_HASH, R_BACKSLASH, R_SYM);
     g_rule_ids[R_NAMED_CHAR] = named_char_ids;
-    g_rules[R_NAMED_CHAR] = (PikaRule){ PIKA_SEQ, .data.children = { named_char_ids, 2 }, .action = act_named_char };
+    g_rules[R_NAMED_CHAR] = (PikaRule){ PIKA_SEQ, .data.children = { named_char_ids, 3 }, .action = act_named_char };
 
     /* ============== Value-to-Type Reader Tag ============== */
 
