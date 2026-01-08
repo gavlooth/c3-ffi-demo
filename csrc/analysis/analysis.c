@@ -530,14 +530,22 @@ static void analyze_let(AnalysisContext* ctx, OmniValue* expr) {
                     }
 
                     /* Analyze the value (last element if len >= 2, otherwise it's uninitialized) */
+                    OmniValue* init_expr = NULL;
                     if (len == 2) {
                         /* [name val] */
-                        analyze_expr(ctx, omni_array_get(elem, 1));
+                        init_expr = omni_array_get(elem, 1);
+                        analyze_expr(ctx, init_expr);
                     } else if (len == 3) {
                         /* [name type val] - skip type, analyze val */
-                        analyze_expr(ctx, omni_array_get(elem, 2));
+                        init_expr = omni_array_get(elem, 2);
+                        analyze_expr(ctx, init_expr);
                     }
                     /* len == 1: [name] - uninitialized, don't analyze */
+
+                    /* Phase 25: Infer and set type_id for this binding */
+                    if (init_expr && omni_is_sym(name_val)) {
+                        analyze_and_set_type_id(ctx, name_val->str_val, init_expr);
+                    }
                 }
 
                 current = omni_cdr(current);
@@ -565,6 +573,11 @@ static void analyze_let(AnalysisContext* ctx, OmniValue* expr) {
                     ctx->position++;
                 }
                 analyze_expr(ctx, val);
+
+                /* Phase 25: Infer and set type_id for this binding */
+                if (omni_is_sym(name)) {
+                    analyze_and_set_type_id(ctx, name->str_val, val);
+                }
             }
 
             /* Analyze body */
@@ -592,6 +605,11 @@ static void analyze_let(AnalysisContext* ctx, OmniValue* expr) {
                     ctx->position++;
                 }
                 if (val) analyze_expr(ctx, val);
+
+                /* Phase 25: Infer and set type_id for this binding */
+                if (val && omni_is_sym(name)) {
+                    analyze_and_set_type_id(ctx, name->str_val, val);
+                }
             }
             bindings = omni_cdr(bindings);
         }
@@ -1276,6 +1294,153 @@ void omni_set_var_type_id(AnalysisContext* ctx, const char* name, int type_id) {
     }
     /* Note: If variable not found, this is a no-op.
      * The variable should already exist from earlier analysis passes. */
+}
+
+/* ============== Type Inference Functions (Phase 25) ============== */
+
+/*
+ * infer_type_from_expr - Infer TypeID from an expression
+ *
+ * This function analyzes the init expression and determines what type
+ * the resulting object will have. This is used during let binding analysis
+ * to assign type_id to variables.
+ *
+ * Args:
+ *   init: The initialization expression
+ *
+ * Returns:
+ *   TypeID enum value, or TYPE_ID_GENERIC if unknown
+ */
+static TypeID infer_type_from_expr(OmniValue* init) {
+    if (!init) return TYPE_ID_GENERIC;
+
+    /* Literals */
+    if (omni_is_int(init)) return TYPE_ID_INT;
+    if (omni_is_float(init)) return TYPE_ID_FLOAT;
+    if (omni_is_char(init)) return TYPE_ID_CHAR;
+    if (omni_is_nil(init)) return TYPE_ID_PAIR;  /* nil is an empty pair */
+
+    /* Check for constructor calls */
+    if (omni_is_cell(init)) {
+        OmniValue* head = omni_car(init);
+        if (omni_is_sym(head)) {
+            const char* form = head->str_val;
+
+            /* Pair/Cons/List constructors */
+            if (strcmp(form, "cons") == 0 ||
+                strcmp(form, "pair") == 0 ||
+                strcmp(form, "list") == 0) {
+                return TYPE_ID_PAIR;
+            }
+
+            /* Integer constructors */
+            if (strcmp(form, "mk-int") == 0 ||
+                strcmp(form, "int") == 0) {
+                return TYPE_ID_INT;
+            }
+
+            /* Float constructors */
+            if (strcmp(form, "mk-float") == 0 ||
+                strcmp(form, "float") == 0) {
+                return TYPE_ID_FLOAT;
+            }
+
+            /* Array constructor */
+            if (strcmp(form, "array") == 0 ||
+                strcmp(form, "mk-array") == 0) {
+                return TYPE_ID_ARRAY;
+            }
+
+            /* String constructor */
+            if (strcmp(form, "str") == 0 ||
+                strcmp(form, "string") == 0 ||
+                strcmp(form, "mk-string") == 0) {
+                return TYPE_ID_STRING;
+            }
+
+            /* Symbol constructor */
+            if (strcmp(form, "sym") == 0 ||
+                strcmp(form, "symbol") == 0 ||
+                strcmp(form, "quote") == 0) {
+                return TYPE_ID_SYMBOL;
+            }
+
+            /* Dict/Map constructor */
+            if (strcmp(form, "dict") == 0 ||
+                strcmp(form, "map") == 0 ||
+                strcmp(form, "mk-dict") == 0) {
+                return TYPE_ID_DICT;
+            }
+
+            /* Box constructor */
+            if (strcmp(form, "box") == 0 ||
+                strcmp(form, "ref") == 0) {
+                return TYPE_ID_BOX;
+            }
+
+            /* Channel constructor */
+            if (strcmp(form, "chan") == 0 ||
+                strcmp(form, "channel") == 0) {
+                return TYPE_ID_CHANNEL;
+            }
+
+            /* Thread constructor */
+            if (strcmp(form, "thread") == 0 ||
+                strcmp(form, "spawn") == 0) {
+                return TYPE_ID_THREAD;
+            }
+
+            /* Error constructor */
+            if (strcmp(form, "error") == 0) {
+                return TYPE_ID_ERROR;
+            }
+
+            /* Atom constructor */
+            if (strcmp(form, "atom") == 0) {
+                return TYPE_ID_ATOM;
+            }
+
+            /* Tuple constructor */
+            if (strcmp(form, "tuple") == 0) {
+                return TYPE_ID_TUPLE;
+            }
+        }
+
+        /* Check if it's a lambda/closure */
+        if (omni_is_sym(head) && strcmp(head->str_val, "lambda") == 0) {
+            return TYPE_ID_CLOSURE;
+        }
+
+        /* Check if it's a function definition */
+        if (omni_is_sym(head) && strcmp(head->str_val, "define") == 0) {
+            /* (define (name args...) body) */
+            if (omni_is_cell(cadr(init))) {
+                return TYPE_ID_CLOSURE;
+            }
+        }
+    }
+
+    /* Default: unknown type */
+    return TYPE_ID_GENERIC;
+}
+
+/*
+ * analyze_and_set_type_id - Infer type_id from expression and assign to variable
+ *
+ * This is called during let binding analysis to set the type_id for each variable.
+ *
+ * Args:
+ *   ctx: Analysis context
+ *   var_name: Name of the variable
+ *   init: Initialization expression
+ *
+ * Returns:
+ *   The inferred TypeID
+ */
+TypeID analyze_and_set_type_id(AnalysisContext* ctx, const char* var_name, OmniValue* init) {
+    TypeID type_id = infer_type_from_expr(init);
+    omni_set_var_type_id(ctx, var_name, type_id);
+    return type_id;
 }
 
 const char* omni_free_strategy_name(FreeStrategy strategy) {

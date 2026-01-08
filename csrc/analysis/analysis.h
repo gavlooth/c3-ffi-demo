@@ -13,6 +13,7 @@
 #define OMNILISP_ANALYSIS_H
 
 #include "../ast/ast.h"
+#include "type_id.h"
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -543,6 +544,36 @@ void omni_analyze_reuse(AnalysisContext* ctx, OmniValue* expr);
 
 /* Get variable usage info */
 VarUsage* omni_get_var_usage(AnalysisContext* ctx, const char* name);
+
+/* ============== Type ID Query Functions (Phase 24) ============== */
+
+/*
+ * Get type_id for a variable
+ * Returns the TypeID enum value assigned during type inference
+ */
+int omni_get_var_type_id(AnalysisContext* ctx, const char* name);
+
+/*
+ * Set type_id for a variable
+ * Called during type inference to assign compile-time type constant
+ */
+void omni_set_var_type_id(AnalysisContext* ctx, const char* name, int type_id);
+
+/* ============== Type Inference Functions (Phase 25) ============== */
+
+/*
+ * Analyze expression and infer/set type_id for variable
+ * Called during let binding analysis to assign type_id
+ *
+ * Args:
+ *   ctx: Analysis context
+ *   var_name: Name of the variable
+ *   init: Initialization expression
+ *
+ * Returns:
+ *   The inferred TypeID enum value
+ */
+TypeID analyze_and_set_type_id(AnalysisContext* ctx, const char* var_name, OmniValue* init);
 
 /* ============== Type ID Query Functions (Phase 24) ============== */
 
