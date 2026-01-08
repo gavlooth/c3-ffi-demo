@@ -359,6 +359,62 @@
 | Memory Pressure | 1 | Stress test with alloc/free cycles |
 | **Total** | **35** | Comprehensive performance benchmarks |
 
+### Comprehensive Stress Tests (test_stress_comprehensive.c)
+
+Based on best practices from jemalloc, tcmalloc, and mimalloc-bench suites.
+
+| Category | Tests | Description |
+|----------|-------|-------------|
+| **ALLOCATION PATTERNS (100 tests)** | | |
+| Small Object Allocation | 10 | Int/float/char bursts at 1k, 10k, 50k, 100k, 200k allocations |
+| Medium Object Allocation | 10 | Pair/box bursts and nested structures |
+| Powers-of-2 Pattern | 10 | Allocation patterns at 8, 16, 32, ... 1024 byte boundaries |
+| Odd-Size Pattern | 10 | Prime number sequences, Fibonacci, alternating patterns |
+| Mixed Size Workloads | 10 | Int+float, int+pair, all types, weighted distributions |
+| Rapid Alloc/Free Cycles | 10 | Single object cycles, batch cycles at various sizes |
+| Deallocation Orders | 10 | LIFO, FIFO, random, alternating, block-based, stripe patterns |
+| Symbol Allocation | 10 | Burst, interning, unique names, long/special chars |
+| List Construction | 10 | Progressive building, nested lists, shared tails |
+| Closure Allocation | 10 | Environment patterns, shared envs, recursive chains |
+| **FRAGMENTATION (60 tests)** | | |
+| Swiss Cheese Pattern | 10 | Hole creation and refill at various granularities |
+| Long-Lived Interleaving | 10 | Anchors, grow/shrink, pairs, boxes, lists, closures |
+| Sawtooth Pattern | 10 | Variable peaks/valleys, aggressive shrink, micro patterns |
+| Memory Compaction | 10 | Sparse arrays, sliding windows, queues, stacks, caches |
+| External Fragmentation | 10 | Varied sizes, size classes, coalescing, worst-case |
+| Internal Fragmentation | 10 | Small allocs in large bins, padding, alignment |
+| **CONCURRENCY (60 tests)** | | |
+| Producer-Consumer | 10 | 2+2, 4+4 thread configurations with shared pools |
+| Asymmetric Allocation | 10 | Alloc-only vs free-only thread patterns |
+| Thread-Local | 10 | Per-thread allocation without sharing |
+| Object Migration | 10 | Cross-thread object ownership transfer |
+| Contention | 10 | High and low contention scenarios |
+| Refcount Stress | 10 | Concurrent inc/dec on shared objects |
+| **EDGE CASES (80 tests)** | | |
+| Boundary Conditions | 20 | Zero allocations, min/max values, deep nesting |
+| Allocation Extremes | 20 | Wide sharing, alternating types, boxed vs immediate |
+| Symbol Edge Cases | 20 | Empty, long, special characters, rapid lookup |
+| Structure Edge Cases | 20 | Box chains, pair trees, closure chains |
+| **TYPE-SPECIFIC (50 tests)** | | |
+| Integer Workloads | 10 | Int-only at various scales |
+| Float Workloads | 10 | Float-only at various scales |
+| Pair/List Workloads | 10 | List building, association lists, nested structures |
+| Symbol Workloads | 10 | Symbol-heavy patterns |
+| Closure Workloads | 10 | Closure chains and environments |
+| **REGION-SPECIFIC (50 tests)** | | |
+| Region Lifecycle | 10 | Create/destroy cycles |
+| Region Allocation | 10 | Simple, many objects, typed allocation |
+| Region Reset | 10 | Reset cycles, concurrent regions |
+| Region Structures | 10 | Mixed types, nested structures, lists |
+| Region Stress | 10 | Stress testing with high allocation counts |
+| **TOTAL** | **400** | Comprehensive stress test suite |
+
+**Test Design References:**
+- [mimalloc-bench](https://github.com/daanx/mimalloc-bench) - mstress, xmalloc patterns
+- [jemalloc testing patterns](https://github.com/jemalloc/jemalloc)
+- [tcmalloc internal tests](https://github.com/google/tcmalloc)
+- [Arena allocator best practices](https://www.rfleury.com/p/untangling-lifetimes-the-arena-allocator)
+
 ## Memory Safety Tests (with sanitizers)
 
 1. **AddressSanitizer** - Buffer overflows, use-after-free

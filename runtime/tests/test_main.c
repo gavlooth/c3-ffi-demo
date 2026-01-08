@@ -44,6 +44,8 @@ static int run_slow_tests_enabled(void) {
 #include "test_stress_memory.c"
 #include "test_edge_cases_memory.c"
 #include "test_performance.c"
+#include "test_stress_comprehensive.c"
+#include "test_performance_comprehensive.c"
 
 int main(int argc, char** argv) {
     (void)argc;
@@ -82,6 +84,8 @@ int main(int argc, char** argv) {
         /* run_stress_tests(); */
         run_stress_memory_tests();
         run_edge_case_memory_tests();
+        run_comprehensive_stress_tests();  /* 400+ new stress tests */
+        run_comprehensive_performance_tests();  /* 200+ new performance tests */
     }
 
     TEST_EXIT();
