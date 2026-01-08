@@ -43,25 +43,44 @@ static int type_id_to_tag(TypeID type_id) {
     }
 }
 
-Obj* alloc_obj_region(Region* r, int tag) {
-    if (!r) {
-        // Fallback to malloc if no region (shouldn't happen in practice)
-        Obj* o = malloc(sizeof(Obj));
-        if (!o) return NULL;
-        o->mark = 0;
-        o->tag = tag;
-        o->generation = 0;
-        o->tethered = 0;
-        return o;
+/*
+ * Reverse mapping from ObjTag to TypeID.
+ *
+ * Phase 25: Enable constructors to use alloc_obj_typed() by converting
+ * legacy tag values to TypeID constants.
+ */
+static TypeID tag_to_type_id(int tag) {
+    switch (tag) {
+        case TAG_INT:      return TYPE_ID_INT;
+        case TAG_FLOAT:    return TYPE_ID_FLOAT;
+        case TAG_CHAR:     return TYPE_ID_CHAR;
+        case TAG_PAIR:     return TYPE_ID_PAIR;
+        case TAG_SYM:      return TYPE_ID_SYMBOL;
+        case TAG_ARRAY:    return TYPE_ID_ARRAY;
+        case TAG_STRING:   return TYPE_ID_STRING;
+        case TAG_DICT:     return TYPE_ID_DICT;
+        case TAG_CLOSURE:  return TYPE_ID_CLOSURE;
+        case TAG_BOX:      return TYPE_ID_BOX;
+        case TAG_CHANNEL:  return TYPE_ID_CHANNEL;
+        case TAG_THREAD:   return TYPE_ID_THREAD;
+        case TAG_ERROR:    return TYPE_ID_ERROR;
+        case TAG_ATOM:     return TYPE_ID_ATOM;
+        case TAG_TUPLE:    return TYPE_ID_TUPLE;
+        case TAG_NAMED_TUPLE: return TYPE_ID_NAMED_TUPLE;
+        case TAG_GENERIC:  return TYPE_ID_GENERIC;
+        case TAG_KIND:     return TYPE_ID_KIND;
+        case TAG_NOTHING:  return TYPE_ID_NOTHING;
+        default:           return TYPE_ID_GENERIC;  /* Fallback */
     }
+}
 
-    Obj* o = region_alloc(r, sizeof(Obj));
-    if (!o) return NULL;
-    o->mark = 1;
-    o->tag = tag;
-    o->generation = 0; // Should ideally use region's generation or global
-    o->tethered = 0;
-    return o;
+Obj* alloc_obj_region(Region* r, int tag) {
+    /*
+     * Phase 25: Delegate to alloc_obj_typed() to leverage type metadata optimization.
+     * This converts legacy tag-based allocation to TypeID-based allocation.
+     */
+    TypeID type_id = tag_to_type_id(tag);
+    return alloc_obj_typed(r, type_id);
 }
 
 /*
