@@ -352,54 +352,41 @@ void release_scc(SCC* scc);
 void detect_and_freeze_sccs(Obj* root);
 ```
 
-### Component-Level Scope Tethering
+### Region-Level Tethering (RC-G Model)
 
-For unbroken cycles with O(1) collection and zero-cost tethered access:
+The RC-G (Region Control Block) model provides thread-safe borrowing via tethering:
 
 ```c
-/* Component Lifecycle */
-SymComponent* sym_component_new(void);
-void sym_component_add_member(SymComponent* c, SymObj* obj);
+/* Region Tethering - Thread-safe borrowing */
+void region_tether_start(Region* r);
+void region_tether_end(Region* r);
 
-/* Boundary Operations (ASAP called) */
-void sym_acquire_handle(SymComponent* c);
-void sym_release_handle(SymComponent* c);
+/* Region Reference Counting */
+void region_inc_ref(Region* r);
+void region_dec_ref(Region* r);
 
-/* Scope Tethering (Zero-cost access) */
-SymTetherToken sym_tether_begin(SymComponent* c);
-void sym_tether_end(SymTetherToken token);
-
-/* Get underlying Obj* */
-Obj* sym_get_data(SymObj* obj);
+/* Transmigration - Move object graphs between regions */
+void* transmigrate(void* root, Region* src, Region* dest);
 ```
 
-Key insight: Cyclic islands (SCCs) are treated as single units ("Components").
+**Key insight:** Tethering provides zero-cost access to region data during temporary borrows.
+The `tether_count` prevents region deallocation while threads are borrowing data.
 
 ```c
-void example(void) {
-    SymComponent* c = sym_component_new();
-    sym_acquire_handle(c); // ASAP manages this handle
+void example(Region* r) {
+    // Borrow region data safely
+    region_tether_start(r);
 
-    SymObj* a = sym_alloc(mk_int(1));
-    SymObj* b = sym_alloc(mk_int(2));
-    sym_component_add_member(c, a);
-    sym_component_add_member(c, b);
-    
-    // Create internal cycle
-    a->refs[0] = b;
-    b->refs[0] = a;
+    // Access r's data without incrementing external_rc
+    Obj* data = region_alloc(r, sizeof(Obj));
+    process(data);
 
-    {
-        // Zero-cost access block
-        SymTetherToken t = sym_tether_begin(c);
-        process(a); 
-        process(b);
-        sym_tether_end(t);
-    }
-
-    sym_release_handle(c);  // Both a and b freed immediately
+    // Release borrow - allows region to be freed if external_rc == 0
+    region_tether_end(r);
 }
 ```
+
+**Note:** The Component system was abandoned in favor of the RC-G Region model.
 
 ---
 

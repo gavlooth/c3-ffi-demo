@@ -132,36 +132,27 @@ void arena_cycle_example(void) {
 }
 ```
 
-### Component-Level Tethering for Unbroken Cycles
+### Region-Level Tethering for Thread-Safe Borrowing
 
 ```c
-void component_tethering_example(void) {
-    // 1. Create a component (island unit)
-    SymComponent* c = sym_component_new();
-    sym_acquire_handle(c); // ASAP manages liveness
+void region_tethering_example(Region* r) {
+    // 1. Borrow region data safely (thread-safe)
+    region_tether_start(r);
 
-    // 2. Add members to the island
-    SymObj* a = sym_alloc(mk_int(1));
-    SymObj* b = sym_alloc(mk_int(2));
-    sym_component_add_member(c, a);
-    sym_component_add_member(c, b);
+    // 2. Allocate and access data in the region
+    Obj* a = region_alloc(r, sizeof(Obj));
+    a->tag = TAG_INT;
+    a->i = 42;
 
-    // 3. Create cycle inside island (A <-> B)
-    a->refs[0] = b;
-    b->refs[0] = a;
+    // 3. Process data - tether prevents region deallocation
+    printf("Value: %ld\n", a->i);
 
-    // 4. Zero-cost access block
-    {
-        SymTetherToken t = sym_tether_begin(c);
-        Obj* data = sym_get_data(a);
-        printf("A data: %ld\n", obj_to_int(data));
-        sym_tether_end(t);
-    }
-
-    // 5. Final release (dismantles island)
-    sym_release_handle(c);
+    // 4. Release borrow - allows region to be freed if external_rc == 0
+    region_tether_end(r);
 }
 ```
+
+**Note:** The Component system was abandoned. The RC-G model uses Region-level tethering instead.
 
 ### SCC-Based RC for Frozen Cycles
 

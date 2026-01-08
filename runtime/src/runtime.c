@@ -527,29 +527,30 @@ Obj* named_tuple_get(Obj* tup, Obj* key) {
     return NULL;
 }
 
-/* Arithmetic */
-Obj* prim_add(Obj* a, Obj* b) { 
+/* Arithmetic - MOVED to math_numerics.c to avoid duplicate symbols */
+#if 0
+Obj* prim_add(Obj* a, Obj* b) {
     if ((a && IS_BOXED(a) && a->tag == TAG_FLOAT) || (b && IS_BOXED(b) && b->tag == TAG_FLOAT))
         return mk_float(obj_to_float(a) + obj_to_float(b));
-    return mk_int(obj_to_int(a) + obj_to_int(b)); 
+    return mk_int(obj_to_int(a) + obj_to_int(b));
 }
 Obj* prim_sub(Obj* a, Obj* b) {
     if ((a && IS_BOXED(a) && a->tag == TAG_FLOAT) || (b && IS_BOXED(b) && b->tag == TAG_FLOAT))
         return mk_float(obj_to_float(a) - obj_to_float(b));
-    return mk_int(obj_to_int(a) - obj_to_int(b)); 
+    return mk_int(obj_to_int(a) - obj_to_int(b));
 }
 Obj* prim_mul(Obj* a, Obj* b) {
     if ((a && IS_BOXED(a) && a->tag == TAG_FLOAT) || (b && IS_BOXED(b) && b->tag == TAG_FLOAT))
         return mk_float(obj_to_float(a) * obj_to_float(b));
-    return mk_int(obj_to_int(a) * obj_to_int(b)); 
+    return mk_int(obj_to_int(a) * obj_to_int(b));
 }
-Obj* prim_div(Obj* a, Obj* b) { 
+Obj* prim_div(Obj* a, Obj* b) {
     if ((a && IS_BOXED(a) && a->tag == TAG_FLOAT) || (b && IS_BOXED(b) && b->tag == TAG_FLOAT)) {
         double bv = obj_to_float(b);
         return mk_float(bv != 0.0 ? obj_to_float(a) / bv : 0.0);
     }
-    long bv = obj_to_int(b); 
-    return mk_int(bv ? obj_to_int(a) / bv : 0); 
+    long bv = obj_to_int(b);
+    return mk_int(bv ? obj_to_int(a) / bv : 0);
 }
 Obj* prim_mod(Obj* a, Obj* b) {
     long bv = obj_to_int(b);
@@ -559,6 +560,7 @@ Obj* prim_abs(Obj* a) {
     long val = obj_to_int(a);
     return mk_int(val < 0 ? -val : val);
 }
+#endif
 
 /* Comparisons */
 Obj* prim_eq(Obj* a, Obj* b) { return mk_bool(obj_to_int(a) == obj_to_int(b)); }
@@ -581,8 +583,7 @@ Obj* char_to_int(Obj* c) { return mk_int(obj_to_char(c)); }
 Obj* int_to_char(Obj* n) { return mk_char(obj_to_int(n)); }
 Obj* int_to_float(Obj* n) { return mk_float((double)obj_to_int(n)); }
 Obj* float_to_int(Obj* f) { return mk_int(f ? (long)f->f : 0); }
-Obj* prim_floor(Obj* f) { return mk_float(f && f->tag == TAG_FLOAT ? floor(f->f) : (double)obj_to_int(f)); }
-Obj* prim_ceil(Obj* f) { return mk_float(f && f->tag == TAG_FLOAT ? ceil(f->f) : (double)obj_to_int(f)); }
+/* prim_floor and prim_ceil moved to math_numerics.c to avoid duplicate symbols */
 
 /* Introspection */
 Obj* ctr_tag(Obj* x) { 
@@ -877,4 +878,325 @@ Obj* prim_fn(Obj* params_and_ret) {
     free(fn_name);
 
     return result;
+}
+
+/* ========== Deep Path Mutation ========== */
+
+/*
+ * Helper: Split a path string into components
+ * Returns: NULL-terminated array of strings (caller must free)
+ */
+static char** split_path(const char* path_str, int* out_count) {
+    if (!path_str || !out_count) return NULL;
+
+    /* Count the number of components */
+    int count = 1;
+    for (const char* p = path_str; *p; p++) {
+        if (*p == '.') count++;
+    }
+
+    /* Allocate array */
+    char** components = malloc(sizeof(char*) * (count + 1));
+    if (!components) return NULL;
+
+    /* Split the path */
+    int i = 0;
+    char* path_copy = strdup(path_str);
+    char* saveptr = NULL;
+    char* token = strtok_r(path_copy, ".", &saveptr);
+
+    while (token && i < count) {
+        components[i++] = strdup(token);
+        token = strtok_r(NULL, ".", &saveptr);
+    }
+    components[i] = NULL;
+
+    free(path_copy);
+    *out_count = count;
+    return components;
+}
+
+/*
+ * Helper: Free path components
+ */
+static void free_path_components(char** components) {
+    if (!components) return;
+    for (int i = 0; components[i]; i++) {
+        free(components[i]);
+    }
+    free(components);
+}
+
+/*
+ * Helper: Look up a nested field in a structure
+ * For now, this only works with simple dict-like structures
+ * represented as nested pairs (key . value)
+ */
+static Obj* deep_get(Obj* root, char** components, int component_count) {
+    if (!root || !components || component_count == 0) return NULL;
+
+    Obj* current = root;
+
+    for (int i = 0; i < component_count && current; i++) {
+        const char* key = components[i];
+
+        /* Search for key in current structure */
+        Obj* found = NULL;
+        Obj* p = current;
+
+        while (p && IS_BOXED(p) && p->tag == TAG_PAIR) {
+            Obj* entry = p->a;
+            if (IS_BOXED(entry) && entry->tag == TAG_PAIR) {
+                Obj* entry_key = entry->a;
+                if (IS_BOXED(entry_key) && entry_key->tag == TAG_SYM) {
+                    const char* entry_key_str = (const char*)entry_key->ptr;
+                    if (strcmp(entry_key_str, key) == 0) {
+                        found = entry->b;
+                        break;
+                    }
+                }
+            }
+            p = p->b;
+        }
+
+        current = found;
+    }
+
+    return current;
+}
+
+/*
+ * Helper: Set a nested field in a structure (immutable - returns new structure)
+ * For now, this is a simplified implementation that creates new pairs
+ * A full implementation would use proper structural sharing
+ */
+static Obj* deep_set(Obj* root, char** components, int component_count, Obj* new_value) {
+    if (!root || component_count == 0) return new_value;
+
+    /* For simplicity, this is a placeholder that returns an error */
+    /* A full implementation would recursively rebuild the structure */
+    omni_ensure_global_region();
+    return mk_error_region(omni_get_global_region(), "deep-put: Not yet fully implemented");
+}
+
+/*
+ * prim_deep_put: Mutate a nested field path in a data structure
+ *
+ * Args:
+ *   - root: The root object (dict/record)
+ *   - path_str: Dotted path string (e.g., "user.address.city")
+ *   - new_value: The value to set at the leaf
+ *
+ * Returns: The modified root object
+ *
+ * Note: This is a simplified implementation; full support requires
+ * proper dict/record representation and get/set operations.
+ */
+Obj* prim_deep_put(Obj* root, const char* path_str, Obj* new_value) {
+    if (!path_str) {
+        omni_ensure_global_region();
+        return mk_error_region(omni_get_global_region(), "deep-put: Invalid path");
+    }
+
+    /* Split the path into components */
+    int component_count = 0;
+    char** components = split_path(path_str, &component_count);
+    if (!components) {
+        omni_ensure_global_region();
+        return mk_error_region(omni_get_global_region(), "deep-put: Memory allocation failed");
+    }
+
+    /* Perform the deep set */
+    Obj* result = deep_set(root, components, component_count, new_value);
+
+    /* Clean up */
+    free_path_components(components);
+
+    return result;
+}
+
+/* ========== Type System Primitives ========== */
+
+/*
+ * prim_value_to_type: Return the type of a value at runtime
+ *
+ * Args: value - Any OmniLisp value
+ * Returns: A Kind object representing the value's type
+ *
+ * Example:
+ *   (value->type 42) => {Int}
+ *   (value->type "hello") => {String}
+ *   (value->type '(1 2)) => {Pair}
+ */
+Obj* prim_value_to_type(Obj* value) {
+    if (!value) {
+        omni_ensure_global_region();
+        return mk_kind_region(omni_get_global_region(), "Nil", NULL, 0);
+    }
+
+    omni_ensure_global_region();
+    Region* r = omni_get_global_region();
+    const char* type_name = "Unknown";
+
+    /* Check immediate types */
+    if (IS_IMMEDIATE(value)) {
+        if (IS_IMMEDIATE_INT(value)) {
+            type_name = "Int";
+        } else if (IS_IMMEDIATE_CHAR(value)) {
+            type_name = "Char";
+        } else if (IS_IMMEDIATE_BOOL(value)) {
+            type_name = "Bool";
+        }
+    }
+    /* Check boxed types */
+    else if (IS_BOXED(value)) {
+        switch (value->tag) {
+            case TAG_PAIR:
+                type_name = "Pair";
+                break;
+            case TAG_SYM:
+                type_name = "Symbol";
+                break;
+            case TAG_STRING:
+                type_name = "String";
+                break;
+            case TAG_ARRAY:
+                type_name = "Array";
+                break;
+            case TAG_CLOSURE:
+                type_name = "Function";
+                break;
+            case TAG_GENERIC:
+                type_name = "Generic";
+                break;
+            case TAG_KIND:
+                type_name = "Kind";
+                break;
+            case TAG_KEYWORD:
+                type_name = "Keyword";
+                break;
+            case TAG_TUPLE:
+                type_name = "Tuple";
+                break;
+            case TAG_NAMED_TUPLE:
+                type_name = "NamedTuple";
+                break;
+            case TAG_BOX:
+                type_name = "Box";
+                break;
+            case TAG_CHANNEL:
+                type_name = "Channel";
+                break;
+            case TAG_ERROR:
+                type_name = "Error";
+                break;
+            case TAG_ATOM:
+                type_name = "Atom";
+                break;
+            case TAG_THREAD:
+                type_name = "Thread";
+                break;
+            case TAG_DICT:
+                type_name = "Dict";
+                break;
+            case TAG_NOTHING:
+                type_name = "Nothing";
+                break;
+            default:
+                type_name = "Unknown";
+                break;
+        }
+    }
+
+    return mk_kind_region(r, type_name, NULL, 0);
+}
+
+/* ========== Type Bootstrap Primitives ========== */
+
+/*
+ * prim_kind_int: Get the Int Kind object
+ */
+Obj* prim_kind_int(void) {
+    omni_ensure_global_region();
+    return mk_kind_region(omni_get_global_region(), "Int", NULL, 0);
+}
+
+/*
+ * prim_kind_string: Get the String Kind object
+ */
+Obj* prim_kind_string(void) {
+    omni_ensure_global_region();
+    return mk_kind_region(omni_get_global_region(), "String", NULL, 0);
+}
+
+/*
+ * prim_kind_array: Get the Array Kind object
+ */
+Obj* prim_kind_array(void) {
+    omni_ensure_global_region();
+    return mk_kind_region(omni_get_global_region(), "Array", NULL, 0);
+}
+
+/*
+ * prim_kind_list: Get the List Kind object
+ */
+Obj* prim_kind_list(void) {
+    omni_ensure_global_region();
+    return mk_kind_region(omni_get_global_region(), "List", NULL, 0);
+}
+
+/*
+ * prim_kind_pair: Get the Pair Kind object
+ */
+Obj* prim_kind_pair(void) {
+    omni_ensure_global_region();
+    return mk_kind_region(omni_get_global_region(), "Pair", NULL, 0);
+}
+
+/*
+ * prim_kind_bool: Get the Bool Kind object
+ */
+Obj* prim_kind_bool(void) {
+    omni_ensure_global_region();
+    return mk_kind_region(omni_get_global_region(), "Bool", NULL, 0);
+}
+
+/*
+ * prim_kind_char: Get the Char Kind object
+ */
+Obj* prim_kind_char(void) {
+    omni_ensure_global_region();
+    return mk_kind_region(omni_get_global_region(), "Char", NULL, 0);
+}
+
+/*
+ * prim_kind_float: Get the Float Kind object
+ */
+Obj* prim_kind_float(void) {
+    omni_ensure_global_region();
+    return mk_kind_region(omni_get_global_region(), "Float", NULL, 0);
+}
+
+/*
+ * prim_kind_function: Get the Function Kind object
+ */
+Obj* prim_kind_function(void) {
+    omni_ensure_global_region();
+    return mk_kind_region(omni_get_global_region(), "Function", NULL, 0);
+}
+
+/*
+ * prim_kind_any: Get the Any Kind object (top type)
+ */
+Obj* prim_kind_any(void) {
+    omni_ensure_global_region();
+    return mk_kind_region(omni_get_global_region(), "Any", NULL, 0);
+}
+
+/*
+ * prim_kind_nothing: Get the Nothing Kind object (bottom type)
+ */
+Obj* prim_kind_nothing(void) {
+    omni_ensure_global_region();
+    return mk_kind_region(omni_get_global_region(), "Nothing", NULL, 0);
 }

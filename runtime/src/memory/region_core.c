@@ -3,6 +3,7 @@
 #include <string.h>
 
 #define MAX_THREAD_LOCAL_TETHERS 16
+#define REGION_POOL_SIZE 32  // Pool size for reusable regions
 
 typedef struct {
     Region* regions[MAX_THREAD_LOCAL_TETHERS];
@@ -12,28 +13,62 @@ typedef struct {
 
 static __thread TetherCache g_tether_cache = { .size = 0 };
 
+// Region Pool for fast reuse (OPTIMIZATION: T-opt-region-pool)
+typedef struct {
+    Region* regions[REGION_POOL_SIZE];
+    int count;
+} RegionPool;
+
+static __thread RegionPool g_region_pool = { .count = 0 };
+
+// Reset a region for reuse (fast path)
+static inline void region_reset(Region* r) {
+    if (!r) return;
+    // Free the arena contents
+    arena_free(&r->arena);
+    // Reset inline buffer (OPTIMIZATION: T-opt-inline-allocation)
+    r->inline_buf.offset = 0;
+    // Reset control block
+    r->external_rc = 0;
+    r->tether_count = 0;
+    r->scope_alive = true;
+}
+
 Region* region_create(void) {
-    // We allocate the Region struct itself using malloc, 
+    // FAST PATH: Try to get a region from the pool
+    if (g_region_pool.count > 0) {
+        Region* r = g_region_pool.regions[--g_region_pool.count];
+        // Region is already reset, just mark it as alive
+        r->scope_alive = true;
+        return r;
+    }
+
+    // SLOW PATH: Allocate new region (malloc overhead)
+    // We allocate the Region struct itself using malloc,
     // but the contents are managed by the internal Arena.
-    // Ideally, the Region struct could be *inside* the arena, 
-    // but we need the RCB to persist until the LAST ref dies, 
-    // whereas the Arena might be reset. 
+    // Ideally, the Region struct could be *inside* the arena,
+    // but we need the RCB to persist until the LAST ref dies,
+    // whereas the Arena might be reset.
     // For now, simple malloc for the RCB.
     Region* r = (Region*)malloc(sizeof(Region));
     if (!r) {
         fprintf(stderr, "Fatal: OOM in region_create\n");
         exit(1);
     }
-    
+
     // Initialize Arena (zero-init is sufficient for tsoding/arena to start)
     r->arena.begin = NULL;
     r->arena.end = NULL;
-    
+
+    // Initialize inline buffer (OPTIMIZATION: T-opt-inline-allocation)
+    r->inline_buf.offset = 0;
+    r->inline_buf.capacity = REGION_INLINE_BUF_SIZE;
+
     // Initialize Control Block
     r->external_rc = 0;
     r->tether_count = 0;
     r->scope_alive = true;
-    
+
     return r;
 }
 
@@ -44,12 +79,21 @@ void region_destroy_if_dead(Region* r) {
     // 1. Scope must be dead (region_exit called)
     // 2. No external references (external_rc == 0)
     // 3. No active tethers (tether_count == 0)
-    
+
     // We use atomic loads for thread safety check
     int rc = __atomic_load_n(&r->external_rc, __ATOMIC_ACQUIRE);
     int tc = __atomic_load_n(&r->tether_count, __ATOMIC_ACQUIRE);
-    
+
     if (!r->scope_alive && rc == 0 && tc == 0) {
+        // OPTIMIZATION: Try to return to pool instead of freeing
+        if (g_region_pool.count < REGION_POOL_SIZE) {
+            // Reset and return to pool (FAST: avoids malloc/free)
+            region_reset(r);
+            g_region_pool.regions[g_region_pool.count++] = r;
+            return;
+        }
+
+        // Pool full, actually free (SLOW: requires malloc next time)
         arena_free(&r->arena);
         free(r);
     }
@@ -132,9 +176,8 @@ void region_tether_end(Region* r) {
     }
 }
 
-void* region_alloc(Region* r, size_t size) {
-    return arena_alloc(&r->arena, size);
-}
+// region_alloc is now static inline in region_core.h (T-opt-inline-alloc-fastpath)
+// This eliminates call overhead for the hot inline buffer fast path
 
 void region_splice(Region* dest, Region* src, void* start_ptr, void* end_ptr) {
     if (!dest || !src || !start_ptr || !end_ptr) return;

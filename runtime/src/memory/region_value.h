@@ -58,6 +58,31 @@ Obj* mk_error_region(Region* r, const char* msg);
 Obj* mk_cell_region(Region* r, Obj* car, Obj* cdr);
 
 /*
+ * SPECIALIZED CONSTRUCTORS (T-opt-specialized-constructors)
+ * Batch-allocate multiple objects in a single call to reduce allocation overhead.
+ */
+
+/*
+ * mk_list_region - Build a list of n integers in a single batch allocation
+ * Reduces allocation count from O(n) to O(1) for list construction.
+ * Each element is an integer from 0 to n-1.
+ */
+Obj* mk_list_region(Region* r, int n);
+
+/*
+ * mk_tree_region - Build a complete binary tree of given depth in a single batch
+ * Reduces allocation count from O(2^depth) to O(1) for tree construction.
+ * Returns a tree where leaves are integers and internal nodes are cells.
+ */
+Obj* mk_tree_region(Region* r, int depth);
+
+/*
+ * mk_list_from_array_region - Build a list from an array of values in one batch
+ * Takes an array of n Obj* values and builds a linked list in a single allocation.
+ */
+Obj* mk_list_from_array_region(Region* r, Obj** values, int n);
+
+/*
  * Lambda/Closure constructor
  */
 Obj* mk_lambda_region(Region* r, Obj* params, Obj* body, Obj* env);
@@ -107,6 +132,31 @@ Obj* mk_ffi_ptr_region(Region* r, void* ptr, const char* type_name, int owned);
  * Collection constructors
  */
 Obj* mk_array_region(Region* r, int capacity);
+
+/*
+ * BATCH ALLOCATION CONSTRUCTORS (T-opt-batch-alloc-array, T-opt-batch-alloc-struct)
+ * Single-allocation constructors for better cache locality and reduced overhead.
+ */
+
+/*
+ * mk_array_region_batch - Batch allocate array + data in single allocation
+ * Reduces allocation count from 3 to 1 for array construction.
+ * Allocates: Obj wrapper + Array struct + data array as one contiguous block.
+ */
+Obj* mk_array_region_batch(Region* r, int capacity);
+
+/*
+ * mk_array_of_ints_region - Create pre-filled integer array in single allocation
+ * Optimized for common case of homogeneous integer arrays.
+ * Combines: Obj + Array + data + integer values in one allocation.
+ */
+Obj* mk_array_of_ints_region(Region* r, long* values, int count);
+
+/*
+ * mk_dict_region_batch - Batch allocate dict + buckets in single allocation
+ * Reduces allocation count from 3 to 1 for dict construction.
+ */
+Obj* mk_dict_region_batch(Region* r, int initial_buckets);
 Obj* mk_dict_region(Region* r);
 Obj* mk_keyword_region(Region* r, const char* name);
 Obj* mk_tuple_region(Region* r, Obj** items, int count);

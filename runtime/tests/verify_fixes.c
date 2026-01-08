@@ -25,34 +25,7 @@
 /* Include the runtime source to get access to internal definitions and implementations */
 #include "../src/runtime.c"
 
-/* BUG-0001 & BUG-0006: Component Merge Overflow & Realloc */
-void test_fix_component_merge_overflow(void) {
-    printf("=== Test Fix: Component Merge Integer Overflow ===\n");
-    
-    SymComponent* compA = sym_component_new();
-    SymComponent* compB = sym_component_new();
-    
-    /* Artificially set large values to trigger overflow path */
-    compA->member_count = SIZE_MAX / 2;
-    compA->member_capacity = SIZE_MAX / 2 + 1;
-    compA->members = (SymObj**)0xDEADBEEF; /* Dummy */
-    
-    compB->member_count = SIZE_MAX / 2 + 10;
-    compB->member_capacity = compB->member_count;
-    compB->members = (SymObj**)0xCAFEBABE; /* Dummy */
-    
-    /* This should fail gracefully without crashing or reallocating */
-    sym_component_union(compA, compB);
-    
-    ASSERT_EQ(compA->member_capacity, SIZE_MAX / 2 + 1, "Capacity should not change (overflow detected)");
-    
-    /* Cleanup manually */
-    compA->members = NULL;
-    compB->members = NULL;
-    /* Leak expected */
-    
-    printf("PASS: Component overflow handled safely\n");
-}
+/* REMOVED: Component system was abandoned in favor of RC-G Region model */
 
 /* BUG-0002: Pool Bounds Staleness */
 void test_fix_pool_bounds(void) {
@@ -124,13 +97,13 @@ void test_fix_type_punning(void) {
 int main(void) {
     printf("Verifying Fixes for OmniLisp Runtime Bugs\n");
     printf("=========================================\n");
-    
-    test_fix_component_merge_overflow();
+
+    /* test_fix_component_merge_overflow() - REMOVED: Component system abandoned */
     test_fix_pool_bounds();
     test_fix_frame_clone();
     test_fix_scc_underflow();
     test_fix_type_punning();
-    
+
     printf("\nAll verified!\n");
     return 0;
 }

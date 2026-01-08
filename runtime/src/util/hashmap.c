@@ -164,19 +164,7 @@ void hashmap_put_region(HashMap* map, void* key, void* value, void* r_void) {
     map->entry_count++;
 }
 
-// Get value by key
-void* hashmap_get(HashMap* map, void* key) {
-    if (!map) return NULL;
-
-    size_t idx = hash_ptr(key) % map->bucket_count;
-    HashEntry* entry = map->buckets[idx];
-
-    while (entry) {
-        if (entry->key == key) return entry->value;
-        entry = entry->next;
-    }
-    return NULL;
-}
+// hashmap_get is now static inline in hashmap.h (T-opt-inline-hash-fastpath)
 
 // Put key-value pair
 void hashmap_put(HashMap* map, void* key, void* value) {
@@ -235,19 +223,7 @@ void* hashmap_remove(HashMap* map, void* key) {
     return NULL;
 }
 
-// Check if key exists
-int hashmap_contains(HashMap* map, void* key) {
-    if (!map) return 0;
-
-    size_t idx = hash_ptr(key) % map->bucket_count;
-    HashEntry* entry = map->buckets[idx];
-
-    while (entry) {
-        if (entry->key == key) return 1;
-        entry = entry->next;
-    }
-    return 0;
-}
+// hashmap_contains is now static inline in hashmap.h (T-opt-inline-hash-fastpath)
 
 // Iterate over all entries
 void hashmap_foreach(HashMap* map, HashMapIterFn fn, void* ctx) {

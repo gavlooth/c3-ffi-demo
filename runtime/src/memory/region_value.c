@@ -143,6 +143,160 @@ Obj* mk_cell_region(Region* r, Obj* car, Obj* cdr) {
     return o;
 }
 
+// ============================================================================
+// SPECIALIZED CONSTRUCTORS (T-opt-specialized-constructors)
+// Batch-allocate multiple objects in a single call to reduce allocation overhead.
+// ============================================================================
+
+/*
+ * mk_list_region - Build a list of n integers in a single batch allocation
+ *
+ * OPTIMIZATION: Instead of n separate allocations (2n total with integers),
+ * allocate all objects in a contiguous block and link them together.
+ * This reduces allocation count from O(n) to O(1) and improves cache locality.
+ */
+Obj* mk_list_region(Region* r, int n) {
+    if (!r || n <= 0) return NULL;
+
+    // Allocate all cells and integers in a single contiguous block
+    // Each cell needs: sizeof(Obj) for the cell + sizeof(Obj) for the integer
+    // But since integers are immediate in many cases, we can optimize
+    size_t block_size = n * sizeof(Obj);
+    Obj* block = (Obj*)region_alloc(r, block_size);
+    if (!block) return NULL;
+
+    // Initialize all cells and link them together
+    Obj* head = NULL;
+    Obj* prev = NULL;
+
+    for (int i = 0; i < n; i++) {
+        Obj* cell = &block[i];
+        cell->mark = 1;
+        cell->tag = TAG_PAIR;
+        cell->generation = 0;
+        cell->tethered = 0;
+        cell->is_pair = 1;
+
+        // Store integer value directly in car (using immediate encoding if possible)
+        cell->a = (Obj*)((intptr_t)i << 3 | 0x1);  // Immediate integer encoding
+        cell->b = prev;
+
+        if (i == n - 1) head = cell;  // Last element becomes head (reversed order)
+        prev = cell;
+    }
+
+    return head;
+}
+
+/*
+ * mk_tree_region - Build a complete binary tree of given depth in a single batch
+ *
+ * OPTIMIZATION: Pre-allocate all nodes for the tree in a single allocation.
+ * A complete binary tree of depth d has 2^d - 1 internal nodes and 2^d leaves.
+ * Total nodes = 2^(d+1) - 1.
+ *
+ * This reduces allocation count from O(2^depth) to O(1).
+ */
+Obj* mk_tree_region(Region* r, int depth) {
+    if (!r || depth < 0) return NULL;
+
+    // Depth 0 is a leaf (single integer)
+    if (depth == 0) {
+        return mk_int_region(r, 1);
+    }
+
+    // Calculate total nodes: 2^(depth+1) - 1
+    // Internal nodes: 2^depth - 1, Leaves: 2^depth
+    int total_nodes = (1 << (depth + 1)) - 1;
+    int leaves = 1 << depth;
+
+    // Allocate all nodes in a single block
+    Obj* block = (Obj*)region_alloc(r, total_nodes * sizeof(Obj));
+    if (!block) return NULL;
+
+    // Initialize leaves (first 'leaves' elements in the block)
+    for (int i = 0; i < leaves; i++) {
+        Obj* leaf = &block[i];
+        leaf->mark = 1;
+        leaf->tag = TAG_INT;
+        leaf->generation = 0;
+        leaf->tethered = 0;
+        leaf->is_pair = 0;
+        leaf->i = 1;
+    }
+
+    // Initialize internal nodes (remaining elements)
+    // Each internal node points to two children
+    for (int level = depth - 1; level >= 0; level--) {
+        int nodes_at_level = 1 << level;
+        int offset = leaves;  // Skip leaves
+
+        // Calculate offset for this level
+        for (int l = depth - 1; l > level; l--) {
+            offset += (1 << l);
+        }
+
+        for (int i = 0; i < nodes_at_level; i++) {
+            Obj* node = &block[offset + i];
+            node->mark = 1;
+            node->tag = TAG_PAIR;
+            node->generation = 0;
+            node->tethered = 0;
+            node->is_pair = 1;
+
+            // Point to children (calculate indices based on level structure)
+            int left_child_idx = offset + nodes_at_level + (i * 2);
+            int right_child_idx = left_child_idx + 1;
+
+            if (level == depth - 1) {
+                // Children are leaves
+                node->a = &block[i * 2];
+                node->b = &block[i * 2 + 1];
+            } else {
+                node->a = &block[left_child_idx];
+                node->b = &block[right_child_idx];
+            }
+        }
+    }
+
+    // Return root (last element in block)
+    return &block[total_nodes - 1];
+}
+
+/*
+ * mk_list_from_array_region - Build a list from an array of values in one batch
+ *
+ * OPTIMIZATION: Single allocation for all list cells, improved cache locality.
+ */
+Obj* mk_list_from_array_region(Region* r, Obj** values, int n) {
+    if (!r || !values || n <= 0) return NULL;
+
+    // Allocate all cells in a single block
+    Obj* block = (Obj*)region_alloc(r, n * sizeof(Obj));
+    if (!block) return NULL;
+
+    // Initialize all cells and link them together
+    Obj* head = NULL;
+    Obj* prev = NULL;
+
+    for (int i = n - 1; i >= 0; i--) {
+        Obj* cell = &block[n - 1 - i];  // Reverse order for correct linking
+        cell->mark = 1;
+        cell->tag = TAG_PAIR;
+        cell->generation = 0;
+        cell->tethered = 0;
+        cell->is_pair = 1;
+
+        cell->a = values[i];
+        cell->b = prev;
+
+        if (!head) head = cell;
+        prev = cell;
+    }
+
+    return head;
+}
+
 Obj* mk_box_region(Region* r, Obj* initial) {
     Obj* o = alloc_obj_region(r, TAG_BOX);
     if (!o) return NULL;
@@ -160,12 +314,139 @@ Obj* mk_array_region(Region* r, int capacity) {
 
     Array* arr = region_alloc(r, sizeof(Array));
     if (!arr) return NULL;
-    
+
     arr->capacity = capacity > 0 ? capacity : 8;
     arr->len = 0;
     arr->data = region_alloc(r, arr->capacity * sizeof(Obj*));
-    
+
     o->ptr = arr;
+    return o;
+}
+
+// ============================================================================
+// BATCH ALLOCATION CONSTRUCTORS (T-opt-batch-alloc-array, T-opt-batch-alloc-struct)
+// Single-allocation constructors for better performance.
+// ============================================================================
+
+/*
+ * mk_array_region_batch - Allocate array + data in single contiguous block
+ *
+ * OPTIMIZATION: Instead of 3 separate allocations (Obj, Array, data),
+ * allocate everything in one block for better cache locality.
+ */
+Obj* mk_array_region_batch(Region* r, int capacity) {
+    if (!r) return NULL;
+
+    int actual_capacity = capacity > 0 ? capacity : 8;
+
+    // Calculate total size: sizeof(Array) + data array
+    size_t total_size = sizeof(Array) + (actual_capacity * sizeof(Obj*));
+
+    // Allocate single block
+    void* block = region_alloc(r, total_size);
+    if (!block) return NULL;
+
+    // Layout: Array struct first, then data array
+    Array* arr = (Array*)block;
+    Obj** data = (Obj**)((char*)block + sizeof(Array));
+
+    arr->capacity = actual_capacity;
+    arr->len = 0;
+    arr->data = data;
+
+    // Allocate Obj wrapper
+    Obj* o = alloc_obj_region(r, TAG_ARRAY);
+    if (!o) return NULL;
+
+    o->ptr = arr;
+    return o;
+}
+
+/*
+ * mk_array_of_ints_region - Create pre-filled integer array in single allocation
+ *
+ * OPTIMIZATION: Combine Obj + Array + data + integer values in one allocation.
+ * Useful for homogeneous integer arrays (very common in functional programming).
+ */
+Obj* mk_array_of_ints_region(Region* r, long* values, int count) {
+    if (!r || count < 0) return NULL;
+
+    int capacity = count > 0 ? count : 8;
+
+    // Calculate total size: Obj (allocated separately) + Array + data
+    // Note: We can't easily include Obj in the same block due to alloc_obj_region
+    // But we can batch Array + data + integer objects
+
+    // Allocate integer objects inline with the array
+    size_t total_size = sizeof(Array) + (capacity * sizeof(Obj*)) + (count * sizeof(Obj));
+
+    void* block = region_alloc(r, total_size);
+    if (!block) return NULL;
+
+    // Layout: Array struct, then data array, then integer objects
+    Array* arr = (Array*)block;
+    Obj** data = (Obj**)((char*)block + sizeof(Array));
+    Obj* int_objs = (Obj*)((char*)data + (capacity * sizeof(Obj*)));
+
+    // Initialize integer objects
+    for (int i = 0; i < count; i++) {
+        Obj* int_obj = &int_objs[i];
+        int_obj->mark = 1;
+        int_obj->tag = TAG_INT;
+        int_obj->generation = 0;
+        int_obj->tethered = 0;
+        int_obj->is_pair = 0;
+        int_obj->i = values[i];
+        data[i] = int_obj;
+    }
+
+    arr->capacity = capacity;
+    arr->len = count;
+    arr->data = data;
+
+    // Allocate Obj wrapper
+    Obj* o = alloc_obj_region(r, TAG_ARRAY);
+    if (!o) return NULL;
+
+    o->ptr = arr;
+    return o;
+}
+
+/*
+ * mk_dict_region_batch - Allocate dict + buckets in single allocation
+ *
+ * OPTIMIZATION: Combine Dict struct + bucket array in one block.
+ */
+Obj* mk_dict_region_batch(Region* r, int initial_buckets) {
+    if (!r) return NULL;
+
+    int bucket_count = initial_buckets > 0 ? initial_buckets : 16;
+
+    // Calculate total size: Dict + bucket array
+    size_t total_size = sizeof(Dict) + (bucket_count * sizeof(HashEntry*));
+
+    // Allocate single block
+    void* block = region_alloc(r, total_size);
+    if (!block) return NULL;
+
+    // Layout: Dict struct first, then buckets
+    Dict* d = (Dict*)block;
+    HashEntry** buckets = (HashEntry**)((char*)block + sizeof(Dict));
+
+    // Initialize buckets to NULL
+    memset(buckets, 0, bucket_count * sizeof(HashEntry*));
+
+    d->map.bucket_count = bucket_count;
+    d->map.entry_count = 0;
+    d->map.load_factor = 0.75f;
+    d->map.buckets = buckets;
+    d->map.had_alloc_failure = 0;
+
+    // Allocate Obj wrapper
+    Obj* o = alloc_obj_region(r, TAG_DICT);
+    if (!o) return NULL;
+
+    o->ptr = d;
     return o;
 }
 

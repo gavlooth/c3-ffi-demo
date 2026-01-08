@@ -589,6 +589,22 @@ Obj* generic_add_method(Obj* generic_obj, Obj** param_kinds, int param_count, Cl
 /* Call a generic function with multiple dispatch. Selects the most specific method. */
 Obj* call_generic(Obj* generic_obj, Obj** args, int argc);
 
+/* Lookup the most specific method for arguments */
+typedef struct MethodInfo MethodInfo;
+MethodInfo* omni_generic_lookup(Obj* generic_obj, Obj** args, int argc);
+
+/* Invoke a generic function with arguments */
+Obj* omni_generic_invoke(Obj* generic_obj, Obj** args, int argc);
+
+/* Check if a generic function can accept the given number of arguments */
+bool omni_check_arity(Obj* generic_obj, int argc);
+
+/* Get the name of a generic function */
+const char* omni_generic_name(Obj* generic_obj);
+
+/* Get the number of methods in a generic function */
+int omni_generic_method_count(Obj* generic_obj);
+
 /* Compute specificity score for a method (higher = more specific) */
 int compute_specificity(Obj** param_kinds, int param_count);
 
@@ -605,6 +621,24 @@ int kind_equals(Obj* a, Obj* b);
 
 /* Check if kind_a is a subtype of kind_b (for specificity calculation) */
 int is_subtype(Obj* kind_a, Obj* kind_b);
+
+/* ========== Type System Primitives ========== */
+
+/* Return the type of a value at runtime */
+Obj* prim_value_to_type(Obj* value);
+
+/* Get Kind objects for basic types */
+Obj* prim_kind_int(void);
+Obj* prim_kind_string(void);
+Obj* prim_kind_array(void);
+Obj* prim_kind_list(void);
+Obj* prim_kind_pair(void);
+Obj* prim_kind_bool(void);
+Obj* prim_kind_char(void);
+Obj* prim_kind_float(void);
+Obj* prim_kind_function(void);
+Obj* prim_kind_any(void);
+Obj* prim_kind_nothing(void);
 
 /* ========== Pika Grammar Engine Integration ========== */
 
@@ -676,6 +710,45 @@ Obj* prim_iter_next(Obj* iter_obj);
  * For iterators, advances the iterator. For lists, returns first n elements.
  */
 Obj* prim_take(long n, Obj* seq);
+
+/* ========== Basic Sequence Operations ========== */
+
+/*
+ * Get first element of a sequence.
+ * Args: seq - A list or pair
+ * Returns: First element (car) or NULL if empty
+ */
+Obj* prim_first(Obj* seq);
+
+/*
+ * Get rest of a sequence (tail).
+ * Args: seq - A list or pair
+ * Returns: Rest of sequence (cdr) or NULL if empty
+ */
+Obj* prim_rest(Obj* seq);
+
+/*
+ * Check if iterator has more elements.
+ * Args: iter_obj - Iterator object
+ * Returns: Boolean indicating if more elements exist
+ */
+Obj* prim_has_next(Obj* iter_obj);
+
+/*
+ * Collect elements from sequence into collection.
+ * Args:
+ *   - seq: Iterator or list
+ *   - kind: Symbol indicating collection type ('list, 'array, 'string)
+ * Returns: Collected elements in specified collection type
+ */
+Obj* prim_collect(Obj* seq, Obj* kind);
+
+/*
+ * Create a range (0 to n-1).
+ * Args: n - Upper bound (exclusive)
+ * Returns: List of integers from 0 to n-1
+ */
+Obj* prim_range(long n);
 
 /* ========== Truthiness ========== */
 
@@ -778,8 +851,7 @@ void region_release_internal(struct Region* r);
 void region_tether_start(struct Region* r);
 void region_tether_end(struct Region* r);
 
-// Allocation
-void* region_alloc(struct Region* r, size_t size);
+// Allocation (region_alloc is static inline in region_core.h)
 void* transmigrate(void* root, struct Region* src_region, struct Region* dest_region);
 
 /* Region-aware constructors */

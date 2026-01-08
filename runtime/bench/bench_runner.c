@@ -23,6 +23,9 @@ extern int main_tethering(int argc, char** argv);
 extern int main_multiregion(int argc, char** argv);
 extern int main_stress(int argc, char** argv);
 extern int main_complex(int argc, char** argv);
+extern int main_inline_alloc(int argc, char** argv);
+extern int main_specialized(int argc, char** argv);
+extern int main_batched_transmigrate(int argc, char** argv);
 
 typedef struct {
     const char* name;
@@ -60,6 +63,21 @@ static BenchmarkSuite suites[] = {
         "complex",
         "Complex real-world workload benchmarks",
         main_complex
+    },
+    {
+        "inline_alloc",
+        "Inline allocation optimization (T-opt-inline-allocation)",
+        main_inline_alloc
+    },
+    {
+        "specialized",
+        "Specialized constructors optimization (T-opt-specialized-constructors)",
+        main_specialized
+    },
+    {
+        "batched_transmigrate",
+        "Batched transmigration optimization (T-opt-transmigrate-batch)",
+        main_batched_transmigrate
     },
     { NULL, NULL, NULL }
 };

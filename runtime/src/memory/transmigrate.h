@@ -29,4 +29,33 @@ struct Value;
  */
 void* transmigrate(void* root, Region* src_region, Region* dest_region);
 
+/*
+ * transmigrate_incremental - Incrementally transmigrate large graphs (OPTIMIZATION: T-opt-transmigrate-incremental)
+ *
+ * For very large graphs with sparse access patterns, processes the graph in chunks
+ * to reduce peak memory usage and improve latency for partially-accessed data.
+ *
+ * Strategy:
+ * - Process objects in configurable batch sizes
+ * - Returns after each chunk, allowing early termination
+ * - Useful for graphs where only a subset of nodes are accessed
+ *
+ * Args:
+ *   root: The root object to transmigrate
+ *   src_region: Source region
+ *   dest_region: Destination region
+ *   chunk_size: Number of objects to process per chunk (0 = all at once)
+ *   progress_out: Optional output parameter for progress tracking (0.0 to 1.0)
+ *
+ * Returns:
+ *   Pointer to the transmigrated root (same as transmigrate, but chunked)
+ *
+ * Usage:
+ *   float progress = 0.0f;
+ *   Obj* result = transmigrate_incremental(root, src, dest, 100, &progress);
+ *   // progress is now 0.0 to 1.0 indicating how much of the graph was processed
+ */
+void* transmigrate_incremental(void* root, Region* src_region, Region* dest_region,
+                                size_t chunk_size, float* progress_out);
+
 #endif // OMNI_TRANSMIGRATE_H
