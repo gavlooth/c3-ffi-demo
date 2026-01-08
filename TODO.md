@@ -2190,47 +2190,38 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
     - Return mk_bool result
   Verification: (= "hello" "hello") => true
 
-- [TODO] Label: T-wire-println-01
+- [DONE] Label: T-wire-println-01
   Objective: Implement println as variadic print function.
   Reference: csrc/codegen/codegen.c:1992-2004 (display/print/newline)
   Where: runtime/src/runtime.c (add prim_println)
   Why: println is standard Lisp I/O, currently unimplemented
   What: Add variadic println that prints all args separated by spaces
   Implementation Details:
-    ```c
-    Obj* prim_println(Obj* args) {
-        while (!is_nil(args)) {
-            prim_print(car(args));
-            args = cdr(args);
-            if (!is_nil(args)) printf(" ");
-        }
-        printf("\n");
-        return NOTHING;
-    }
-    ```
-  Verification: (println 1 "two" 3) should print "1 two 3\n"
+    - Already implemented in runtime/src/runtime.c:708-729
+    - Uses print_obj() for each arg separated by spaces
+    - Returns mk_nothing()
+  Verification: (println 1 "two" 3) correctly prints "1 two 3\n"
 
-- [TODO] Label: T-wire-println-02
+- [DONE] Label: T-wire-println-02
   Objective: Wire println in codegen.
   Where: csrc/codegen/codegen.c (codegen_application)
   Why: println needs codegen support for function calls
   What: Add println to symbol table and codegen path
   Implementation Details:
-    - Add println check alongside display/print/newline (line 1992)
-    - Generate call to prim_println with all arguments
-    - Handle variadic argument passing
-  Verification: (println "test") should generate correct C code
+    - Already implemented in csrc/codegen/codegen.c:2105-2134
+    - Generates prim_println() call with nested mk_pair() for arg list
+  Verification: (println "test") generates correct C code
 
-- [TODO] Label: T-wire-println-03
+- [N/A] Label: T-wire-println-03
   Objective: Register println in runtime initialization.
   Where: runtime/src/runtime.c (prim_table or similar)
   Why: println must be registered as callable primitive
   What: Add println to primitive registry
   Implementation Details:
-    - Find primitive registration table
-    - Add entry for "println" -> prim_println
-    - Ensure it's callable from generated code
-  Verification: (println) should be callable from omnilisp
+    - N/A: println is a direct primitive function call, not looked up via symbol table
+    - The codegen directly generates calls to prim_println()
+    - No registration needed
+  Verification: N/A - direct function call
 
 ### Category B: Type Objects (FOR TYPE-BASED DISPATCH)
 
