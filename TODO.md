@@ -84,7 +84,7 @@ Replace hybrid memory management with a unified Region-RC architecture.
 
 - [TODO] Label: T-stdlib-pika-regex
 - [TODO] Label: T-stdlib-string-utils
-- [TODO] Label: T-stdlib-math-numerics
+- [R] Label: T-stdlib-math-numerics
 
 ---
 
@@ -144,9 +144,9 @@ Replace hybrid memory management with a unified Region-RC architecture.
   Objective: Implement unified `collect` with symbol dispatch.
 - [TODO] Label: T-core-bootstrap
   Objective: Bootstrap the `core` module (Int, String, Array, List, collect).
-- [TODO] Label: T-mod-isolation
+- [R] Label: T-mod-isolation
   Objective: Implement the `module` and `import` system.
-- [TODO] Label: T-syntax-piping
+- [R] Label: T-syntax-piping
   Objective: Implement the Pipe operator `|>` and leading dot accessors `.field`.
 
 ---
@@ -155,9 +155,9 @@ Replace hybrid memory management with a unified Region-RC architecture.
 
 **Objective:** Restore stack-safe mutual recursion and delimited continuations.
 
-- [TODO] Label: T-ctrl-trampoline
+- [R] Label: T-ctrl-trampoline
   Objective: Implement `bounce` and `trampoline` for stack-safe mutual recursion.
-- [TODO] Label: T-ctrl-delimited
+- [R] Label: T-ctrl-delimited
   Objective: Implement `prompt` and `control` delimited continuations.
 
 ---
