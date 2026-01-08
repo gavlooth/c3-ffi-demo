@@ -614,7 +614,25 @@ Obj* prim_abs(Obj* a) {
 #endif
 
 /* Comparisons */
-Obj* prim_eq(Obj* a, Obj* b) { return mk_bool(obj_to_int(a) == obj_to_int(b)); }
+Obj* prim_eq(Obj* a, Obj* b) {
+    /* Special case: String comparison by content, not pointer */
+    if (a && b && IS_BOXED(a) && IS_BOXED(b)) {
+        if (a->tag == TAG_STRING && b->tag == TAG_STRING) {
+            /* Compare strings by content */
+            const char* str_a = (const char*)a->ptr;
+            const char* str_b = (const char*)b->ptr;
+            return mk_bool(str_a && str_b && strcmp(str_a, str_b) == 0);
+        }
+        /* Special case: Symbol comparison by content */
+        if (a->tag == TAG_SYM && b->tag == TAG_SYM) {
+            const char* sym_a = (const char*)a->ptr;
+            const char* sym_b = (const char*)b->ptr;
+            return mk_bool(sym_a && sym_b && strcmp(sym_a, sym_b) == 0);
+        }
+    }
+    /* Default: numeric/immediate comparison */
+    return mk_bool(obj_to_int(a) == obj_to_int(b));
+}
 Obj* prim_lt(Obj* a, Obj* b) { return mk_bool(obj_to_int(a) < obj_to_int(b)); }
 Obj* prim_gt(Obj* a, Obj* b) { return mk_bool(obj_to_int(a) > obj_to_int(b)); }
 Obj* prim_le(Obj* a, Obj* b) { return mk_bool(obj_to_int(a) <= obj_to_int(b)); }

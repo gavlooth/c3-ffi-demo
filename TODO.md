@@ -2179,16 +2179,21 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
     - Strings should have: tag=TAG_STRING, length, char* data
   Verification: (type? "hello" String) should return true
 
-- [TODO] Label: T-wire-string-literal-03
+- [R] Label: T-wire-string-literal-03
   Objective: Add string comparison and equality.
-  Where: runtime/src/runtime.c or runtime/src/string_utils.c
+  Where: runtime/src/runtime.c
   Why: Strings need proper equality semantics
-  What: Implement prim_string_eq, prim_string_compare
+  What: Implemented proper string and symbol comparison in prim_eq
   Implementation Details:
-    - Add Obj* prim_string_eq(Obj* a, Obj* b)
-    - Compare string lengths and content
-    - Return mk_bool result
-  Verification: (= "hello" "hello") => true
+    - Modified prim_eq to handle TAG_STRING and TAG_SYM by content
+    - Uses strcmp to compare string content instead of pointer addresses
+    - Preserves existing numeric/immediate equality behavior
+  Verification:
+    - (= "hello" "hello") => true
+    - (= "hello" "world") => false
+    - (= (quote foo) (quote foo)) => true
+    - (= (quote foo) (quote bar)) => false
+    - (= 1 1) => true (numeric equality still works)
 
 - [DONE] Label: T-wire-println-01
   Objective: Implement println as variadic print function.
