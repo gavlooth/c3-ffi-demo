@@ -6,7 +6,9 @@
  * Reference: docs/TYPE_SPECIALIZATION_DESIGN.md (Phase 4)
  */
 
+#include "../include/omni.h"
 #include "../include/typed_array.h"
+#include "../include/primitives_specialized.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -20,6 +22,9 @@ static char* omni_strdup(const char* s) {
     if (copy) memcpy(copy, s, len);
     return copy;
 }
+
+/* NIL constant - using NULL for empty list */
+#define NIL NULL
 
 /* ============== Utility Functions ============== */
 
@@ -322,8 +327,8 @@ TypedArray* omni_list_to_typed_array(Region* r,
     Obj* current = list;
     while (current && current != NIL) {
         length++;
-        if (is_pair(current)) {
-            current = cdr(current);
+        if (current->is_pair) {
+            current = obj_cdr(current);
         } else {
             break;
         }
@@ -338,8 +343,8 @@ TypedArray* omni_list_to_typed_array(Region* r,
     current = list;
     for (int i = 0; i < length && current; i++) {
         int indices[] = {i};
-        omni_typed_array_set(arr, indices, car(current));
-        current = cdr(current);
+        omni_typed_array_set(arr, indices, obj_car(current));
+        current = obj_cdr(current);
     }
 
     return arr;
@@ -356,7 +361,7 @@ Obj* omni_typed_array_to_list(TypedArray* arr, Region* r) {
         Obj* elem = omni_typed_array_ref(arr, indices);
         *tail = mk_pair(elem, NIL);
         if (*tail) {
-            tail = (Obj**)&((*tail)->cell.cdr);
+            tail = (Obj**)&((*tail)->b);
         }
     }
 

@@ -15,6 +15,11 @@
 #include <stdio.h>
 #include <stdbool.h>
 
+/* ============== Phase 27: Type Specialization Headers ============== */
+/* These must be included before CodeGenContext because it uses Phase 27 types */
+#include "spec_db.h"
+#include "../analysis/type_env.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -73,6 +78,11 @@ typedef struct CodeGenContext {
     bool generating_header;
     bool use_runtime;         /* Use external runtime library */
     const char* runtime_path;
+
+    /* Phase 27: Type Specialization */
+    SpecDB* spec_db;           /* Database of function specializations */
+    TypeEnv* type_env;         /* Type environment for tracking types */
+    bool enable_specialization;  /* Enable type specialization (default: true) */
 } CodeGenContext;
 
 /* ============== Code Generator API ============== */

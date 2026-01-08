@@ -360,11 +360,74 @@ static void analyze_define(AnalysisContext* ctx, OmniValue* expr) {
      *   - Slot syntax: (define f [x] [y] body)
      *   - Slot with types: (define f [x {Int}] [y {String}] body)
      *   - Mixed syntax: (define f x [y {Int}] z body)
+     *   - With metadata: (define (with-meta (^:parent {Number}) {abstract Real}) [])
      */
     OmniValue* args = omni_cdr(expr);
     if (omni_is_nil(args)) return;
 
+    /* Phase 22: Extract metadata from with-meta form if present */
+    /* Check if the first element of args is a with-meta form */
+    MetadataEntry* metadata = NULL;
     OmniValue* name_or_sig = omni_car(args);
+
+    if (omni_is_cell(name_or_sig) && omni_is_sym(omni_car(name_or_sig))) {
+        OmniValue* first = omni_car(name_or_sig);
+        if (strcmp(first->str_val, "with-meta") == 0) {
+            /* Extract metadata from (with-meta meta obj) */
+            OmniValue* meta_pair = omni_cdr(name_or_sig);
+            if (!omni_is_nil(meta_pair) && omni_is_cell(meta_pair)) {
+                OmniValue* meta_expr = omni_car(meta_pair);
+                /* meta_expr could be (^:parent {Number}) or a list of metadata */
+                metadata = omni_extract_metadata(meta_expr);
+
+                /* Get the actual object (name_or_sig without metadata) */
+                OmniValue* obj_pair = omni_cdr(meta_pair);
+                if (!omni_is_nil(obj_pair) && omni_is_cell(obj_pair)) {
+                    name_or_sig = omni_car(obj_pair);
+                }
+            }
+        }
+    }
+
+    /* Also scan the args list for standalone metadata entries */
+    /* This handles cases like (^:parent {Number}) appearing as a separate item */
+    OmniValue* metadata_scan = args;
+    while (!omni_is_nil(metadata_scan) && omni_is_cell(metadata_scan)) {
+        OmniValue* item = omni_car(metadata_scan);
+        /* Check if this is a metadata marker (^:parent, ^:where, etc.) */
+        if (omni_is_sym(item) && strlen(item->str_val) > 1 &&
+            item->str_val[0] == '^' && item->str_val[1] == ':') {
+            /* This is a metadata entry, extract it and the following value */
+            const char* meta_key = item->str_val + 2;  /* Skip "^:" */
+            OmniValue* rest_scan = omni_cdr(metadata_scan);
+            if (!omni_is_nil(rest_scan) && omni_is_cell(rest_scan)) {
+                OmniValue* meta_value = omni_car(rest_scan);
+                /* Create metadata entry */
+                MetadataEntry* entry = malloc(sizeof(MetadataEntry));
+                entry->key = strdup(meta_key);
+
+                /* Determine metadata type */
+                if (strcmp(meta_key, "parent") == 0) entry->type = META_PARENT;
+                else if (strcmp(meta_key, "where") == 0) entry->type = META_WHERE;
+                else if (strcmp(meta_key, "mutable") == 0) entry->type = META_MUTABLE;
+                else if (strcmp(meta_key, "covar") == 0) entry->type = META_COVAR;
+                else if (strcmp(meta_key, "contra") == 0) entry->type = META_CONTRA;
+                else if (strcmp(meta_key, "seq") == 0) entry->type = META_SEQ;
+                else if (strcmp(meta_key, "rec") == 0) entry->type = META_REC;
+                else entry->type = META_NONE;
+
+                entry->value = meta_value;
+                entry->next = metadata;
+                metadata = entry;
+
+                /* Skip the metadata value in the args */
+                metadata_scan = omni_cdr(rest_scan);
+                continue;
+            }
+        }
+        metadata_scan = omni_cdr(metadata_scan);
+    }
+
     OmniValue* rest = omni_cdr(args);
 
     /* Phase 22: Type Definition Support */
@@ -397,7 +460,16 @@ static void analyze_define(AnalysisContext* ctx, OmniValue* expr) {
 
             /* Extract parent from metadata if present */
             const char* parent = "Any";  /* Default parent */
-            /* TODO: Extract ^:parent metadata from expr */
+            if (metadata) {
+                OmniValue* parent_value = omni_get_metadata(metadata, "parent");
+                if (parent_value) {
+                    if (omni_is_type_lit(parent_value)) {
+                        parent = parent_value->type_lit.type_name;
+                    } else if (omni_is_sym(parent_value)) {
+                        parent = parent_value->str_val;
+                    }
+                }
+            }
 
             /* Register the abstract type */
             omni_register_abstract_type(ctx, type_name, parent);
@@ -428,6 +500,19 @@ static void analyze_define(AnalysisContext* ctx, OmniValue* expr) {
             /* Extract bit width from rest (should be an array) */
             int bit_width = 0;
             const char* parent = "Any";  /* Default parent for primitives */
+
+            /* Extract parent from metadata if present */
+            if (metadata) {
+                OmniValue* parent_value = omni_get_metadata(metadata, "parent");
+                if (parent_value) {
+                    if (omni_is_type_lit(parent_value)) {
+                        parent = parent_value->type_lit.type_name;
+                    } else if (omni_is_sym(parent_value)) {
+                        parent = parent_value->str_val;
+                    }
+                }
+            }
+
             if (!omni_is_nil(rest) && omni_is_cell(rest)) {
                 OmniValue* width_expr = omni_car(rest);
                 if (omni_is_array(width_expr) && width_expr->array.len > 0) {
@@ -482,33 +567,100 @@ static void analyze_define(AnalysisContext* ctx, OmniValue* expr) {
             if (omni_is_array(name_param) && name_param->array.len >= 1) {
                 /* Extract type parameters with variance from array */
                 /* Example: [^:covar T] or [^:invariant T] */
+                VarianceKind default_variance = VARIANCE_INVARIANT;
                 for (size_t i = 0; i < name_param->array.len; i++) {
                     OmniValue* param_elem = name_param->array.data[i];
+
+                    /* Check for variance metadata (^:covar or ^:contra) */
+                    if (omni_is_sym(param_elem) && strlen(param_elem->str_val) > 1 &&
+                        param_elem->str_val[0] == '^' && param_elem->str_val[1] == ':') {
+                        const char* meta_key = param_elem->str_val + 2;  /* Skip "^:" */
+                        if (strcmp(meta_key, "covar") == 0 || strcmp(meta_key, "covariant") == 0) {
+                            default_variance = VARIANCE_COVARIANT;
+                        } else if (strcmp(meta_key, "contra") == 0 || strcmp(meta_key, "contravariant") == 0) {
+                            default_variance = VARIANCE_CONTRAVARIANT;
+                        } else if (strcmp(meta_key, "invariant") == 0) {
+                            default_variance = VARIANCE_INVARIANT;
+                        }
+                        continue;  /* Skip to next element (the actual type param) */
+                    }
+
                     if (omni_is_sym(param_elem)) {
                         const char* param_name = param_elem->str_val;
-                        /* Default to invariant */
-                        VarianceKind variance = VARIANCE_INVARIANT;
-                        /* TODO: Check for metadata ^:covar or ^:contra before this param */
-                        /* For now, just add the parameter */
+                        /* Use the variance set by any preceding metadata */
                         TypeDef* temp_type = omni_get_type(ctx, type_name);
                         if (temp_type) {
-                            omni_type_add_param(temp_type, param_name, variance);
+                            omni_type_add_param(temp_type, param_name, default_variance);
                         }
+                        /* Reset to invariant for next parameter */
+                        default_variance = VARIANCE_INVARIANT;
                     }
                 }
             }
 
             /* Register the struct type - pass the rest list which contains field definitions */
             const char* parent = "Any";  /* Default parent */
-            /* TODO: Extract ^:parent metadata */
+
+            /* Extract parent from metadata if present */
+            if (metadata) {
+                OmniValue* parent_value = omni_get_metadata(metadata, "parent");
+                if (parent_value) {
+                    if (omni_is_type_lit(parent_value)) {
+                        parent = parent_value->type_lit.type_name;
+                    } else if (omni_is_sym(parent_value)) {
+                        parent = parent_value->str_val;
+                    }
+                }
+            }
+
             omni_register_struct_type(ctx, type_name, parent, rest);
 
             ctx->position++;
             return;
         }
 
-        /* Unknown type kind */
-        fprintf(stderr, "Warning: Unknown type kind '%s' in type definition\n", kind);
+        /* Handle union type definitions: (define {TypeName} (union [{Type1} {Type2} ...])) */
+        /* Check if rest contains a list starting with 'union */
+        if (!omni_is_nil(rest) && omni_is_cell(rest)) {
+            OmniValue* value_expr = omni_car(rest);
+            if (omni_is_cell(value_expr) && omni_is_sym(omni_car(value_expr))) {
+                const char* value_head = omni_car(value_expr)->str_val;
+                if (strcmp(value_head, "union") == 0) {
+                    /* This is a union type alias: (define {TypeName} (union [...])) */
+                    const char* type_name = kind;
+                    /* Extract union members from the rest of the list */
+                    OmniValue* union_args = omni_cdr(value_expr);
+                    if (!omni_is_nil(union_args) && omni_is_cell(union_args) &&
+                        omni_is_array(omni_car(union_args))) {
+                        OmniValue* members_array = omni_car(union_args);
+                        /* Register the union type */
+                        omni_register_union_type(ctx, type_name, members_array);
+                        ctx->position++;
+                        return;
+                    }
+                }
+                /* Handle function type definitions: (define {TypeName} (fn [[params...] {return}])) */
+                if (strcmp(value_head, "fn") == 0) {
+                    /* This is a function type alias: (define {TypeName} (fn [[...] {...})) */
+                    const char* type_name = kind;
+                    /* Extract function type signature */
+                    OmniValue* fn_args = omni_cdr(value_expr);
+                    if (!omni_is_nil(fn_args) && omni_is_cell(fn_args) &&
+                        omni_is_array(omni_car(fn_args))) {
+                        OmniValue* sig_array = omni_car(fn_args);
+                        /* Register the function type */
+                        omni_register_function_type(ctx, type_name, sig_array);
+                        ctx->position++;
+                        return;
+                    }
+                }
+            }
+        }
+
+        /* Unknown type kind - might be a simple type alias */
+        /* For now, register it as an abstract type with Any parent */
+        omni_register_abstract_type(ctx, kind, "Any");
+        ctx->position++;
         return;
     }
 
@@ -638,12 +790,37 @@ static void analyze_let(AnalysisContext* ctx, OmniValue* expr) {
      *   - Slot syntax: (let [x val] [y val] body...)
      *   - Slot with types: (let [x {Int} val] [y {String} val] body...)
      *   - Mixed: (let [x val] [y {Int} val] body...)
+     *   - With metadata: (let ^:seq [(x 1) (y x)] ...) for sequential bindings
+     *   - With metadata: (let ^:rec [(f (lambda ...))] ...) for recursive bindings
      */
     OmniValue* args = omni_cdr(expr);
     if (omni_is_nil(args)) return;
 
+    /* Phase 22: Check for ^:seq or ^:rec metadata */
+    bool is_sequential = false;  /* ^:seq - sequential bindings like let* */
+    bool is_recursive = false;   /* ^:rec - recursive bindings like letrec */
+
     OmniValue* first = omni_car(args);
+    if (omni_is_sym(first) && strlen(first->str_val) > 1 &&
+        first->str_val[0] == '^' && first->str_val[1] == ':') {
+        const char* meta_key = first->str_val + 2;  /* Skip "^:" */
+        if (strcmp(meta_key, "seq") == 0) {
+            is_sequential = true;
+        } else if (strcmp(meta_key, "rec") == 0) {
+            is_recursive = true;
+        }
+        /* Skip the metadata marker */
+        args = omni_cdr(args);
+        if (omni_is_nil(args)) return;
+        first = omni_car(args);
+    }
+
     OmniValue* rest = omni_cdr(args);
+
+    /* TODO: Use is_sequential and is_recursive to modify let behavior */
+    /* For now, suppress unused variable warnings */
+    (void)is_sequential;
+    (void)is_recursive;
 
     ctx->scope_depth++;
 
@@ -5254,6 +5431,156 @@ TypeDef* omni_register_struct_type(AnalysisContext* ctx, const char* name,
                 }
 
                 f = omni_cdr(omni_cdr(f));  /* Skip name and type */
+            }
+        }
+    }
+
+    type->next = ctx->type_registry->types;
+    ctx->type_registry->types = type;
+    ctx->type_registry->type_count++;
+
+    return type;
+}
+
+/* ============== Phase 22: Union and Function Type Registration ============== */
+
+/*
+ * Register a union type
+ * A union type represents a value that can be any of several types
+ * Example: (define {IntOrString} (union [{Int32} {String}]))
+ */
+TypeDef* omni_register_union_type(AnalysisContext* ctx, const char* name,
+                                  OmniValue* members_array) {
+    if (!ctx->type_registry) {
+        ctx->type_registry = omni_type_registry_new();
+    }
+
+    TypeDef* type = malloc(sizeof(TypeDef));
+    memset(type, 0, sizeof(TypeDef));
+    type->name = strdup(name);
+    type->is_abstract = false;
+    type->is_primitive = false;
+    type->parent = strdup("Any");  /* Unions are subtypes of Any */
+
+    /* Store union members as fields (for now, reuse the field structure) */
+    type->field_capacity = 8;
+    type->fields = malloc(type->field_capacity * sizeof(TypeField));
+
+    if (members_array && omni_is_array(members_array)) {
+        for (size_t i = 0; i < members_array->array.len; i++) {
+            OmniValue* member = members_array->array.data[i];
+            const char* member_type = NULL;
+
+            if (omni_is_type_lit(member)) {
+                member_type = member->type_lit.type_name;
+            } else if (omni_is_sym(member)) {
+                member_type = member->str_val;
+            }
+
+            if (member_type) {
+                TypeField tf;
+                tf.name = strdup(member_type);  /* Store type name as field name for now */
+                tf.type_name = strdup(member_type);
+                tf.strength = FIELD_STRONG;
+                tf.is_mutable = false;
+                tf.index = type->field_count;
+                tf.variance = VARIANCE_INVARIANT;
+
+                if (type->field_count >= type->field_capacity) {
+                    type->field_capacity *= 2;
+                    type->fields = realloc(type->fields,
+                                          type->field_capacity * sizeof(TypeField));
+                }
+                type->fields[type->field_count++] = tf;
+            }
+        }
+    }
+
+    type->next = ctx->type_registry->types;
+    ctx->type_registry->types = type;
+    ctx->type_registry->type_count++;
+
+    return type;
+}
+
+/*
+ * Register a function type
+ * A function type represents the signature of a function
+ * Example: (define {IntToInt} (fn [[{Int32}] {Int32}]))
+ */
+TypeDef* omni_register_function_type(AnalysisContext* ctx, const char* name,
+                                     OmniValue* sig_array) {
+    if (!ctx->type_registry) {
+        ctx->type_registry = omni_type_registry_new();
+    }
+
+    TypeDef* type = malloc(sizeof(TypeDef));
+    memset(type, 0, sizeof(TypeDef));
+    type->name = strdup(name);
+    type->is_abstract = false;
+    type->is_primitive = false;
+    type->parent = strdup("Function");  /* Function types are subtypes of Function */
+
+    /* Parse function signature: [[param1 {Type1} ...] {ReturnType}] */
+    type->field_capacity = 8;
+    type->fields = malloc(type->field_capacity * sizeof(TypeField));
+
+    if (sig_array && omni_is_array(sig_array) && sig_array->array.len >= 2) {
+        /* First element: parameter types array */
+        OmniValue* params = sig_array->array.data[0];
+        /* Last element: return type */
+        OmniValue* return_type = sig_array->array.data[sig_array->array.len - 1];
+
+        /* Store return type as a special field */
+        const char* return_type_str = NULL;
+        if (omni_is_type_lit(return_type)) {
+            return_type_str = return_type->type_lit.type_name;
+        } else if (omni_is_sym(return_type)) {
+            return_type_str = return_type->str_val;
+        }
+
+        if (return_type_str) {
+            TypeField tf;
+            tf.name = strdup("return");
+            tf.type_name = strdup(return_type_str);
+            tf.strength = FIELD_STRONG;
+            tf.is_mutable = false;
+            tf.index = 0;
+            tf.variance = VARIANCE_COVARIANT;  /* Return type is covariant */
+
+            type->fields[type->field_count++] = tf;
+        }
+
+        /* Store parameter types */
+        if (omni_is_array(params)) {
+            for (size_t i = 0; i < params->array.len; i++) {
+                OmniValue* param = params->array.data[i];
+                const char* param_type = NULL;
+
+                if (omni_is_type_lit(param)) {
+                    param_type = param->type_lit.type_name;
+                } else if (omni_is_sym(param)) {
+                    param_type = param->str_val;
+                }
+
+                if (param_type) {
+                    TypeField tf;
+                    char param_name[32];
+                    snprintf(param_name, sizeof(param_name), "param%zu", i);
+                    tf.name = strdup(param_name);
+                    tf.type_name = strdup(param_type);
+                    tf.strength = FIELD_STRONG;
+                    tf.is_mutable = false;
+                    tf.index = type->field_count;
+                    tf.variance = VARIANCE_CONTRAVARIANT;  /* Param types are contravariant */
+
+                    if (type->field_count >= type->field_capacity) {
+                        type->field_capacity *= 2;
+                        type->fields = realloc(type->fields,
+                                              type->field_capacity * sizeof(TypeField));
+                    }
+                    type->fields[type->field_count++] = tf;
+                }
             }
         }
     }

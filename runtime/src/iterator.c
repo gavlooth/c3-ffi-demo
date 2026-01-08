@@ -245,15 +245,22 @@ Obj* prim_collect(Obj* seq, Obj* kind) {
     /* Determine collection type (default: array per SYNTAX_REVISION.md) */
     int is_list = 0;
     int is_array = 1;  /* Default per spec */
+    int is_string = 0;
 
     if (kind && IS_BOXED(kind) && kind->tag == TAG_SYM) {
         const char* kind_str = (const char*)kind->ptr;
         if (strcmp(kind_str, "list") == 0) {
             is_list = 1;
             is_array = 0;
+            is_string = 0;
         } else if (strcmp(kind_str, "array") == 0) {
             is_array = 1;
             is_list = 0;
+            is_string = 0;
+        } else if (strcmp(kind_str, "string") == 0) {
+            is_string = 1;
+            is_list = 0;
+            is_array = 0;
         }
     }
 
@@ -318,6 +325,30 @@ Obj* prim_collect(Obj* seq, Obj* kind) {
             curr = curr->b;
         }
 
+        return result;
+    }
+
+    if (is_string) {
+        /* Convert list of characters to string */
+        /* Allocate buffer for string (count chars + null terminator) */
+        char* buffer = malloc(count + 1);
+        if (!buffer) return NULL;
+
+        /* Fill buffer with characters */
+        Obj* curr = temp_list;
+        for (int i = 0; i < count && IS_BOXED(curr) && curr->tag == TAG_PAIR; i++) {
+            Obj* elem = curr->a;
+            /* Extract character value from integer */
+            /* obj_to_int handles both immediate and boxed integers */
+            long char_val = obj_to_int(elem);
+            buffer[i] = (char)char_val;
+            curr = curr->b;
+        }
+        buffer[count] = '\0';
+
+        /* Create string object */
+        Obj* result = mk_string(buffer);
+        free(buffer);
         return result;
     }
 

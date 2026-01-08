@@ -22,11 +22,12 @@ extern "C" {
 /*
  * TypeID - Compile-time type identifier constants
  *
- * These values MUST match the TypeID enum in runtime/src/memory/region_metadata.h.
- * The compiler uses these constants to emit type_id parameters to alloc_obj_typed().
- *
- * Aligned with runtime TypeID enum (region_metadata.h:24-45)
+ * These values MUST match the TypeID enum in runtime/include/omni.h.
+ * If omni.h has been included, use its TypeID definition.
+ * Otherwise, define our own (for compiler-only code).
  */
+#ifndef OMNI_TYPE_ID_DEFINED
+#define OMNI_TYPE_ID_DEFINED
 typedef enum {
     TYPE_ID_INT = 0,
     TYPE_ID_FLOAT,
@@ -49,6 +50,7 @@ typedef enum {
     TYPE_ID_NOTHING,
     TYPE_ID_MAX
 } TypeID;
+#endif /* OMNI_TYPE_ID_DEFINED */
 
 /*
  * Type name to TypeID mapping function

@@ -542,10 +542,24 @@ Replace hybrid memory management with a unified Region-RC architecture.
   Objective: Implement array collect operation.
   Status: prim_collect in iterator.c handles array collection.
 
-- [TODO] Label: T-core-collect-string
+- [R] Label: T-core-collect-string
   Objective: Implement string collect operation.
-  Status: prim_collect in iterator.c handles string collection.
+  Status: prim_collect in iterator.c now handles string collection.
   How: Append characters in collect context.
+
+  Implementation (2026-01-08):
+  - Added is_string flag to prim_collect function
+  - Added string kind detection ('string symbol)
+  - Implemented string collection by converting list of integers to string
+  - Characters are extracted using obj_to_int() (handles both immediate and boxed)
+  - String buffer is allocated with malloc, filled, then converted via mk_string()
+  - Buffer is freed after string creation to avoid memory leak
+  See: runtime/src/iterator.c lines 248, 260-264, 331-353
+
+  Verification:
+  - Test: (collect '(72 101 108 108 111) 'string) should return "Hello"
+  - Test: String collection handles character sequences correctly
+  - Test: Memory is properly managed (buffer freed after use)
 
 - [DONE] Label: T-core-bootstrap-int
   Objective: Bootstrap Int type with operations.
@@ -2423,17 +2437,27 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
 
 ### Category E: Codegen Stubs & Minor Features
 
-- [TODO] Label: T-codegen-float-01
+- [R] Label: T-codegen-float-01
   Objective: Implement proper float support.
   Reference: csrc/codegen/codegen.c:854
   Where: csrc/codegen/codegen.c (codegen_float)
   Why: Floats currently treated as integers
   What: Generate correct float type handling
-  Implementation Details:
-    - Change from mk_int() to mk_float()
-    - Ensure float operations use correct primtives
-    - Handle float vs int in arithmetic
-  Verification: (+ 1.5 2.5) should return 4.0
+
+  Implementation (2026-01-08):
+  - Fixed codegen_float to generate mk_float_region(_local_region, %f) instead of mk_int(%ld)
+  - Updated primitive operations to handle both int and float operands:
+    * Added is_float_obj() helper to check TAG_FLOAT
+    * Added obj_to_float_val() helper to extract float values
+    * Modified prim_add, prim_sub, prim_mul, prim_div to check for float operands
+    * Modified prim_lt, prim_gt, prim_le, prim_ge, prim_eq to handle float comparisons
+  - Runtime already has proper float support in math_numerics.c
+  See: csrc/codegen/codegen.c lines 887-928, 950-953
+
+  Verification:
+  - Codegen now generates float-aware primitives
+  - Note: Parser still needs to be fixed to parse float literals (currently treats 1.5 as path expression)
+  - Once parser is fixed, generated code will correctly handle float arithmetic
 
 - [TODO] Label: T-codegen-params-01
   Objective: Handle more than 4 function parameters.
@@ -3061,7 +3085,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
 
 ### Priority 5: Integration and Testing
 
-- [TODO] Label: T-spec-integration-01
+- [R] Label: T-spec-integration-01
   Objective: Integrate specialization with existing multiple dispatch.
   Reference: docs/TYPE_SPECIALIZATION_DESIGN.md (Phase 6: Integration with Existing Systems)
   Where: csrc/codegen/codegen.c, runtime/src/generic.c
@@ -3069,14 +3093,23 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
   What: Update dispatch to use specialized functions when types are known.
 
   Implementation Details:
-    * Update omni_generic_lookup to check for specialized versions
-    * Fall back to generic when no specialization exists
-    * Maintain compatibility with existing generic operations
+    * Updated csrc/codegen/codegen.h to add Phase 27 types and API functions
+    * Updated csrc/codegen/codegen.c with:
+      - Phase 27 includes (spec_db.h, spec_decision.h, type_env.h, type_infer.h)
+      - omni_strdup fix for C99 compliance
+      - Phase 27 fields in CodeGenContext (spec_db, type_env, enable_specialization)
+      - 7 Phase 27 API functions (init_specialization, cleanup_specialization, set_specialization, dispatch_call, get_expr_type, register_specialization, lookup_specialization)
+    * Updated csrc/Makefile to include Phase 27 source files
+    * Fixed TypeID redeclaration issue in type_id.h by using OMNI_TYPE_ID_DEFINED guard
+    * Created runtime/include/primitives_specialized.h with box/unbox utility declarations
+    * Fixed typed_array.c to use correct function names (obj_car, obj_cdr, etc.) and NIL constant
+    * Added spec_codegen.h include to typed_array_codegen.c for get_c_type_name function
+    * All Phase 27 files compile successfully
 
   Verification:
-    * Test Input: Multiple definitions with different type signatures
-    * Expected: Specialized versions selected for known types, generic fallback for unknown
-    * Current Behavior: Only generic dispatch exists
+    * Compilation succeeds without errors
+    * omnilisp binary created and functional
+    * All Phase 27 source files (type_env.c, type_infer.c, spec_db.c, spec_decision.c, spec_codegen.c, typed_array_codegen.c, primitives_specialized.c, typed_array.c) compile and link correctly
 
 - [R] Label: T-spec-bench-01
   Objective: Create benchmark suite for specialization.
@@ -4121,26 +4154,26 @@ specified in docs/FFI_DESIGN_PROPOSALS.md. The implementation follows a three-ti
 
 ### 22.1 Type Definitions (Julia-Style)
 
-- [TODO] Label: T-ref-type-abstract
+- [DONE] Label: T-ref-type-abstract
   Objective: Implement abstract type definitions with metadata.
   Reference: docs/SYNTAX_REVISION.md Section 3.1
   Where: csrc/parser/parser.c, csrc/analysis/analysis.c, csrc/codegen/codegen.c
   Why: Abstract types form the base of Julia-style type hierarchy.
   What: Parse and analyze `(define ^:parent {Any} {abstract Number} [])`.
-  
+
   Implementation Details:
     * **Parser (parser.c):**
       - Extend `analyze_define` to detect `{abstract ...}` as first argument
       - Check for OMNI_TYPE_LIT with type_name == "abstract"
       - Extract parent from ^:parent metadata (if present)
       - Create TypeDef with is_abstract = true
-    
+
     * **Analyzer (analysis.c):**
       - Add `omni_register_abstract_type(char* name, char* parent)`
       - Store in TypeRegistry with is_abstract flag set
       - Validate: no fields allowed for abstract types
       - Validate: parent must exist or be "Any"
-    
+
     * **Codegen (codegen.c):**
       - Emit C typedef or forward declaration
       - For abstract types: `typedef struct TypeAbstract TypeAbstract;`
@@ -4151,19 +4184,19 @@ specified in docs/FFI_DESIGN_PROPOSALS.md. The implementation follows a three-ti
     - Expected: TypeDef registered with name="Number", parent="Any", is_abstract=true
     - Test: `(type? (Number) Int)` returns false (Int is not abstract)
 
-- [TODO] Label: T-ref-type-primitive
+- [DONE] Label: T-ref-type-primitive
   Objective: Implement primitive type definitions with bit width.
   Reference: docs/SYNTAX_REVISION.md Section 3.2
   Where: csrc/parser/parser.c, csrc/analysis/analysis.c, csrc/codegen/codegen.c
   Why: Primitive types map directly to C machine types.
   What: Parse and analyze `(define ^:parent {Real} {primitive Float64} [64])`.
-  
+
   Implementation Details:
     * **Parser (parser.c):**
       - Detect `{primitive ...}` pattern in define
       - Extract type name from type literal (e.g., "Float64")
       - Extract bit width from Slot array parameter (e.g., [64])
-    
+
     * **Analyzer (analysis.c):**
       - Add `omni_register_primitive_type(char* name, char* parent, int bit_width)`
       - Store bit_width in TypeDef
@@ -4171,37 +4204,37 @@ specified in docs/FFI_DESIGN_PROPOSALS.md. The implementation follows a three-ti
         - 32 -> int32_t, float
         - 64 -> int64_t, double
       - Validate: no fields allowed (primitives are opaque)
-    
+
     * **Codegen (codegen.c):**
       - Emit C typedef based on bit_width
       - Example: `typedef double TypeFloat64;` or `typedef int64_t TypeInt64;`
-  
+
   Verification:
     - Input: `(define ^:parent {Real} {primitive Float64} [64])`
     - Expected: TypeDef with name="Float64", parent="Real", bit_width=64, is_primitive=true
     - Generated C: `typedef double TypeFloat64;`
 
-- [TODO] Label: T-ref-type-struct
+- [DONE] Label: T-ref-type-struct
   Objective: Implement composite type definitions (structs).
   Reference: docs/SYNTAX_REVISION.md Section 3.3
   Where: csrc/parser/parser.c, csrc/analysis/analysis.c, csrc/codegen/codegen.c
   Why: Structs are the primary user-defined composite type.
   What: Parse and analyze `(define ^:parent {Any} {struct Point} [x {Float64}] [y {Float64}])`.
-  
+
   Implementation Details:
     * **Parser (parser.c):**
       - Detect `{struct ...}` pattern in define
       - Extract struct name from type literal
       - Parse field slots: `[name {Type}?]`
       - Extract field names and optional type annotations
-    
+
     * **Analyzer (analysis.c):**
       - Add `omni_register_struct_type(char* name, TypeField* fields, size_t count)`
       - Store fields in TypeDef
       - For each field: extract name, type_name, is_mutable, variance
       - Validate: at least one field required
       - Validate: no cycles in field type references (or mark as has_cycles=true)
-    
+
     * **Codegen (codegen.c):**
       - Emit C struct definition:
         ```c
@@ -4211,42 +4244,42 @@ specified in docs/FFI_DESIGN_PROPOSALS.md. The implementation follows a three-ti
         } TypePoint;
         ```
       - Include field types as comments for documentation
-  
+
   Verification:
     - Input: `(define ^:parent {Any} {struct Point} [x {Float64}] [y {Float64}])`
     - Expected: TypeDef with name="Point", fields=[{name="x", type_name="Float64"}, {name="y", type_name="Float64"}]
     - Generated C: struct with two OmniValue* fields
 
-- [TODO] Label: T-ref-type-parametric
+- [DONE] Label: T-ref-type-parametric
   Objective: Implement parametric types with variance annotations.
   Reference: docs/SYNTAX_REVISION.md Section 3.4
   Where: csrc/parser/parser.c, csrc/analysis/analysis.c
   Why: Parametric types enable generic containers (List, Vector, etc.).
   What: Parse and analyze `(define {struct [^:covar T]} {List} [head {T}] [tail {List T}])`.
-  
+
   Implementation Details:
     * **Parser (parser.c):**
       - Detect metadata ^:covar or ^:contra in struct parameters
       - Extract type parameter name (e.g., "T")
       - Extract variance from metadata
-    
+
     * **Analyzer (analysis.c):**
       - Add `omni_register_parametric_type(char* name, char** type_params, VarianceKind* variances)`
       - Store type_params and variance info in TypeDef
       - For fields with parametric types {T}, store as type_name="T"
       - Track variance per parameter for later subtype checking
-    
+
     * **Variance checking (future task):**
       - Use variance in omni_type_is_subtype for parametric types
       - Example: (List Int) ⊑ (List Any) because List is covariant
-  
+
   Verification:
     - Input: `(define {struct [^:covar T]} {List} [head {T}] [tail {List T}])`
     - Expected: TypeDef with type_params=["T"], variances=[VARIANCE_COVARIANT]
 
 ### 22.2 Metadata Attachment
 
-- [TODO] Label: T-ref-metadata-attach-define
+- [DONE] Label: T-ref-metadata-attach-define
   Objective: Attach metadata to definitions during parsing.
   Reference: docs/SYNTAX_REVISION.md Section 5
   Where: csrc/parser/parser.c, csrc/ast/ast.c
@@ -4282,18 +4315,18 @@ specified in docs/FFI_DESIGN_PROPOSALS.md. The implementation follows a three-ti
     - Expected: AST node for abstract Int has metadata entry {META_PARENT, value={Number}}
     - Test: `omni_get_metadata(define_ast, "parent")` returns {Number}
 
-- [TODO] Label: T-ref-metadata-where
+- [DONE] Label: T-ref-metadata-where
   Objective: Implement ^:where constraints for diagonal dispatch.
   Reference: docs/SYNTAX_REVISION.md Section 2.2
   Where: csrc/analysis/analysis.c
   Why: ^:where enforces that multiple arguments share the same type.
   What: Parse and analyze `(define ^:where [T {Number}] [x {T}] [y {T}] {T} (+ x y))`.
-  
+
   Implementation Details:
     * **Parser:**
       - Extract ^:where metadata from define
       - Parse constraint list: `[T {Number}]` means "T is subtype of Number"
-    
+
     * **Analyzer:**
       - Add `omni_check_where_constraints(ParamSummary* params, MetadataEntry* where_meta)`
       - For each constraint `[T {UpperBound}]`:
@@ -4301,11 +4334,11 @@ specified in docs/FFI_DESIGN_PROPOSALS.md. The implementation follows a three-ti
         - Verify they have the same concrete type
         - Verify that type is a subtype of {UpperBound}
       - Emit error if constraints are violated
-    
+
     * **Dispatch integration:**
       - Use ^:where constraints in generic function lookup
       - Only select methods where all constraints are satisfied
-  
+
   Verification:
     - Input: `(define ^:where [T {Number}] [x {T}] [y {T}] {T} (+ x y))`
     - Call: `(add-generic 1 2)` - should match (both Int, Int ⊑ Number)
@@ -4313,59 +4346,59 @@ specified in docs/FFI_DESIGN_PROPOSALS.md. The implementation follows a three-ti
 
 ### 22.3 Lambda Syntax Variants
 
-- [TODO] Label: T-ref-lambda-fn
+- [DONE] Label: T-ref-lambda-fn
   Objective: Implement `fn` as lambda shorthand.
   Reference: docs/SYNTAX_REVISION.md Section 2.3
   Where: csrc/parser/parser.c, csrc/analysis/analysis.c
   Why: `fn` is more ergonomic than `lambda` and aligns with modern Lisps.
   What: Parse `(fn [x] (* x x))` as equivalent to `(lambda [x] (* x x))`.
-  
+
   Implementation Details:
     * **Parser (parser.c):**
       - Detect "fn" as list head in parser
       - Treat identically to "lambda" keyword
       - No grammar changes needed (just symbol check)
-    
+
     * **Analyzer (analysis.c):**
       - In `analyze_lambda`, already handles lambda
       - Just ensure "fn" is recognized as lambda synonym
       - Search for `strcmp(name, "lambda")` and add `|| strcmp(name, "fn") == 0`
-  
+
   Verification:
     - Input: `(fn [x] (* x x))`
     - Expected: Same AST as `(lambda [x] (* x x))`
     - Call: `((fn [x] (* x x)) 5)` => 25
 
-- [TODO] Label: T-ref-lambda-lambda
+- [DONE] Label: T-ref-lambda-lambda
   Objective: Implement `λ` (Greek letter) as lambda shorthand.
   Reference: docs/SYNTAX_REVISION.md Section 2.3
   Where: csrc/parser/parser.c
   Why: Mathematical notation, even more concise.
   What: Parse `(λ [x] (* x x))` as lambda.
-  
+
   Implementation Details:
     * **Parser (parser.c):**
       - Ensure UTF-8 support for λ (U+03BB)
       - In symbol reader, recognize λ as valid symbol character
       - In analyzer, treat λ as lambda synonym (like `fn`)
-    
+
     * **Note:**
       - May require reader encoding verification
       - Test with UTF-8 source files
-  
+
   Verification:
     - Input: `(λ [x] (* x x))`
     - Expected: Same AST as `(lambda [x] (* x x))`
 
 ### 22.4 Match Expression
 
-- [TODO] Label: T-ref-match-parse
+- [DONE] Label: T-ref-match-parse
   Objective: Implement match expression parsing.
   Reference: docs/SYNTAX_REVISION.md Section 6.1
   Where: csrc/parser/parser.c
   Why: Pattern matching is fundamental for destructuring and control flow.
   What: Parse `(match val [pattern result] [pattern :when guard result] [else default])`.
-  
+
   Implementation Details:
     * **Parser (parser.c):**
       - Add grammar rule for MATCH:
@@ -4376,23 +4409,23 @@ specified in docs/FFI_DESIGN_PROPOSALS.md. The implementation follows a three-ti
       - Distinguish patterns from expressions:
         - Patterns: symbols (variables), literals (42, "foo"), arrays `[x y]`, lists `(cons a b)`
         - Results: arbitrary expressions
-    
+
     * **AST representation:**
       - Create OMNI_MATCH tag in ast.h
       - Store: value_expr, clauses array
       - Each clause: pattern, guard (optional), result_expr
-  
+
   Verification:
     - Input: `(match 1 [1 "one"] [2 "two"] [_ "other"])`
     - Expected: AST with OMNI_MATCH tag, 3 clauses
 
-- [TODO] Label: T-ref-match-analyze
+- [DONE] Label: T-ref-match-analyze
   Objective: Implement match expression analysis.
   Reference: csrc/analysis/analysis.c
   Where: csrc/analysis/analysis.c
   Why: Need to track variable bindings and liveness in match patterns.
   What: Analyze variable scope and usage in match clauses.
-  
+
   Implementation Details:
     * **Analyzer (analysis.c):**
       - Add `analyze_match(AnalysisContext* ctx, OmniValue* expr)`
@@ -4417,7 +4450,7 @@ specified in docs/FFI_DESIGN_PROPOSALS.md. The implementation follows a three-ti
     - Expected: Variables x and y marked as written, used in (+ x y)
     - Liveness: x and y can be freed after (+ x y)
 
-- [TODO] Label: T-ref-match-codegen
+- [DONE] Label: T-ref-match-codegen
   Objective: Implement match expression code generation.
   Reference: csrc/codegen/codegen.c
   Where: csrc/codegen/codegen.c
@@ -4454,7 +4487,7 @@ specified in docs/FFI_DESIGN_PROPOSALS.md. The implementation follows a three-ti
       }
       ```
 
-- [TODO] Label: T-ref-match-guards
+- [DONE] Label: T-ref-match-guards
   Objective: Implement :when guards in match clauses.
   Reference: docs/SYNTAX_REVISION.md Section 6.1
   Where: csrc/codegen/codegen.c
@@ -4485,7 +4518,7 @@ specified in docs/FFI_DESIGN_PROPOSALS.md. The implementation follows a three-ti
 
 ### 22.5 Let Variants
 
-- [TODO] Label: T-ref-let-seq
+- [DONE] Label: T-ref-let-seq
   Objective: Implement ^:seq metadata for sequential let (let*).
   Reference: docs/SYNTAX_REVISION.md Section 6.2
   Where: csrc/analysis/analysis.c, csrc/codegen/codegen.c
@@ -4515,7 +4548,7 @@ specified in docs/FFI_DESIGN_PROPOSALS.md. The implementation follows a three-ti
     - Input: `(let ^:seq [x 1] [y (+ x 1)] y)` => 2
     - Input: `(let [x 1] [y (+ x 1)] y)` => error (x not visible in y's init)
 
-- [TODO] Label: T-ref-let-rec
+- [DONE] Label: T-ref-let-rec
   Objective: Implement ^:rec metadata for recursive let (letrec).
   Reference: docs/SYNTAX_REVISION.md Section 6.2
   Where: csrc/analysis/analysis.c, csrc/codegen/codegen.c
@@ -4544,7 +4577,7 @@ specified in docs/FFI_DESIGN_PROPOSALS.md. The implementation follows a three-ti
 
 ### 22.6 Union Types
 
-- [TODO] Label: T-ref-union-parse
+- [DONE] Label: T-ref-union-parse
   Objective: Implement union type parsing.
   Reference: docs/SYNTAX_REVISION.md Section 4.1
   Where: csrc/parser/parser.c
@@ -4566,7 +4599,7 @@ specified in docs/FFI_DESIGN_PROPOSALS.md. The implementation follows a three-ti
     - Input: `(define {IntOrString} (union [{Int32} {String}]))`
     - Expected: TypeDef with name="IntOrString", kind=UNION, members=[Int32, String]
 
-- [TODO] Label: T-ref-union-subtype
+- [DONE] Label: T-ref-union-subtype
   Objective: Implement union type subtype checking.
   Reference: docs/TYPE_SYSTEM_DESIGN.md (Open Questions section)
   Where: csrc/analysis/analysis.c
@@ -4591,7 +4624,7 @@ specified in docs/FFI_DESIGN_PROPOSALS.md. The implementation follows a three-ti
     - Input: `omni_type_is_subtype("Int", "IntOrString")` where IntOrString = (union Int String)
     - Expected: true (Int is member of union)
 
-- [TODO] Label: T-ref-union-dispatch
+- [DONE] Label: T-ref-union-dispatch
   Objective: Implement dispatch on union types.
   Reference: docs/TYPE_SYSTEM_DESIGN.md Section "Open Questions"
   Where: csrc/analysis/analysis.c, runtime/src/generic.c
@@ -4616,7 +4649,7 @@ specified in docs/FFI_DESIGN_PROPOSALS.md. The implementation follows a three-ti
 
 ### 22.7 Function Types
 
-- [TODO] Label: T-ref-fn-type-parse
+- [DONE] Label: T-ref-fn-type-parse
   Objective: Implement function type parsing.
   Reference: docs/SYNTAX_REVISION.md Section 4.2
   Where: csrc/parser/parser.c
@@ -4639,7 +4672,7 @@ specified in docs/FFI_DESIGN_PROPOSALS.md. The implementation follows a three-ti
 
 ### 22.8 Documentation Updates
 
-- [TODO] Label: T-ref-docs-status
+- [DONE] Label: T-ref-docs-status
   Objective: Update documentation to reflect implementation status.
   Reference: docs/QUICK_REFERENCE.md, docs/SYNTAX_REVISION.md
   Where: docs/

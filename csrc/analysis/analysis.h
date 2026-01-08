@@ -1074,6 +1074,16 @@ TypeDef* omni_register_abstract_type(AnalysisContext* ctx, const char* name,
 TypeDef* omni_register_struct_type(AnalysisContext* ctx, const char* name,
                                    const char* parent, OmniValue* fields);
 
+/* ============== Phase 22: Union and Function Type Registration ============== */
+
+/* Register a union type */
+TypeDef* omni_register_union_type(AnalysisContext* ctx, const char* name,
+                                  OmniValue* members_array);
+
+/* Register a function type */
+TypeDef* omni_register_function_type(AnalysisContext* ctx, const char* name,
+                                     OmniValue* sig_array);
+
 /*
  * Parametric Type Functions
  * Handle type parameters and variance.

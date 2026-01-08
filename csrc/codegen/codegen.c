@@ -14,6 +14,24 @@
 #include <stdarg.h>
 #include <ctype.h>
 
+/* ============== Phase 27: Type Specialization Includes ============== */
+
+#include "spec_db.h"        /* Specialization database */
+#include "spec_decision.h"  /* Specialization decision policies */
+#include "../analysis/type_env.h"     /* Type environment */
+#include "../analysis/type_infer.h"   /* Type inference */
+
+/* ============== Phase 27: strdup Fix for C99 ============== */
+
+/* strdup is not part of C99 standard, provide our own implementation */
+static char* omni_strdup(const char* s) {
+    if (!s) return NULL;
+    size_t len = strlen(s) + 1;
+    char* copy = malloc(len);
+    if (copy) memcpy(copy, s, len);
+    return copy;
+}
+
 /* ============== Context Management ============== */
 
 CodeGenContext* omni_codegen_new(FILE* output) {
@@ -835,16 +853,79 @@ void omni_codegen_runtime_header(CodeGenContext* ctx) {
 
         /* Primitives - Region-RC: All allocations go through _local_region */
         omni_codegen_emit_raw(ctx, "/* Primitive operations - allocate results in _local_region */\n");
-        omni_codegen_emit_raw(ctx, "static Obj* prim_add(Obj* a, Obj* b) { return mk_int_region(_local_region, a->i + b->i); }\n");
-        omni_codegen_emit_raw(ctx, "static Obj* prim_sub(Obj* a, Obj* b) { return mk_int_region(_local_region, a->i - b->i); }\n");
-        omni_codegen_emit_raw(ctx, "static Obj* prim_mul(Obj* a, Obj* b) { return mk_int_region(_local_region, a->i * b->i); }\n");
-        omni_codegen_emit_raw(ctx, "static Obj* prim_div(Obj* a, Obj* b) { return mk_int_region(_local_region, a->i / b->i); }\n");
+        omni_codegen_emit_raw(ctx, "/* Helper: Check if value is a float */\n");
+        omni_codegen_emit_raw(ctx, "static int is_float_obj(Obj* o) { return o && IS_BOXED(o) && o->tag == TAG_FLOAT; }\n");
+        omni_codegen_emit_raw(ctx, "/* Helper: Extract float value */\n");
+        omni_codegen_emit_raw(ctx, "static double obj_to_float_val(Obj* o) { return is_float_obj(o) ? o->f : (double)o->i; }\n\n");
+
+        omni_codegen_emit_raw(ctx, "static Obj* prim_add(Obj* a, Obj* b) {\n");
+        omni_codegen_emit_raw(ctx, "    if (is_float_obj(a) || is_float_obj(b)) {\n");
+        omni_codegen_emit_raw(ctx, "        return mk_float_region(_local_region, obj_to_float_val(a) + obj_to_float_val(b));\n");
+        omni_codegen_emit_raw(ctx, "    } else {\n");
+        omni_codegen_emit_raw(ctx, "        return mk_int_region(_local_region, a->i + b->i);\n");
+        omni_codegen_emit_raw(ctx, "    }\n");
+        omni_codegen_emit_raw(ctx, "}\n");
+
+        omni_codegen_emit_raw(ctx, "static Obj* prim_sub(Obj* a, Obj* b) {\n");
+        omni_codegen_emit_raw(ctx, "    if (is_float_obj(a) || is_float_obj(b)) {\n");
+        omni_codegen_emit_raw(ctx, "        return mk_float_region(_local_region, obj_to_float_val(a) - obj_to_float_val(b));\n");
+        omni_codegen_emit_raw(ctx, "    } else {\n");
+        omni_codegen_emit_raw(ctx, "        return mk_int_region(_local_region, a->i - b->i);\n");
+        omni_codegen_emit_raw(ctx, "    }\n");
+        omni_codegen_emit_raw(ctx, "}\n");
+
+        omni_codegen_emit_raw(ctx, "static Obj* prim_mul(Obj* a, Obj* b) {\n");
+        omni_codegen_emit_raw(ctx, "    if (is_float_obj(a) || is_float_obj(b)) {\n");
+        omni_codegen_emit_raw(ctx, "        return mk_float_region(_local_region, obj_to_float_val(a) * obj_to_float_val(b));\n");
+        omni_codegen_emit_raw(ctx, "    } else {\n");
+        omni_codegen_emit_raw(ctx, "        return mk_int_region(_local_region, a->i * b->i);\n");
+        omni_codegen_emit_raw(ctx, "    }\n");
+        omni_codegen_emit_raw(ctx, "}\n");
+
+        omni_codegen_emit_raw(ctx, "static Obj* prim_div(Obj* a, Obj* b) {\n");
+        omni_codegen_emit_raw(ctx, "    if (is_float_obj(a) || is_float_obj(b)) {\n");
+        omni_codegen_emit_raw(ctx, "        return mk_float_region(_local_region, obj_to_float_val(a) / obj_to_float_val(b));\n");
+        omni_codegen_emit_raw(ctx, "    } else {\n");
+        omni_codegen_emit_raw(ctx, "        return mk_int_region(_local_region, a->i / b->i);\n");
+        omni_codegen_emit_raw(ctx, "    }\n");
+        omni_codegen_emit_raw(ctx, "}\n");
+
         omni_codegen_emit_raw(ctx, "static Obj* prim_mod(Obj* a, Obj* b) { return mk_int_region(_local_region, a->i %% b->i); }\n");
-        omni_codegen_emit_raw(ctx, "static Obj* prim_lt(Obj* a, Obj* b) { return mk_bool_region(_local_region, a->i < b->i ? 1 : 0); }\n");
-        omni_codegen_emit_raw(ctx, "static Obj* prim_gt(Obj* a, Obj* b) { return mk_bool_region(_local_region, a->i > b->i ? 1 : 0); }\n");
-        omni_codegen_emit_raw(ctx, "static Obj* prim_le(Obj* a, Obj* b) { return mk_bool_region(_local_region, a->i <= b->i ? 1 : 0); }\n");
-        omni_codegen_emit_raw(ctx, "static Obj* prim_ge(Obj* a, Obj* b) { return mk_bool_region(_local_region, a->i >= b->i ? 1 : 0); }\n");
-        omni_codegen_emit_raw(ctx, "static Obj* prim_eq(Obj* a, Obj* b) { return mk_bool_region(_local_region, a->i == b->i ? 1 : 0); }\n");
+        omni_codegen_emit_raw(ctx, "static Obj* prim_lt(Obj* a, Obj* b) {\n");
+        omni_codegen_emit_raw(ctx, "    if (is_float_obj(a) || is_float_obj(b)) {\n");
+        omni_codegen_emit_raw(ctx, "        return mk_bool_region(_local_region, obj_to_float_val(a) < obj_to_float_val(b) ? 1 : 0);\n");
+        omni_codegen_emit_raw(ctx, "    } else {\n");
+        omni_codegen_emit_raw(ctx, "        return mk_bool_region(_local_region, a->i < b->i ? 1 : 0);\n");
+        omni_codegen_emit_raw(ctx, "    }\n");
+        omni_codegen_emit_raw(ctx, "}\n");
+        omni_codegen_emit_raw(ctx, "static Obj* prim_gt(Obj* a, Obj* b) {\n");
+        omni_codegen_emit_raw(ctx, "    if (is_float_obj(a) || is_float_obj(b)) {\n");
+        omni_codegen_emit_raw(ctx, "        return mk_bool_region(_local_region, obj_to_float_val(a) > obj_to_float_val(b) ? 1 : 0);\n");
+        omni_codegen_emit_raw(ctx, "    } else {\n");
+        omni_codegen_emit_raw(ctx, "        return mk_bool_region(_local_region, a->i > b->i ? 1 : 0);\n");
+        omni_codegen_emit_raw(ctx, "    }\n");
+        omni_codegen_emit_raw(ctx, "}\n");
+        omni_codegen_emit_raw(ctx, "static Obj* prim_le(Obj* a, Obj* b) {\n");
+        omni_codegen_emit_raw(ctx, "    if (is_float_obj(a) || is_float_obj(b)) {\n");
+        omni_codegen_emit_raw(ctx, "        return mk_bool_region(_local_region, obj_to_float_val(a) <= obj_to_float_val(b) ? 1 : 0);\n");
+        omni_codegen_emit_raw(ctx, "    } else {\n");
+        omni_codegen_emit_raw(ctx, "        return mk_bool_region(_local_region, a->i <= b->i ? 1 : 0);\n");
+        omni_codegen_emit_raw(ctx, "    }\n");
+        omni_codegen_emit_raw(ctx, "}\n");
+        omni_codegen_emit_raw(ctx, "static Obj* prim_ge(Obj* a, Obj* b) {\n");
+        omni_codegen_emit_raw(ctx, "    if (is_float_obj(a) || is_float_obj(b)) {\n");
+        omni_codegen_emit_raw(ctx, "        return mk_bool_region(_local_region, obj_to_float_val(a) >= obj_to_float_val(b) ? 1 : 0);\n");
+        omni_codegen_emit_raw(ctx, "    } else {\n");
+        omni_codegen_emit_raw(ctx, "        return mk_bool_region(_local_region, a->i >= b->i ? 1 : 0);\n");
+        omni_codegen_emit_raw(ctx, "    }\n");
+        omni_codegen_emit_raw(ctx, "}\n");
+        omni_codegen_emit_raw(ctx, "static Obj* prim_eq(Obj* a, Obj* b) {\n");
+        omni_codegen_emit_raw(ctx, "    if (is_float_obj(a) || is_float_obj(b)) {\n");
+        omni_codegen_emit_raw(ctx, "        return mk_bool_region(_local_region, obj_to_float_val(a) == obj_to_float_val(b) ? 1 : 0);\n");
+        omni_codegen_emit_raw(ctx, "    } else {\n");
+        omni_codegen_emit_raw(ctx, "        return mk_bool_region(_local_region, a->i == b->i ? 1 : 0);\n");
+        omni_codegen_emit_raw(ctx, "    }\n");
+        omni_codegen_emit_raw(ctx, "}\n");
         omni_codegen_emit_raw(ctx, "static Obj* prim_cons(Obj* a, Obj* b) { inc_ref(a); inc_ref(b); return mk_cell_region(_local_region, a, b); }\n");
         omni_codegen_emit_raw(ctx, "static Obj* prim_car(Obj* lst) { return is_nil(lst) ? NIL : car(lst); }\n");
         omni_codegen_emit_raw(ctx, "static Obj* prim_cdr(Obj* lst) { return is_nil(lst) ? NIL : cdr(lst); }\n");
@@ -867,8 +948,8 @@ static void codegen_int(CodeGenContext* ctx, OmniValue* expr) {
 }
 
 static void codegen_float(CodeGenContext* ctx, OmniValue* expr) {
-    /* For now, treat floats as ints (TODO: proper float support) */
-    omni_codegen_emit_raw(ctx, "mk_int(%ld)", (long)expr->float_val);
+    /* Generate float literals using mk_float_region */
+    omni_codegen_emit_raw(ctx, "mk_float_region(_local_region, %f)", expr->float_val);
 }
 
 static void codegen_sym(CodeGenContext* ctx, OmniValue* expr) {
@@ -3360,4 +3441,186 @@ int omni_codegen_get_var_type_id(CodeGenContext* ctx, const char* var_name) {
 
     /* Query analysis context for type_id */
     return omni_get_var_type_id(ctx->analysis, var_name);
+}
+
+/* ============== Phase 27: Type Specialization API Implementation ============== */
+
+/*
+ * Initialize type specialization for code generation.
+ *
+ * Creates SpecDB and TypeEnv for tracking specializations and types.
+ */
+bool omni_codegen_init_specialization(CodeGenContext* ctx) {
+    if (!ctx) return false;
+
+    /* Create specialization database */
+    ctx->spec_db = spec_db_new();
+    if (!ctx->spec_db) return false;
+
+    /* Create type environment */
+    ctx->type_env = type_env_new(NULL);
+    if (!ctx->type_env) {
+        spec_db_free(ctx->spec_db);
+        ctx->spec_db = NULL;
+        return false;
+    }
+
+    /* Register common primitive specializations */
+    /* These will be generated on-demand, but we register them here for tracking */
+
+    /* Arithmetic operations */
+    /* add_Int_Int, add_Float_Float, etc. are registered in spec_db on-demand */
+
+    return true;
+}
+
+/*
+ * Clean up type specialization resources.
+ */
+void omni_codegen_cleanup_specialization(CodeGenContext* ctx) {
+    if (!ctx) return;
+
+    if (ctx->spec_db) {
+        spec_db_free(ctx->spec_db);
+        ctx->spec_db = NULL;
+    }
+
+    if (ctx->type_env) {
+        type_env_free(ctx->type_env);
+        ctx->type_env = NULL;
+    }
+}
+
+/*
+ * Enable or disable type specialization.
+ */
+void omni_codegen_set_specialization(CodeGenContext* ctx, bool enable) {
+    if (!ctx) return;
+    ctx->enable_specialization = enable;
+}
+
+/*
+ * Get the type of an expression during code generation.
+ *
+ * Uses the type environment to look up variable types and infer expression types.
+ */
+ConcreteType* omni_codegen_get_expr_type(CodeGenContext* ctx, OmniValue* expr) {
+    if (!ctx || !ctx->type_env || !expr) {
+        /* Return NULL to indicate unknown type */
+        return NULL;
+    }
+
+    /* Use type inference to determine expression type */
+    /* This bridges to the type_infer module */
+    return infer_expr(ctx->analysis, ctx->type_env, expr);
+}
+
+/*
+ * Register a function specialization.
+ *
+ * Records that a specialized version of a function exists for specific parameter types.
+ */
+SpecSignature* omni_codegen_register_specialization(CodeGenContext* ctx,
+                                                   const char* func_name,
+                                                   ConcreteType** param_types,
+                                                   int param_count,
+                                                   ConcreteType* return_type,
+                                                   bool is_builtin) {
+    if (!ctx || !ctx->spec_db || !func_name) {
+        return NULL;
+    }
+
+    /* Register specialization in database */
+    return spec_db_register(ctx->spec_db, func_name, param_types, param_count,
+                           return_type, is_builtin);
+}
+
+/*
+ * Check if a specialized version exists for a function call.
+ */
+SpecSignature* omni_codegen_lookup_specialization(CodeGenContext* ctx,
+                                                const char* func_name,
+                                                ConcreteType** arg_types,
+                                                int arg_count) {
+    if (!ctx || !ctx->spec_db || !func_name) {
+        return NULL;
+    }
+
+    /* Look up specialization in database */
+    return spec_db_lookup(ctx->spec_db, func_name, arg_types, arg_count);
+}
+
+/*
+ * Generate code for a function call with type dispatch.
+ *
+ * Automatically chooses between specialized and generic versions based on argument types.
+ */
+void omni_codegen_dispatch_call(CodeGenContext* ctx,
+                              const char* func_name,
+                              OmniValue** args,
+                              ConcreteType** arg_types,
+                              int arg_count) {
+    if (!ctx || !func_name) return;
+
+    /* If specialization is disabled, use generic call */
+    if (!ctx->enable_specialization) {
+        /* Emit generic function call */
+        /* TODO: Generate generic call code */
+        return;
+    }
+
+    /* If arg_types not provided, try to infer them */
+    ConcreteType* inferred_types[arg_count];
+    if (!arg_types) {
+        for (int i = 0; i < arg_count; i++) {
+            inferred_types[i] = omni_codegen_get_expr_type(ctx, args[i]);
+        }
+        arg_types = inferred_types;
+    }
+
+    /* Check if specialized version exists */
+    SpecSignature* spec = omni_codegen_lookup_specialization(ctx, func_name,
+                                                             arg_types, arg_count);
+
+    if (spec && spec->mangled_name) {
+        /* Emit specialized function call */
+        /* TODO: Generate specialized call with unboxing/unboxing */
+        char* temp_result = omni_codegen_temp(ctx);
+        omni_codegen_emit(ctx, "Obj* %s = %s(", temp_result, spec->mangled_name);
+
+        /* Emit arguments (unboxed if needed) */
+        for (int i = 0; i < arg_count; i++) {
+            if (i > 0) omni_codegen_emit_raw(ctx, ", ");
+
+            /* TODO: Generate unboxing code if argument is unboxed in specialized function */
+            /* For now, emit boxed argument */
+            char* temp_arg = omni_codegen_temp(ctx);
+            omni_codegen_expr(ctx, args[i]);
+            omni_codegen_emit_raw(ctx, "%s", temp_arg);
+            free(temp_arg);
+        }
+
+        omni_codegen_emit_raw(ctx, ");\n");
+        free(temp_result);
+    } else {
+        /* Emit generic function call */
+        /* TODO: Generate generic call code */
+        char* temp_result = omni_codegen_temp(ctx);
+        omni_codegen_emit(ctx, "Obj* %s = apply(", temp_result);
+
+        /* Emit function name */
+        omni_codegen_emit_raw(ctx, "%s", func_name);
+
+        /* Emit arguments */
+        for (int i = 0; i < arg_count; i++) {
+            omni_codegen_emit_raw(ctx, ", ");
+            char* temp_arg = omni_codegen_temp(ctx);
+            omni_codegen_expr(ctx, args[i]);
+            omni_codegen_emit_raw(ctx, "%s", temp_arg);
+            free(temp_arg);
+        }
+
+        omni_codegen_emit_raw(ctx, ");\n");
+        free(temp_result);
+    }
 }

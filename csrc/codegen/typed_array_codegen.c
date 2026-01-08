@@ -7,6 +7,7 @@
  */
 
 #include "typed_array_codegen.h"
+#include "spec_codegen.h"
 #include "../../runtime/include/typed_array.h"
 #include <stdlib.h>
 #include <string.h>
