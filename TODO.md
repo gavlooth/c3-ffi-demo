@@ -4896,7 +4896,7 @@ specified in docs/FFI_DESIGN_PROPOSALS.md. The implementation follows a three-ti
     - 1.5 should parse as float
     - 1.field should parse as path (field of integer 1)
 
-- [TODO] Label: T-syntax-symbol-rules
+- [R] Label: T-syntax-symbol-rules
   Objective: Define and implement comprehensive symbol character rules.
   Reference: docs/QUICK_REFERENCE.md
   Where: csrc/parser/parser.c (R_SYM_FIRST, R_SYM_CHAR rules)
@@ -4925,11 +4925,11 @@ specified in docs/FFI_DESIGN_PROPOSALS.md. The implementation follows a three-ti
         - NOT in middle: foo!bar, set!value (conventionally weird)
 
   Implementation:
-    1. Update R_SYM_FIRST to include: a-z, A-Z, *, !, -, _, ?, %, /, =, <, >
-    2. Update R_SYM_CHAR to include all of above + digits (0-9)
-    3. Ensure . @ # & : ; are NOT in either rule
-    4. Add comprehensive tests for valid/invalid symbols
-    5. Document in QUICK_REFERENCE.md and create SYNTAX.md
+    1. Update R_SYM_FIRST to include: a-z, A-Z, *, !, -, _, ?, %, /, =, <, > [DONE - Already implemented in parser.c:753-758]
+    2. Update R_SYM_CHAR to include all of above + digits (0-9) [DONE - Already implemented in parser.c:763-768]
+    3. Ensure . @ # & : ; are NOT in either rule [DONE - Confirmed not in rules]
+    4. Add comprehensive tests for valid/invalid symbols [DONE - tests/test_symbol_rules.omni created]
+    5. Document in QUICK_REFERENCE.md and create SYNTAX.md [DONE - Already documented in QUICK_REFERENCE.md:609-671, SYNTAX.md created]
 
   Examples:
     Valid:
@@ -4954,4 +4954,11 @@ specified in docs/FFI_DESIGN_PROPOSALS.md. The implementation follows a three-ti
     - Parse all valid examples successfully
     - Reject all invalid examples with clear error messages
     - Test edge cases: single-char symbols, !/? at start/end
+
+  Implementation (2026-01-09):
+    - Parser rules R_SYM_FIRST and R_SYM_CHAR already correctly implemented
+    - Added comprehensive test suite in tests/test_symbol_rules.omni
+    - Documentation already exists in QUICK_REFERENCE.md (Lexical Rules section)
+    - Created standalone SYNTAX.md with complete syntax reference
+    - All examples from verification section are covered in tests
 
