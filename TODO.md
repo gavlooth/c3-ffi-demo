@@ -6780,3 +6780,131 @@ This phase is explicitly *not* allowed to introduce:
 
   Implementation (2026-01-09):
     - `runtime/src/memory/region_metadata.c`: `trace_pair` now checks `IS_IMMEDIATE` for `a` and `b` and skips visitor calls for immediates.
+
+---
+
+## Phase 35: CTRR Transmigration List Wall — Remap Forwarding Table + Hybrid Fallback [ACTIVE]
+
+**Objective:** Eliminate the 10k+ linked-list “constant factor wall” in transmigration by replacing the per-node remap hash insert/lookup with an address-domain **forwarding table** when it is safe and bounded, while preserving CTRR semantics:
+
+- Region Closure (no pointers into closing `src_region`)
+- Cycle correctness (cycles preserved)
+- Sharing correctness (DAG structure preserved)
+- No stop-the-world GC / no heap scanning beyond the root graph
+
+**Reference (read first):**
+- `docs/CTRR.md` (normative contract; Region Closure Property)
+- `runtime/docs/CTRR_TRANSMIGRATION.md` (runtime clone/trace contract + Phase 34 caveats)
+- `runtime/docs/CTRR_REMAP_FORWARDING_TABLE.md` (Phase 35 design; forward-table strategy)
+- `runtime/tests/bench_transmigrate_vs_c.c` (measurement harness used to validate impact)
+
+### P0: Dense Forwarding Table (Replace Hash in the Common Case)
+
+- [DONE] Label: T-perf-remap-forwarding-table-dense (P0)
+  Objective: Implement a dense `old_ptr -> new_ptr` forwarding table indexed by the source region’s bitmap word offset, and use it instead of the robin-hood hash map when the source address domain is small enough.
+  Reference: `runtime/docs/CTRR_REMAP_FORWARDING_TABLE.md` (Sections 2–3)
+  Where:
+    - `runtime/src/memory/transmigrate.c` (remap_get/remap_put call sites, data structures)
+    - `runtime/src/memory/transmigrate.h` (optional: expose tuning knobs for benches/tests)
+    - `runtime/tests/Makefile` (add build mode to force forwarding table path)
+  Why:
+    The list benchmark currently pays a remap insert per node. Even with robin-hood probing,
+    hashing/probing dominates in large acyclic graphs.
+    The bitmap already defines a word-indexable address domain; we can use that same index
+    to implement O(1) forwarding via a single array load/store.
+
+  Implementation Details (step-by-step):
+    1. **Add tuning knobs (compile-time):**
+       - `OMNI_REMAP_FWD_MAX_BYTES` (default: e.g. 8–32 MB; tuned by benchmark)
+       - `OMNI_REMAP_FORCE_FORWARDING` (tests/bench can force this path)
+       - `OMNI_REMAP_DISABLE_FORWARDING` (force old hash map path)
+    2. **Allocate forwarding table when eligible:**
+       - After `bitmap_create(src_region, &tmp_arena)` succeeds:
+         - compute `size_t bytes = bitmap->size_words * sizeof(void*)`
+         - if `bytes <= OMNI_REMAP_FWD_MAX_BYTES` (or forced), allocate:
+           - `void** forward = arena_alloc(&tmp_arena, bytes)`
+           - `memset(forward, 0, bytes)`
+         - else set `forward = NULL` and use the existing robin-hood hash map.
+    3. **Implement forward indexing helpers (C99 inline):**
+       ```c
+       static inline bool fwd_index(RegionBitmap* b, void* old_ptr, size_t* out_idx) {
+         if (!b || !old_ptr) return false;
+         uintptr_t addr = (uintptr_t)old_ptr;
+         if (addr < b->start) return false;
+         size_t off = (addr - b->start) / sizeof(uintptr_t);
+         if (off >= b->size_words) return false;
+         *out_idx = off;
+         return true;
+       }
+       ```
+    4. **Replace remap_get/remap_put calls:**
+       - When `forward != NULL`:
+         - `get`: `new_ptr = forward[idx]`
+         - `put`: `forward[idx] = new_obj`
+       - Keep the existing hash map path unchanged when `forward == NULL`.
+    5. **Preserve external pointer filtering semantics (Phase 34):**
+       - Never compute an index for pointers outside `src_region`’s allocation domain.
+       - The forwarding table is only for pointers that already pass `bitmap_in_range()`.
+
+  Verification Plan (TDD, must fail first):
+    1. Add a new `runtime/tests` build mode that forces forwarding:
+       - e.g. `make -C runtime/tests test-fwd` builds tests with `-DOMNI_REMAP_FORCE_FORWARDING -DOMNI_REMAP_FWD_MAX_BYTES=...`
+    2. Add a regression test suite that runs under forced-forwarding and asserts:
+       - cycles preserved (existing cycle tests)
+       - sharing preserved (existing DAG tests)
+       - boxed scalars move to dest (Phase 34 P0 tests)
+       - external identity preserved (Phase 34.1 tests)
+    3. Run:
+       - `make -C runtime/tests test`
+       - `make -C runtime/tests test-fwd`
+
+  Implementation (Review Needed):
+    - `runtime/src/memory/transmigrate.c`: Implemented forwarding-table remap helpers (`fwd_index`, `fwd_get`, `fwd_put`) and integrated them into both `transmigrate()` and `transmigrate_incremental()`.
+    - `runtime/src/memory/transmigrate.c`: Added compile-time knobs:
+      - `OMNI_REMAP_FWD_MAX_BYTES` (dense forwarding size cap)
+      - `OMNI_REMAP_FORWARDING_MIN_CLONES` (lazy allocation threshold; avoids small-graph regressions)
+      - `OMNI_REMAP_FORCE_FORWARDING` / `OMNI_REMAP_DISABLE_FORWARDING` (A/B + tests)
+      - `OMNI_TRANSMIGRATE_DEBUG_REMAP_MODE` (exposes debug mode selection accessor)
+    - `runtime/src/memory/transmigrate.c`: Forwarding table is allocated lazily in the default mode (only after `OMNI_REMAP_FORWARDING_MIN_CLONES` clones), so small graphs keep the old robin-hood constant factor.
+    - `runtime/src/memory/transmigrate.c`: Added `omni_transmigrate_debug_used_forwarding_table()` so tests can assert that forced forwarding actually took effect.
+    - `runtime/tests/test_transmigrate_forwarding_table.c`: Added regression test that asserts forwarding-table mode is used when forced.
+    - `runtime/tests/Makefile`: Added `test-fwd` target to compile tests with `-DOMNI_REMAP_FORCE_FORWARDING -DOMNI_TRANSMIGRATE_DEBUG_REMAP_MODE`.
+    - `runtime/docs/CTRR_REMAP_FORWARDING_TABLE.md`: Documented lazy allocation refinement and recorded measured direction for the list benchmark.
+
+### P1: Chunked Forwarding for Sparse Address Domains (Avoid Huge Tables)
+
+- [TODO] Label: T-perf-remap-forwarding-table-chunked (P1)
+  Objective: Add a chunked/paged forwarding table for large/sparse source address domains, avoiding full dense allocation while still reducing hashing overhead.
+  Reference: `runtime/docs/CTRR_REMAP_FORWARDING_TABLE.md` (Section 4)
+  Where:
+    - `runtime/src/memory/transmigrate.c` (new paging allocator + page index map)
+    - `runtime/tests/bench_transmigrate_vs_c.c` (add a “sparse domain” benchmark case)
+  Why:
+    Dense forwarding can be too large when `bitmap->size_words` is huge due to address gaps.
+    Chunked forwarding allows O(1) forwarding with bounded temporary memory.
+
+  Implementation Details:
+    1. Define a page size in “words” (not bytes), e.g. `FWD_PAGE_WORDS = 4096`.
+    2. Compute page index + in-page offset:
+       - `page = word_offset / FWD_PAGE_WORDS`
+       - `slot = word_offset % FWD_PAGE_WORDS`
+    3. Maintain `page -> void** page_table` mapping using a small robin-hood hash:
+       - key: `size_t page` (or `uintptr_t`)
+       - value: `void**` page pointer (allocated lazily from `tmp_arena`)
+    4. On `put`, allocate page if missing and store `page_table[slot] = new_ptr`.
+    5. On `get`, return NULL if page missing.
+
+  Verification Plan:
+    - Add tests that force “chunked mode” via compile-time knobs and run the full suite.
+    - Add a sparse benchmark case and confirm transmigrate time improves without OOM risk.
+
+### P2: Benchmark + Threshold Tuning (Make It Measurable)
+
+- [TODO] Label: T-perf-remap-forwarding-thresholds (P2)
+  Objective: Tune `OMNI_REMAP_FWD_MAX_BYTES` and document the observed performance impact on list/array benchmarks.
+  Reference: `runtime/tests/bench_transmigrate_vs_c.c`, `runtime/docs/CTRR_REMAP_FORWARDING_TABLE.md` (Section 3.3)
+  Where:
+    - `runtime/tests/bench_transmigrate_vs_c.c`
+    - `runtime/docs/CTRR_REMAP_FORWARDING_TABLE.md` (add a “measured defaults” section)
+  Verification Plan:
+    - Run `make -C runtime/tests bench` with multiple thresholds and record ns/op deltas.

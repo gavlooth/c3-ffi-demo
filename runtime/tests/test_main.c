@@ -55,6 +55,7 @@ static int run_slow_tests_enabled(void) {
 #include "test_transmigrate_external_ptrs.c"
 #include "test_array_boxed_flag.c"
 #include "test_transmigrate_boxed_scalars.c"
+#include "test_transmigrate_forwarding_table.c"
 
 int main(int argc, char** argv) {
     (void)argc;
@@ -117,6 +118,9 @@ int main(int argc, char** argv) {
 
     /* Correctness: Boxed Scalar Transmigration */
     run_transmigrate_boxed_scalars_tests();
+
+    /* Phase 35 (P0): Forwarding table remap mode selection */
+    run_transmigrate_forwarding_table_tests();
 
     TEST_EXIT();
 }

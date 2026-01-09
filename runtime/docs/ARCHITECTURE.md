@@ -1,23 +1,32 @@
 # OmniLisp Runtime Architecture
 
-**Version:** 2.1 (Clarified Terminology)
-**Last Updated:** 2025-01-08
-**Phase:** 24 - Region-Level Metadata Optimization (COMPLETE)
+**Version:** 2.2 (CTRR + Region-RC clarified)
+**Last Updated:** 2026-01-09
+**Phase:** 34 - CTRR Transmigration performance + correctness hardening
 
 ---
 
 ## Quick Overview
 
-The OmniLisp runtime uses a **hybrid memory system** that combines multiple techniques:
+The OmniLisp runtime uses a **hybrid memory system** that combines:
+
+- **CTRR (compile-time scheduling)**: the compiler decides region lifetimes and injects
+  `region_exit()` and escape repair (`transmigrate()`) at the right boundaries.
+- **Regions (bulk reclamation)**: most allocation is bump-allocated and reclaimed in bulk.
+- **Region-RC (RC-G)**: regions that must outlive their lexical scope are reference counted
+  at the *region* granularity (coarse-grained RC), not per object.
+- **Tethering**: bounded borrows keep a region alive without copying.
+- **Metadata-driven transmigration**: type metadata defines how to clone/trace values so
+  escaping graphs can be repaired soundly without stop-the-world GC.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    The Memory System                        │
 ├─────────────────────────────────────────────────────────────┤
 │                                                              │
-│  1. ASAP (Compile-Time)                                     │
-│     → Compiler analyzes when variables can be freed         │
-│     → Inserts free() calls at optimal points               │
+│  1. CTRR (Compile-Time Region Reclamation)                  │
+│     → Compiler schedules region lifetimes                   │
+│     → Injects region_exit() + escape repair points          │
 │                                                              │
 │  2. Regions (Bulk Cleanup)                                  │
 │     → Group allocations together                             │
@@ -27,9 +36,10 @@ The OmniLisp runtime uses a **hybrid memory system** that combines multiple tech
 │     → When regions escape, they're reference counted        │
 │     → Keeps region alive until all refs are gone            │
 │                                                              │
-│  4. Type Metadata (Phase 24)                                │
+│  4. Type Metadata (runtime)                                 │
 │     → Type info centralized per region (not per object)      │
 │     → Enables compile-time type constants                    │
+│     → Powers metadata-driven transmigration                  │
 │                                                              │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -38,28 +48,34 @@ The OmniLisp runtime uses a **hybrid memory system** that combines multiple tech
 
 ## What Each Part Does
 
-### ASAP = As Static As Possible (The Compiler's Job)
+### CTRR = Compile-Time Region Reclamation (The Compiler's Job)
 
 ```
-ASAP is the PHILOSOPHY: determine everything at compile-time if possible
+CTRR is the contract: determine region lifetimes at compile time and reclaim in bulk.
 
 Example:
-  (let ((x 42) (y (pair x x)))
-    (+ x y))
+  (define (f)
+    (let ((x 42)
+          (y (pair x x)))
+      (pair y y))) ;; y escapes the local scope
 
 Compiler analysis:
-  • x doesn't escape → can be freed after (+ x y)
-  • y escapes (returned) → must stay alive
+  • `x` is immediate (no heap allocation)
+  • `y` escapes → must be valid after local region closes
 
-Generated code:
-  Obj* x = ...;        // Allocate x
-  Obj* y = ...;        // Allocate y
-  Obj* result = add(x, y);
-  free_obj(x);         // ← Compiler injected this free!
-  return result;       // y stays alive (escaped)
+Generated code (conceptual):
+  Region* local = region_create();
+  Obj* y = mk_pair_region(local, ...);
+  Obj* out = transmigrate(y, local, caller_region);
+  region_exit(local);
+  return out;
 ```
 
-**Key point:** ASAP doesn't mean "no runtime cost" - it means "determine as much as possible at compile-time"
+**Key point:** CTRR does not mean "no runtime cost". It means:
+
+- the *decision* of when regions close happens at compile time
+- the runtime provides explicit, local operations (`region_exit`, `transmigrate`, tethering)
+- there is no stop-the-world collector that scans the heap
 
 ---
 
@@ -85,6 +101,10 @@ Benefits:
 • Better cache locality
 • Simpler code generation
 ```
+
+Implementation note:
+- Regions are implemented as a bump-allocated arena plus a small inline-buffer fast path
+  for very small objects (`runtime/src/memory/region_core.h`).
 
 ---
 
@@ -118,6 +138,16 @@ Lifecycle:
 This is "Region-RC": regions + reference counting on regions
 ```
 
+This model name is used throughout the repository as the **runtime** memory model:
+- `docs/UNIFIED_REGION_ARCHITECTURE.md` calls the lifecycle “Refcounted (Region-RC)”
+- `runtime/src/runtime.c` calls it “RC-G Runtime: Standard RC is now Region-RC (Coarse-grained)”
+
+Region-RC is intentionally **not** per-object RC:
+- objects inside regions are generally not individually freed
+- the region is reclaimed when it is both:
+  - logically closed (`scope_alive == false`) and
+  - not externally referenced (`external_rc == 0`)
+
 ---
 
 ## The Complete Picture (How It All Works)
@@ -127,7 +157,7 @@ This is "Region-RC": regions + reference counting on regions
 │                   Memory Allocation Flow                    │
 └─────────────────────────────────────────────────────────────┘
 
-1. COMPILER ANALYSIS (ASAP)
+1. COMPILER ANALYSIS (CTRR)
 
    Source code → Type inference + Escape analysis
                  │
@@ -173,9 +203,46 @@ This is "Region-RC": regions + reference counting on regions
 
 ---
 
+## Escape Repair: Transmigration (CTRR Runtime Contract)
+
+When data escapes a closing region, the runtime must ensure **Region Closure**:
+no reachable value contains pointers into the closing region after it is reclaimed.
+
+OmniLisp enforces this with **metadata-driven transmigration**:
+
+- `transmigrate(root, src_region, dest_region)`
+
+Each runtime type registers:
+- how to `clone` one object into `dest_region`
+- how to `trace` all `Obj*` child slots so pointers can be rewritten
+
+This is documented in detail in:
+- `docs/CTRR.md` (normative contract)
+- `runtime/docs/CTRR_TRANSMIGRATION.md` (detailed runtime behavior)
+
+Non-goals (explicitly prohibited):
+- stop-the-world GC
+- heap-wide tracing collectors
+
+---
+
+## Bounded Borrows: Tethering
+
+Tethering is complementary to transmigration:
+
+- transmigration repairs graphs so values can outlive a closing region
+- tethering keeps a region alive temporarily for **bounded borrows** (e.g., while a
+  call frame is active), avoiding copying
+
+Region-RC fields related to tethering:
+- `tether_count`: active borrow count (thread-safe)
+- `scope_alive`: a semantic liveness signal (set false at region_exit)
+
+---
+
 ## Why This Hybrid Approach?
 
-### Pure ASAP (Compile-Time Only)
+### Pure CTRR (Compile-Time Only)
 
 ```
 Pros:
@@ -183,9 +250,8 @@ Pros:
 • Predictable performance
 
 Cons:
-• Can't handle escaping data
-• No closures
-• No returned data structures
+• Escaping graphs require an explicit repair operation (transmigration or ownership transfer)
+• Without a runtime escape mechanism, closures/returns/globals would be unsound
 ```
 
 ### Pure Reference Counting
@@ -201,11 +267,11 @@ Cons:
 • Cache pollution from RC fields
 ```
 
-### The Hybrid (ASAP + Regions + Region-RC)
+### The Hybrid (CTRR + Regions + Region-RC)
 
 ```
 Pros:
-• Non-escaping data: zero overhead (ASAP)
+• Non-escaping data: bulk reclamation (regions)
 • Escaping data: grouped in regions (bulk cleanup)
 • Escaping regions: reference counted (Region-RC)
 • Best of both worlds
@@ -217,9 +283,11 @@ Cons:
 
 ---
 
-## Phase 24: Type Metadata (Where We Are Now)
+## Type Metadata (Foundation)
 
-Phase 24 adds **compile-time type information** to this hybrid system:
+Type metadata is a foundational runtime component (introduced as “Phase 24”)
+that enables compile-time and runtime optimizations without changing CTRR
+semantics:
 
 ```
 Before Phase 24:
@@ -257,8 +325,8 @@ Benefits:
         ┌───────────┴───────────┐               │
         ▼                       ▼               ▼
 ┌───────────────┐     ┌───────────────┐   ┌─────────────────┐
-│   ASAP        │     │  Type System  │   │   Regions       │
-│   Analysis    │     │  Inference   │   │                 │
+│   CTRR        │     │  Type System  │   │   Regions       │
+│   Scheduling  │     │  Inference   │   │                 │
 └───────────────┘     └───────────────┘   └─────────────────┘
         │                       │               │
         ▼                       ▼               ▼
@@ -281,7 +349,7 @@ Benefits:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    ASAP (Compile-Time Analysis)                    │
+│                    CTRR (Compile-Time Scheduling)                  │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  ┌─────────────┐     ┌─────────────┐     ┌─────────────┐         │

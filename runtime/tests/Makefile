@@ -17,7 +17,7 @@ ASAN_FLAGS = -fsanitize=address -fno-omit-frame-pointer
 TSAN_FLAGS = -fsanitize=thread
 UBSAN_FLAGS = -fsanitize=undefined
 
-.PHONY: all clean test fast slow api bench asan tsan ubsan asan-slow tsan-slow ubsan-slow stats runtime-lib
+.PHONY: all clean test fast slow api bench asan tsan ubsan asan-slow tsan-slow ubsan-slow stats test-fwd runtime-lib
 
 # Build runtime library (always consult runtime/Makefile for staleness).
 # This avoids benchmarking against a stale ../libomni.a when runtime sources changed.
@@ -31,6 +31,14 @@ all: $(TEST_BIN)
 # Build test binary with stats enabled (PHASE 33.5)
 stats: CFLAGS += -DOMNI_TRANSMIGRATE_STATS
 stats: $(TEST_BIN)
+	./$(TEST_BIN)
+
+# Build test binary forcing forwarding-table remap mode (PHASE 35 P0)
+#
+# This target exists to validate the forwarding-table implementation without
+# relying on performance assertions.
+test-fwd: CFLAGS += -DOMNI_REMAP_FORCE_FORWARDING -DOMNI_TRANSMIGRATE_DEBUG_REMAP_MODE
+test-fwd: $(TEST_BIN)
 	./$(TEST_BIN)
 
 # Build test binary
@@ -105,6 +113,8 @@ help:
 	@echo "Targets:"
 	@echo "  all      - Build and run tests (default)"
 	@echo "  test     - Run tests"
+	@echo "  test-fwd - Run tests with forced forwarding-table mode (Phase 35)"
+	@echo "  stats    - Run tests with transmigrate statistics (Phase 33.5)"
 	@echo "  asan     - Run with AddressSanitizer"
 	@echo "  tsan     - Run with ThreadSanitizer"
 	@echo "  ubsan    - Run with UndefinedBehaviorSanitizer"

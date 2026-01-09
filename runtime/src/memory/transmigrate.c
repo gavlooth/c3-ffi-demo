@@ -84,6 +84,65 @@ static RemapStats g_remap_stats = {0};
 #include "../../third_party/arena/arena.h"
 #include "../../include/omni.h"
 
+/* ============================================================================
+ * PHASE 35 (P0): Dense Forwarding-Table Remap
+ * ============================================================================
+ * The robin-hood remap hash is correct but still costly for long, mostly-acyclic
+ * graphs (notably linked lists). When the source region address domain is small
+ * enough, we can replace hashing with an O(1) forwarding table indexed by the
+ * bitmap word offset:
+ *
+ *   old_ptr -> forward[word_offset] == new_ptr
+ *
+ * This is temporary state allocated in the transmigrate() temp arena and freed
+ * at the end of the operation (not GC).
+ */
+
+#ifndef OMNI_REMAP_FWD_MAX_BYTES
+/* Default cap for dense forwarding table memory (tuned by benchmark). */
+#define OMNI_REMAP_FWD_MAX_BYTES ((size_t)16u * 1024u * 1024u)
+#endif
+
+/* Minimum number of cloned objects before we consider paying the one-time cost
+ * of allocating/zeroing a dense forwarding table.
+ *
+ * Rationale:
+ * - For tiny graphs (e.g., 100-element lists), the forwarding table's memset
+ *   cost can dominate and make performance worse than robin-hood hashing.
+ * - For large graphs (10k+ lists), the allocation cost is amortized and the
+ *   O(1) forwarding lookups can win.
+ *
+ * Tests/bench can override this via `-DOMNI_REMAP_FORWARDING_MIN_CLONES=...`.
+ */
+#ifndef OMNI_REMAP_FORWARDING_MIN_CLONES
+#define OMNI_REMAP_FORWARDING_MIN_CLONES ((size_t)2048u)
+#endif
+
+/*
+ * OMNI_REMAP_SHOULD_USE_FORWARDING
+ *
+ * Forwarding table is a performance optimization, so we:
+ * - enable it by default when the temp memory footprint is bounded
+ * - allow forcing it on for tests/bench builds
+ * - allow disabling it for A/B comparisons
+ */
+#ifdef OMNI_REMAP_DISABLE_FORWARDING
+#define OMNI_REMAP_SHOULD_USE_FORWARDING(bytes) (0)
+#else
+#ifdef OMNI_REMAP_FORCE_FORWARDING
+#define OMNI_REMAP_SHOULD_USE_FORWARDING(bytes) (1)
+#else
+#define OMNI_REMAP_SHOULD_USE_FORWARDING(bytes) ((bytes) <= OMNI_REMAP_FWD_MAX_BYTES)
+#endif
+#endif
+
+#ifdef OMNI_TRANSMIGRATE_DEBUG_REMAP_MODE
+static int g_last_used_forwarding_table = 0;
+int omni_transmigrate_debug_used_forwarding_table(void) {
+    return g_last_used_forwarding_table;
+}
+#endif
+
 // ----------------------------------------------------------------------------
 // Region Bitmap for Cycle Detection (OPTIMIZATION: 10-100x faster than uthash)
 // ----------------------------------------------------------------------------
@@ -189,6 +248,60 @@ static inline void bitmap_set(RegionBitmap* b, void* ptr) {
     if (word_index >= bitmap_len) return;
 
     b->bits[word_index] |= (1ULL << bit_index);
+}
+
+/*
+ * fwd_index - Compute forwarding-table index for a pointer in the bitmap domain.
+ *
+ * Callers should already have applied external pointer filtering:
+ * - `bitmap_in_range(b, ptr)` must be true before this is meaningful.
+ */
+static inline bool fwd_index(RegionBitmap* b, void* ptr, size_t* out_index) {
+    if (!b || !ptr || !out_index) return false;
+    uintptr_t addr = (uintptr_t)ptr;
+    if (addr < b->start) return false;
+    size_t off = (addr - b->start) / sizeof(uintptr_t);
+    if (off >= b->size_words) return false;
+    *out_index = off;
+    return true;
+}
+
+/*
+ * fwd_get - Look up a remapped pointer in the forwarding table.
+ *
+ * @param forward: Forwarding table (or NULL)
+ * @param bitmap: Region bitmap for address domain
+ * @param old_ptr: Original pointer to look up
+ * @return: New pointer, or NULL if not found
+ *
+ * If forward is NULL, returns NULL (caller should fall back to hash map).
+ */
+static inline void* fwd_get(void** forward, RegionBitmap* bitmap, void* old_ptr) {
+    if (!forward || !bitmap || !old_ptr) return NULL;
+
+    size_t idx;
+    if (!fwd_index(bitmap, old_ptr, &idx)) return NULL;
+
+    return forward[idx];
+}
+
+/*
+ * fwd_put - Store a remapped pointer in the forwarding table.
+ *
+ * @param forward: Forwarding table (or NULL)
+ * @param bitmap: Region bitmap for address domain
+ * @param old_ptr: Original pointer
+ * @param new_ptr: New pointer to store
+ *
+ * If forward is NULL, this is a no-op (caller should use hash map instead).
+ */
+static inline void fwd_put(void** forward, RegionBitmap* bitmap, void* old_ptr, void* new_ptr) {
+    if (!forward || !bitmap || !old_ptr) return;
+
+    size_t idx;
+    if (!fwd_index(bitmap, old_ptr, &idx)) return;
+
+    forward[idx] = new_ptr;
 }
 
 // ----------------------------------------------------------------------------
@@ -345,6 +458,7 @@ typedef struct {
     Arena* tmp_arena;
     RemapMap* remap;    /* Hash table for old_ptr -> new_ptr mappings */
     RegionBitmap* bitmap; /* Fast cycle detection */
+    void** forward;     /* Phase 35 (P0): optional dense forwarding table */
     Region* dest;
     PairBatchAllocator pair_batch;  /* Batch allocator for pairs (Phase 33.4) */
 } TraceCtx;
@@ -617,8 +731,13 @@ static void transmigrate_visitor(Obj** slot, void* context) {
 
     // Check visited using bitmap (FAST: O(1) bitmap test)
     if (bitmap_test(ctx->bitmap, old_child)) {
-        // Find the remapped pointer using hash map (O(1) expected)
-        void* new_ptr = remap_get(ctx->remap, old_child);
+        // Phase 35 P0: Try forwarding table first (O(1)), fall back to hash map
+        void* new_ptr = fwd_get(ctx->forward, ctx->bitmap, old_child);
+        if (!new_ptr) {
+            if (ctx->remap) {
+                new_ptr = remap_get(ctx->remap, old_child);
+            }
+        }
         if (new_ptr) {
             *slot = (Obj*)new_ptr;
         }
@@ -697,7 +816,52 @@ void* transmigrate(void* root, Region* src_region, Region* dest_region) {
         abort();
     }
 
-    // Initialize hash map for remapping (O(1) lookups)
+    /* PHASE 35 P0: Allocate dense forwarding table when address domain is small enough.
+     *
+     * The forwarding table replaces the hash map for O(1) old_ptr -> new_ptr lookups.
+     * It is indexed by the bitmap word offset (same domain as the cycle detection bitmap).
+     */
+    void** forward = NULL;
+#ifdef OMNI_TRANSMIGRATE_DEBUG_REMAP_MODE
+    g_last_used_forwarding_table = 0;
+#endif
+    /* Guard against overflow in size calculation. */
+    size_t forward_bytes = SIZE_MAX;
+    bool forward_overflow = (bitmap->size_words > (SIZE_MAX / sizeof(void*)));
+    if (!forward_overflow) {
+        forward_bytes = bitmap->size_words * sizeof(void*);
+    }
+
+    /* Eligibility means:
+     * - not overflow
+     * - forwarding not disabled
+     * - size bounded (unless forced by build flags)
+     *
+     * NOTE: We intentionally do NOT allocate the table immediately in the
+     * default (non-forced) case. We allocate lazily once the graph size is
+     * large enough to amortize the memset cost.
+     */
+    bool forward_eligible = (!forward_overflow) && OMNI_REMAP_SHOULD_USE_FORWARDING(forward_bytes);
+
+#ifdef OMNI_REMAP_FORCE_FORWARDING
+    if (!forward_eligible) {
+        fprintf(stderr, "[FATAL] OMNI_REMAP_FORCE_FORWARDING set but forwarding is not eligible\n");
+        abort();
+    }
+    forward = (void**)arena_alloc(&tmp_arena, forward_bytes);
+    if (!forward) {
+        fprintf(stderr, "[FATAL] OMNI_REMAP_FORCE_FORWARDING set but forwarding allocation failed\n");
+        abort();
+    }
+    memset(forward, 0, forward_bytes);
+#ifdef OMNI_TRANSMIGRATE_DEBUG_REMAP_MODE
+    g_last_used_forwarding_table = 1;
+#endif
+#endif
+
+    // Initialize hash map for remapping (O(1) expected lookups).
+    // Even when forwarding is enabled, we keep the hash map for early objects
+    // cloned before the forwarding table is allocated lazily.
     RemapMap remap_struct = {0};
     remap_struct.capacity = 1024;  /* Initial capacity */
     remap_struct.slots = arena_alloc(&tmp_arena, remap_struct.capacity * sizeof(RemapSlot));
@@ -718,6 +882,7 @@ void* transmigrate(void* root, Region* src_region, Region* dest_region) {
         .tmp_arena = &tmp_arena,
         .remap = &remap_struct,
         .bitmap = bitmap,
+        .forward = forward,  /* Phase 35 P0: forwarding table (or NULL) */
         .dest = dest_region,
         .pair_batch = {0}  /* Initialize batch allocator (Phase 33.4) */
     };
@@ -729,6 +894,10 @@ void* transmigrate(void* root, Region* src_region, Region* dest_region) {
     TransmigrateCloneCtx clone_ctx = {
         .pair_batch = &trace_ctx.pair_batch
     };
+
+    /* Number of distinct objects cloned so far (not counting revisits).
+     * Used to decide when to pay the one-time forwarding-table memset cost. */
+    size_t clones_created = 0;
 
     while (worklist) {
         WorkItem* current = worklist;
@@ -756,8 +925,11 @@ void* transmigrate(void* root, Region* src_region, Region* dest_region) {
 
         // Cycle detection using bitmap (FAST: O(1))
         if (bitmap_test(bitmap, old_obj)) {
-            // Look up remapped pointer using hash map (O(1) expected)
-            void* new_ptr = remap_get(&remap_struct, old_obj);
+            // Phase 35 P0: Try forwarding table first (O(1)), fall back to hash map
+            void* new_ptr = fwd_get(forward, bitmap, old_obj);
+            if (!new_ptr) {
+                new_ptr = remap_get(&remap_struct, old_obj);
+            }
             if (new_ptr) {
                 *current->slot = (Obj*)new_ptr;
             }
@@ -793,7 +965,31 @@ void* transmigrate(void* root, Region* src_region, Region* dest_region) {
         /* Register in visited and update slot */
         *current->slot = new_obj;
         bitmap_set(bitmap, old_obj);
-        remap_put(&remap_struct, &tmp_arena, old_obj, new_obj);
+
+        /* Phase 35 P0: Lazily allocate forwarding table only after we have
+         * cloned enough objects to amortize the zeroing cost. */
+        clones_created++;
+
+        if (!forward && forward_eligible && clones_created >= OMNI_REMAP_FORWARDING_MIN_CLONES) {
+            forward = (void**)arena_alloc(&tmp_arena, forward_bytes);
+            if (forward) {
+                memset(forward, 0, forward_bytes);
+                trace_ctx.forward = forward; /* Make visitor see forwarding immediately. */
+#ifdef OMNI_TRANSMIGRATE_DEBUG_REMAP_MODE
+                g_last_used_forwarding_table = 1;
+#endif
+            }
+            /* If allocation fails, we continue using the hash map. */
+        }
+
+        /* Store remap mapping:
+         * - If forwarding is active, prefer it (O(1) indexing).
+         * - Otherwise, use the robin-hood hash map. */
+        if (forward) {
+            fwd_put(forward, bitmap, old_obj, new_obj);
+        } else {
+            remap_put(&remap_struct, &tmp_arena, old_obj, new_obj);
+        }
 
         /* Trace children - this schedules them for rewriting */
         meta->trace(new_obj, transmigrate_visitor, &trace_ctx);
@@ -886,7 +1082,35 @@ void* transmigrate_incremental(void* root, Region* src_region, Region* dest_regi
         abort();
     }
 
-    // Initialize hash map for remapping (O(1) lookups)
+    /* PHASE 35 P0: Allocate dense forwarding table when address domain is small enough. */
+    void** forward = NULL;
+#ifdef OMNI_TRANSMIGRATE_DEBUG_REMAP_MODE
+    g_last_used_forwarding_table = 0;
+#endif
+    size_t forward_bytes = SIZE_MAX;
+    bool forward_overflow = (bitmap->size_words > (SIZE_MAX / sizeof(void*)));
+    if (!forward_overflow) {
+        forward_bytes = bitmap->size_words * sizeof(void*);
+    }
+    bool forward_eligible = (!forward_overflow) && OMNI_REMAP_SHOULD_USE_FORWARDING(forward_bytes);
+
+#ifdef OMNI_REMAP_FORCE_FORWARDING
+    if (!forward_eligible) {
+        fprintf(stderr, "[FATAL] OMNI_REMAP_FORCE_FORWARDING set but forwarding is not eligible\n");
+        abort();
+    }
+    forward = (void**)arena_alloc(&tmp_arena, forward_bytes);
+    if (!forward) {
+        fprintf(stderr, "[FATAL] OMNI_REMAP_FORCE_FORWARDING set but forwarding allocation failed\n");
+        abort();
+    }
+    memset(forward, 0, forward_bytes);
+#ifdef OMNI_TRANSMIGRATE_DEBUG_REMAP_MODE
+    g_last_used_forwarding_table = 1;
+#endif
+#endif
+
+    // Initialize hash map for remapping only if forwarding not used.
     RemapMap remap_struct = {0};
     remap_struct.capacity = 1024;  /* Initial capacity */
     remap_struct.slots = arena_alloc(&tmp_arena, remap_struct.capacity * sizeof(RemapSlot));
@@ -907,6 +1131,7 @@ void* transmigrate_incremental(void* root, Region* src_region, Region* dest_regi
         .tmp_arena = &tmp_arena,
         .remap = &remap_struct,
         .bitmap = bitmap,
+        .forward = forward,  /* Phase 35 P0: forwarding table (or NULL) */
         .dest = dest_region,
         .pair_batch = {0}  /* Initialize batch allocator (Phase 33.4) */
     };
@@ -923,6 +1148,7 @@ void* transmigrate_incremental(void* root, Region* src_region, Region* dest_regi
     // (Optional: adds overhead, so we estimate based on chunk size)
     size_t objects_processed = 0;
     size_t estimated_total = chunk_size * 2;  // Rough estimate
+    size_t clones_created = 0;  /* Phase 35 P0: forwarding allocation threshold */
 
     // Process worklist in chunks
     while (worklist) {
@@ -957,8 +1183,13 @@ void* transmigrate_incremental(void* root, Region* src_region, Region* dest_regi
 
             // Cycle detection
             if (bitmap_test(bitmap, old_obj)) {
-                // Look up remapped pointer using hash map (O(1) expected)
-                void* new_ptr = remap_get(&remap_struct, old_obj);
+                // Phase 35 P0: Try forwarding table first (O(1)), fall back to hash map
+                void* new_ptr = fwd_get(forward, bitmap, old_obj);
+                if (!new_ptr) {
+                    if (!forward) {
+                        new_ptr = remap_get(&remap_struct, old_obj);
+                    }
+                }
                 if (new_ptr) {
                     *current->slot = (Obj*)new_ptr;
                 }
@@ -992,7 +1223,27 @@ void* transmigrate_incremental(void* root, Region* src_region, Region* dest_regi
             /* Register in visited and update slot */
             *current->slot = new_obj;
             bitmap_set(bitmap, old_obj);
-            remap_put(&remap_struct, &tmp_arena, old_obj, new_obj);
+
+            clones_created++;
+
+            /* Phase 35 P0: Lazily allocate forwarding table after enough clones. */
+            if (!forward && forward_eligible && clones_created >= OMNI_REMAP_FORWARDING_MIN_CLONES) {
+                forward = (void**)arena_alloc(&tmp_arena, forward_bytes);
+                if (forward) {
+                    memset(forward, 0, forward_bytes);
+                    trace_ctx.forward = forward;
+#ifdef OMNI_TRANSMIGRATE_DEBUG_REMAP_MODE
+                    g_last_used_forwarding_table = 1;
+#endif
+                }
+            }
+
+            /* Store mapping: prefer forwarding when active, fall back to hash. */
+            if (forward) {
+                fwd_put(forward, bitmap, old_obj, new_obj);
+            } else {
+                remap_put(&remap_struct, &tmp_arena, old_obj, new_obj);
+            }
 
             /* Trace children - this schedules them for rewriting */
             meta->trace(new_obj, transmigrate_visitor, &trace_ctx);
