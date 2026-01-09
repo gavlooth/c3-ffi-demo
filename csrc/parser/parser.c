@@ -28,7 +28,9 @@ enum {
     R_LT, R_GT, R_EQ, R_QUESTION, R_AT,
     R_FLOAT_FRAC, R_FLOAT,
 
-    R_ALPHA, R_ALPHA_UPPER, R_SYM_SPECIAL, R_SYM_CHAR, R_SYM_FIRST, R_SYM,
+    R_ALPHA, R_ALPHA_UPPER,
+    R_SYM_ASTERISK, R_SYM_MINUS, R_SYM_UNDERSCORE, R_SYM_PERCENT, R_SYM_SLASH,
+    R_SYM_SPECIAL, R_SYM_CHAR, R_SYM_FIRST, R_SYM,
     R_KEYWORD,
 
     R_CHAR_ESCAPE, R_CHAR_LIT, R_NOT_DQUOTE, R_STRING_CHAR, R_STRING_INNER, R_STRING,
@@ -724,42 +726,46 @@ void omni_grammar_init(void) {
     g_rules[R_ALPHA] = (PikaRule){ PIKA_RANGE, .data.range = { 'a', 'z' } };
     g_rules[R_ALPHA_UPPER] = (PikaRule){ PIKA_RANGE, .data.range = { 'A', 'Z' } };
 
-    /* Specific operators to avoid range issues with ; */
-    g_rules[R_LT] = (PikaRule){ PIKA_TERMINAL, .data.str = "<" };
-    g_rules[R_GT] = (PikaRule){ PIKA_TERMINAL, .data.str = ">" };
-    g_rules[R_EQ] = (PikaRule){ PIKA_TERMINAL, .data.str = "=" };
-    g_rules[R_QUESTION] = (PikaRule){ PIKA_TERMINAL, .data.str = "?" };
-    g_rules[R_AT] = (PikaRule){ PIKA_TERMINAL, .data.str = "@" };
-
-    /* Symbol characters: alpha, alpha-upper, digit, and common operators
-     * We need to EXCLUDE delimiters: ( ) [ ] { } and whitespace
-     * Valid symbol chars (by ASCII range):
-     * - '!' to '\'' (33-39): ! " # $ % & '   (excludes ( ) starting at 40)
-     * - '*' to '/' (42-47): * + , - . /      (excludes ( ) at 40-41)
-     * - ':' to '@' (58-64): : ; < = > ? @    (comparison operators)
-     * - '_' (95): underscore
-     * - '|' (124), '~' (126): other operators
-     * We use multiple rules and combine with ALT
+    /* Single-character operators for symbols
+     * Based on T-syntax-symbol-rules specification:
+     * START WITH: a-z A-Z * ! - _ ? % / = < >
+     * MIDDLE: All of above + digits (0-9)
+     * EXCLUDE: . @ # & : ; (reserved for syntax)
      */
-    /* We'll define the ranges we need as temporary rules using R_SIGN, R_FLOAT_FRAC, etc. */
-    /* R_SIGN (12) - range ':'  to '@' for < > = etc - EXCLUDING ; */
-    g_rule_ids[R_SIGN] = ids(6, R_COLON, R_LT, R_GT, R_EQ, R_QUESTION, R_AT);
-    g_rules[R_SIGN] = (PikaRule){ PIKA_ALT, .data.children = { g_rule_ids[R_SIGN], 6 } };
-    /* R_FLOAT_FRAC (15) - range '!' to '!' for ! (excluding ") */
-    /* We need to exclude " (ASCII 34) from symbol characters */
-    /* Old range was '!' to '\'' (33-39) which included " (34) */
-    /* New approach: Use '!' only, and add other operators separately */
-    g_rules[R_FLOAT_FRAC] = (PikaRule){ PIKA_RANGE, .data.range = { '!', '!' } };  /* Just ! */
-    /* R_SYM_SPECIAL - range '*' to '/' */
-    g_rules[R_SYM_SPECIAL] = (PikaRule){ PIKA_RANGE, .data.range = { '*', '/' } };  /* *+,-./ */
+    g_rules[R_EXCLAM] = (PikaRule){ PIKA_TERMINAL, .data.str = "!" };       /* Bang suffix */
+    g_rules[R_LT] = (PikaRule){ PIKA_TERMINAL, .data.str = "<" };           /* Less than */
+    g_rules[R_GT] = (PikaRule){ PIKA_TERMINAL, .data.str = ">" };           /* Greater than */
+    g_rules[R_EQ] = (PikaRule){ PIKA_TERMINAL, .data.str = "=" };           /* Equals */
+    g_rules[R_QUESTION] = (PikaRule){ PIKA_TERMINAL, .data.str = "?" };     /* Question mark */
+    g_rules[R_AT] = (PikaRule){ PIKA_TERMINAL, .data.str = "@" };           /* At sign (metadata) - NOT in symbols */
 
-    /* R_SYM_FIRST: first char of symbol (not a digit) */
-    g_rule_ids[R_SYM_FIRST] = ids(5, R_ALPHA, R_ALPHA_UPPER, R_SYM_SPECIAL, R_SIGN, R_FLOAT_FRAC);
-    g_rules[R_SYM_FIRST] = (PikaRule){ PIKA_ALT, .data.children = { g_rule_ids[R_SYM_FIRST], 5 } };
+    /* Symbol operators: * ! - _ ? % / = < >
+     * Each defined separately for clarity
+     */
+    g_rules[R_SYM_ASTERISK] = (PikaRule){ PIKA_TERMINAL, .data.str = "*" };    /* Multiplication */
+    g_rules[R_SYM_MINUS] = (PikaRule){ PIKA_TERMINAL, .data.str = "-" };       /* Minus/separator */
+    g_rules[R_SYM_UNDERSCORE] = (PikaRule){ PIKA_TERMINAL, .data.str = "_" };  /* Underscore */
+    g_rules[R_SYM_PERCENT] = (PikaRule){ PIKA_TERMINAL, .data.str = "%" };     /* Percent */
+    g_rules[R_SYM_SLASH] = (PikaRule){ PIKA_TERMINAL, .data.str = "/" };       /* Slash */
 
-    /* Symbol characters: alpha, alpha-upper, digit, and operators */
-    g_rule_ids[R_SYM_CHAR] = ids(6, R_ALPHA, R_ALPHA_UPPER, R_DIGIT, R_SYM_SPECIAL, R_SIGN, R_FLOAT_FRAC);
-    g_rules[R_SYM_CHAR] = (PikaRule){ PIKA_ALT, .data.children = { g_rule_ids[R_SYM_CHAR], 6 } };
+    /* R_SYM_FIRST: first char of symbol (CANNOT start with digit, ., @, #, &, :, ;) */
+    /* Includes: a-z A-Z * ! - _ ? % / = < > */
+    g_rule_ids[R_SYM_FIRST] = ids(12,
+        R_ALPHA, R_ALPHA_UPPER,
+        R_SYM_ASTERISK, R_EXCLAM, R_SYM_MINUS, R_SYM_UNDERSCORE,
+        R_QUESTION, R_SYM_PERCENT, R_SYM_SLASH,
+        R_LT, R_GT, R_EQ);
+    g_rules[R_SYM_FIRST] = (PikaRule){ PIKA_ALT, .data.children = { g_rule_ids[R_SYM_FIRST], 12 } };
+
+    /* R_SYM_CHAR: all symbol characters (for middle positions) */
+    /* Includes: R_SYM_FIRST + digits (0-9) */
+    /* EXCLUDES: . @ # & : ; (not in symbol definitions above) */
+    g_rule_ids[R_SYM_CHAR] = ids(13,
+        R_ALPHA, R_ALPHA_UPPER,
+        R_SYM_ASTERISK, R_EXCLAM, R_SYM_MINUS, R_SYM_UNDERSCORE,
+        R_QUESTION, R_SYM_PERCENT, R_SYM_SLASH,
+        R_LT, R_GT, R_EQ, R_DIGIT);
+    g_rules[R_SYM_CHAR] = (PikaRule){ PIKA_ALT, .data.children = { g_rule_ids[R_SYM_CHAR], 13 } };
 
     /* Symbol: first char then rest */
     g_rule_ids[R_SYM] = ids(1, R_SYM_CHAR);
