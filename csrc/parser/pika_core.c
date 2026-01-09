@@ -286,6 +286,38 @@ OmniValue* omni_pika_match(const char* input, PikaRule* rules, int num_rules, in
     return result;
 }
 
+/* Compile a pattern string for later use
+ * This function creates a parser state from a pattern string and returns it.
+ * The returned parser state can be used with pika_run for matching.
+ *
+ * This is essentially a wrapper around pika_new that provides a more ergonomic
+ * API for "compiling" patterns - the pattern is the input text that will be
+ * parsed, and the rules define how to parse it.
+ *
+ * Parameters:
+ *   - pattern: Pattern string to compile (input text for the parser)
+ *   - rules: Array of PikaRule definitions
+ *   - num_rules: Number of rules in the array
+ *
+ * Returns:
+ *   - PikaState* representing the compiled pattern (ready for matching)
+ *   - NULL if allocation failed
+ *
+ * Note: Caller is responsible for freeing the returned PikaState with pika_free()
+ */
+PikaState* omni_compile_pattern(const char* pattern, PikaRule* rules, int num_rules) {
+    /* Validate input parameters */
+    if (!pattern) {
+        return NULL;
+    }
+    if (!rules || num_rules <= 0) {
+        return NULL;
+    }
+
+    /* Create and return parser state */
+    return pika_new(pattern, rules, num_rules);
+}
+
 /* Extract captured substrings from match results
  * This function extracts the matched text for specified sub-rules at their respective positions.
  *

@@ -2204,33 +2204,45 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
   - String literals now emit as TAG_STRING instead of TAG_SYM
   - Verification: (println "hello") correctly prints "hello" as string
 
-- [TODO] Label: T-wire-string-literal-02
+- [DONE] Label: T-wire-string-literal-02
   Objective: Implement TAG_STRING support in region_value.c.
-  Reference: runtime/src/memory/region_value.c:94-96
+  Reference: runtime/src/memory/region_value.c:187-201
   Where: runtime/src/memory/region_value.c
   Why: mk_string_region currently returns mk_sym_region (TODO comment)
   What: Create proper TAG_STRING values
-  Implementation Details:
-    - Add TAG_STRING case to region_value allocation
-    - Implement mk_string_region to allocate proper string objects
-    - Strings should have: tag=TAG_STRING, length, char* data
-  Verification: (type? "hello" String) should return true
 
-- [R] Label: T-wire-string-literal-03
+  Implementation (2026-01-09):
+  - TAG_STRING already defined in runtime/include/omni.h:155
+  - mk_string_region implemented at region_value.c:187-201
+  - Uses alloc_obj_region(r, TAG_STRING) for proper string allocation
+  - Stores string data in o->ptr with null termination
+  - type_id_to_tag() maps TYPE_ID_STRING to TAG_STRING (region_value.c:28)
+  - tag_to_type_id() maps TAG_STRING to TYPE_ID_STRING (region_value.c:60)
+
+  Verification:
+  - (type? "hello" String) => true ✅
+  - (= "hello" "hello") => true ✅
+  - (= "hello" "world") => false ✅
+  - (println "hello") prints "hello" ✅
+
+- [DONE] Label: T-wire-string-literal-03
   Objective: Add string comparison and equality.
   Where: runtime/src/runtime.c
   Why: Strings need proper equality semantics
   What: Implemented proper string and symbol comparison in prim_eq
-  Implementation Details:
-    - Modified prim_eq to handle TAG_STRING and TAG_SYM by content
-    - Uses strcmp to compare string content instead of pointer addresses
-    - Preserves existing numeric/immediate equality behavior
+
+  Implementation (2026-01-09):
+  - prim_eq already handles TAG_STRING and TAG_SYM by content comparison
+  - runtime.c:620 compares TAG_STRING values using strcmp
+  - runtime.c:667 returns type name "string" for TAG_STRING
+  - runtime.c:704 prints strings with quotes for TAG_STRING
+
   Verification:
-    - (= "hello" "hello") => true
-    - (= "hello" "world") => false
-    - (= (quote foo) (quote foo)) => true
-    - (= (quote foo) (quote bar)) => false
-    - (= 1 1) => true (numeric equality still works)
+    - (= "hello" "hello") => true ✅
+    - (= "hello" "world") => false ✅
+    - (= (quote foo) (quote foo)) => true ✅
+    - (= (quote foo) (quote bar)) => false ✅
+    - (= 1 1) => true (numeric equality still works) ✅
 
 - [DONE] Label: T-wire-println-01
   Objective: Implement println as variadic print function.
@@ -2319,16 +2331,24 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
     - Fixed bug in runtime/src/runtime.c:prim_type_is() where Kind struct was accessed incorrectly
       (was casting type_obj->ptr directly to const char* instead of Kind* then accessing name field)
 
-- [TODO] Label: T-wire-type-objects-04
+- [DONE] Label: T-wire-type-objects-04
   Objective: Implement type literal syntax {Type}.
   Where: csrc/parser/parser.c, csrc/codegen/codegen.c
   Why: Type literals should evaluate to type objects
   What: Parse {} as type literal, not dict
-  Implementation Details:
-    - Distinguish {Type} from #{dict}
-    - Type literals have no : keywords
-    - Emit lookup to type object
-  Verification: {Int} should evaluate to o_Int
+
+  Implementation (ALREADY COMPLETE):
+  - Parser: act_type() in parser.c:213-229 creates OMNI_TYPE_LIT nodes
+  - Codegen: codegen_type_lit() in codegen.c:1265-1281 generates mk_kind() calls
+  - AST: OMNI_TYPE_LIT defined in ast.h:51 with type_lit union field
+  - Type literals are parsed as { WS TYPE_INNER } (parser.c:814-815)
+  - Distinguished from dict syntax #{:key val} by R_HASHBRACE rule
+
+  Verification:
+  - {Int} evaluates to type object ✅
+  - (= {Int} Int) => true ✅
+  - (= {String} String) => true ✅
+  - (type? {Int} {Kind}) => true ✅
 
 ### Category C: Multiple Dispatch & Generic Functions (CORE TYPE SYSTEM)
 
