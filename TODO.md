@@ -4815,12 +4815,25 @@ specified in docs/FFI_DESIGN_PROPOSALS.md. The implementation follows a three-ti
 
 **Objective:** Address critical bugs and performance regressions identified during the review of Phase 22-25.
 
-- [TODO] Label: T-fix-parser-float-literal
+- [R] Label: T-fix-parser-float-literal
   Objective: Fix parsing of float literals (e.g., 1.5).
   Reference: LLM_REVIEW_SUMMARY.md
   Where: csrc/parser/parser.c
   Why: Currently, `1.5` is parsed as a path expression accessing field `5` of integer `1`, causing a compilation error. It should be parsed as an OMNI_FLOAT literal.
   What: Update the parser grammar to correctly recognize floating-point numbers.
+
+  Implementation (2026-01-09):
+  - Added act_float() semantic action function using atof() for parsing
+  - Added R_FLOAT rule matching <INT> "." <INT> sequence (e.g., 1.5, 3.14, 0.5)
+  - Added R_FLOAT to EXPR alternatives BEFORE R_PATH (higher priority in PEG)
+  - This ensures "1.5" is parsed as float, not as path "1 . 5"
+
+  Test Results:
+  - 1.5 => 1.5 ✓
+  - 3.14 => 3.14 ✓
+  - (+ 1.5 2.5) => 4.0 ✓
+  - (* 3.14 2.0) => 6.28 ✓
+  - (+ 1 2.5) => 3.5 ✓ (mixed int/float works)
 
 - [TODO] Label: T-opt-fix-symbol-alloc-regression
   Objective: Investigate and fix symbol allocation performance regression.
