@@ -220,7 +220,7 @@ Replace hybrid memory management with a unified Region-RC architecture.
     - Return NULL if no captures
   Verification: (define [grammar email] ...) matching "user@host" should extract ["user" "host"].
 
-- [TODO] Label: T-wire-pika-exec-03
+- [R] Label: T-wire-pika-exec-03
   Objective: Add backtracking support for complex patterns.
   Reference: csrc/parser/pika_core.c (evaluate_rule implementation)
   Where: csrc/parser/pika_core.c
@@ -232,6 +232,12 @@ Replace hybrid memory management with a unified Region-RC architecture.
     - Failed alternatives reset position (backtrack)
     - Test with patterns like (alt "abc" "ab")
   Verification: (alt "abc" "ab") on "abc" should match "abc" (not try "ab").
+
+  Status: VERIFIED - PIKA_ALT already implements correct PEG prioritized choice semantics.
+  Added comprehensive tests in tests/test_omni_pika_match.c:
+    - Test 9: Verifies ("abc" | "ab") matches "abc" correctly
+    - Test 10: Verifies SEQ with ALT backtracking works
+  All 10 tests pass, confirming proper backtracking behavior.
 
 - [TODO] Label: T-wire-pika-exec-04
   Objective: Integrate pattern matching with runtime evaluation.
@@ -2605,10 +2611,10 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
     - Tests: #\newline=10, #\tab=9, #\space=32, #\x41=65, #\x00=0, #\xFF=255
   Status: Character literals fully implemented and tested.
 
-- [TODO] Label: T-wire-fmt-string-01
+- [R] Label: T-wire-fmt-string-01
   Objective: Implement format strings (#fmt"...").
   Reference: tests/unwired_features.omni:49-52 (commented out)
-  Where: csrc/parser/parser.c, csrc/codegen/codegen.c
+  Where: csrc/parser/parser.c, csrc/codegen/codegen.c, runtime/src/runtime.c
   Why: String interpolation is common need
   What: Parse and compile #fmt strings
   Implementation Details:
@@ -2616,7 +2622,20 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
     - Codegen needs to handle fmt-string form
     - Replace $var with value at runtime
     - Generate sprintf-style code
-  Verification: #fmt"Hello $name" should interpolate
+
+  Implementation (2026-01-09):
+    - Added codegen_fmt_string function in codegen.c (lines 1000-1185)
+    - Added fmt-string handler in codegen_list (lines 2591-2595)
+    - Added prim_str and prim_strcat runtime functions in runtime.c (lines 749-852)
+    - Added function declarations in omni.h (lines 599-601)
+    - Supports $var and ${var} interpolation syntax
+    - Fixed Slot syntax let codegen bug (lines 1290-1346)
+
+  Verification:
+    - (println #fmt"This is a plain string") => "This is a plain string"
+    - (let [name "World"] #fmt"Hello $name") => "Hello World"
+    - (let [x 42] #fmt"The answer is $x") => "The answer is 42"
+    - (let [greeting "Hello"] #fmt"${greeting}!") => "Hello!"
 
 ### Category G: Type System Enhancements
 

@@ -746,6 +746,111 @@ Obj* prim_println(Obj* args) {
     return mk_nothing();
 }
 
+/*
+ * prim_str: Convert any value to its string representation
+ * Args: value - Any OmniLisp value
+ * Returns: String object representing the value
+ */
+Obj* prim_str(Obj* value) {
+    if (!value) {
+        return mk_string_cstr_region(_global_region, "nil");
+    }
+
+    /* Use a static buffer for string conversion */
+    static char buffer[1024];
+    buffer[0] = '\0';
+
+    if (is_int(value)) {
+        snprintf(buffer, sizeof(buffer), "%ld", (long)obj_to_int(value));
+        return mk_string_cstr_region(_global_region, buffer);
+    }
+
+    if (IS_BOXED(value)) {
+        switch (value->tag) {
+        case TAG_FLOAT:
+            snprintf(buffer, sizeof(buffer), "%f", obj_to_float(value));
+            return mk_string_cstr_region(_global_region, buffer);
+        case TAG_STRING:
+            return value;  /* Already a string */
+        case TAG_SYM:
+            return mk_string_cstr_region(_global_region, (const char*)value->ptr);
+        case TAG_PAIR: {
+            /* Represent as "(a . b)" */
+            snprintf(buffer, sizeof(buffer), "(pair)");
+            return mk_string_cstr_region(_global_region, buffer);
+        }
+        case TAG_ARRAY: {
+            /* Represent as "[array]" */
+            snprintf(buffer, sizeof(buffer), "[array]");
+            return mk_string_cstr_region(_global_region, buffer);
+        }
+        case TAG_CLOSURE: {
+            snprintf(buffer, sizeof(buffer), "(closure)");
+            return mk_string_cstr_region(_global_region, buffer);
+        }
+        case TAG_NOTHING: {
+            return mk_string_cstr_region(_global_region, "nothing");
+        }
+        default:
+            snprintf(buffer, sizeof(buffer), "(tag:%d)", value->tag);
+            return mk_string_cstr_region(_global_region, buffer);
+        }
+    }
+
+    /* Immediate values */
+    if (is_char_val(value)) {
+        buffer[0] = (char)obj_to_int(value);
+        buffer[1] = '\0';
+        return mk_string_cstr_region(_global_region, buffer);
+    }
+
+    return mk_string_cstr_region(_global_region, "?");
+}
+
+/*
+ * prim_strcat: Concatenate two strings
+ * Args: str1, str2 - String objects to concatenate
+ * Returns: New string object containing str1 + str2
+ */
+Obj* prim_strcat(Obj* str1, Obj* str2) {
+    if (!str1 || !str2) {
+        return str1 ? str1 : str2;
+    }
+
+    /* Convert non-string arguments to strings */
+    if (!IS_BOXED(str1) || str1->tag != TAG_STRING) {
+        str1 = prim_str(str1);
+    }
+    if (!IS_BOXED(str2) || str2->tag != TAG_STRING) {
+        str2 = prim_str(str2);
+    }
+
+    if (!IS_BOXED(str1) || !IS_BOXED(str2)) {
+        return NULL;
+    }
+
+    const char* s1 = (const char*)str1->ptr;
+    const char* s2 = (const char*)str2->ptr;
+
+    if (!s1) s1 = "";
+    if (!s2) s2 = "";
+
+    size_t len1 = strlen(s1);
+    size_t len2 = strlen(s2);
+
+    /* Allocate buffer for concatenated string */
+    char* result = (char*)region_alloc(_global_region, len1 + len2 + 1);
+    if (!result) {
+        return NULL;
+    }
+
+    memcpy(result, s1, len1);
+    memcpy(result + len1, s2, len2);
+    result[len1 + len2] = '\0';
+
+    return mk_string_region(_global_region, result, len1 + len2);
+}
+
 /* Stubs/Shims for legacy GC logic */
 static Obj* _deferred_list[4096];
 static int _deferred_count = 0;

@@ -168,6 +168,66 @@ int main(void) {
         }
     }
 
+    /* Test 9: PEG prioritized choice with backtracking (T-wire-pika-exec-03)
+     * When input is "abc" and pattern is ("abc" | "ab"), it should match "abc"
+     * The first alternative that matches wins, even if a shorter one exists
+     */
+    {
+        total++;
+        printf("\n--- Test 9: PEG prioritized choice backtracking ---\n");
+        printf("Pattern: (\"abc\" | \"ab\"), Input: \"abc\"\n");
+        printf("Expected: Match \"abc\" (first alternative wins)\n");
+
+        int subrules[] = { 1, 2 };  /* References to rules 1 ("abc") and 2 ("ab") */
+        PikaRule rules[] = {
+            { .type = PIKA_ALT, .data.children = { .subrules = subrules, .count = 2 }, .name = "choice", .action = NULL },
+            { .type = PIKA_TERMINAL, .data.str = "abc", .name = "abc", .action = NULL },
+            { .type = PIKA_TERMINAL, .data.str = "ab", .name = "ab", .action = NULL }
+        };
+        OmniValue* result = omni_pika_match("abc", rules, 3, 0);
+        print_result("Match (\"abc\" | \"ab\") in \"abc\"", result);
+
+        /* Verify that we got "abc" not "ab" */
+        if (result && result->tag == OMNI_SYM && strcmp(result->str_val, "abc") == 0) {
+            passed++;
+            printf("  PASS - Correctly matched \"abc\" (not \"ab\")\n");
+        } else if (result && result->tag == OMNI_SYM && strcmp(result->str_val, "ab") == 0) {
+            printf("  FAIL - Matched \"ab\" instead of \"abc\" (wrong choice)\n");
+        } else {
+            printf("  FAIL\n");
+        }
+    }
+
+    /* Test 10: SEQ with ALT (ordered choice with backtracking)
+     * Pattern: ("a" ("bc" | "b")) should match "abc" fully
+     */
+    {
+        total++;
+        printf("\n--- Test 10: SEQ with ALT for full match ---\n");
+        printf("Pattern: \"a\" (\"bc\" | \"b\"), Input: \"abc\"\n");
+        printf("Expected: Match \"abc\" using \"bc\" alternative\n");
+
+        int alt_subrules[] = { 2, 3 };  /* References to rules 2 ("bc") and 3 ("b") */
+        int seq_subrules[] = { 1, 4 };  /* References to rules 1 ("a") and 4 (alt) */
+        PikaRule rules[] = {
+            { .type = PIKA_SEQ, .data.children = { .subrules = seq_subrules, .count = 2 }, .name = "seq", .action = NULL },
+            { .type = PIKA_TERMINAL, .data.str = "a", .name = "a", .action = NULL },
+            { .type = PIKA_ALT, .data.children = { .subrules = alt_subrules, .count = 2 }, .name = "alt", .action = NULL },
+            { .type = PIKA_TERMINAL, .data.str = "bc", .name = "bc", .action = NULL },
+            { .type = PIKA_TERMINAL, .data.str = "b", .name = "b", .action = NULL }
+        };
+        OmniValue* result = omni_pika_match("abc", rules, 5, 0);
+        print_result("Match \"a\" (\"bc\" | \"b\") in \"abc\"", result);
+
+        /* Should match "abc" (len=3) */
+        if (result && result->tag != OMNI_ERROR) {
+            passed++;
+            printf("  PASS - Matched successfully\n");
+        } else {
+            printf("  FAIL\n");
+        }
+    }
+
     /* Summary */
     printf("\n========================================\n");
     printf("Test Results: %d/%d passed\n", passed, total);

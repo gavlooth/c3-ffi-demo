@@ -997,6 +997,206 @@ static void codegen_string(CodeGenContext* ctx, OmniValue* expr) {
     omni_codegen_emit_raw(ctx, "mk_string(\"%s\")", expr->str_val);
 }
 
+/* T-wire-fmt-string-01: Format string codegen */
+/* Generate code for format string interpolation: (fmt-string "Hello $name") */
+/* Supports $var, ${var} and ${expr} syntax */
+static void codegen_fmt_string(CodeGenContext* ctx, OmniValue* expr) {
+    /* Format string form: (fmt-string "template") */
+    /* Template contains $var or ${expr} placeholders to interpolate */
+
+    OmniValue* args = omni_cdr(expr);
+    if (omni_is_nil(args)) {
+        omni_codegen_emit_raw(ctx, "NIL");
+        return;
+    }
+
+    OmniValue* template = omni_car(args);
+    if (!omni_is_string(template)) {
+        omni_codegen_emit_raw(ctx, "NIL");
+        return;
+    }
+
+    const char* fmt = template->str_val;
+    if (!fmt) {
+        omni_codegen_emit_raw(ctx, "NIL");
+        return;
+    }
+
+    /* Create a temporary buffer variable for the result */
+    char* result_var = omni_codegen_temp(ctx);
+
+    /* First, scan the format string to count interpolations */
+    int interp_count = 0;
+    size_t fmt_len = strlen(fmt);
+    for (size_t i = 0; i < fmt_len; i++) {
+        if (fmt[i] == '$') {
+            interp_count++;
+        }
+    }
+
+    if (interp_count == 0) {
+        /* No interpolations - just a plain string */
+        omni_codegen_emit_raw(ctx, "mk_string(\"%s\")", fmt);
+        free(result_var);
+        return;
+    }
+
+    /* For format strings with interpolation, use a simple approach:
+     * - Start with the first literal part
+     * - For each interpolation, append the variable value
+     * - This generates code like: prim_strcat(mk_string("Hello "), prim_str(name))
+     * - Wrap everything in a block expression ({ ... })
+     */
+
+    omni_codegen_emit_raw(ctx, "({\n");  /* Start block expression */
+    omni_codegen_indent(ctx);
+
+    char* current_var = result_var;
+
+    /* Process the format string */
+    size_t i = 0;
+    int first_segment = 1;
+
+    while (i < fmt_len) {
+        if (fmt[i] == '$' && i + 1 < fmt_len) {
+            /* Found interpolation marker */
+            i++;  /* Skip '$' */
+
+            /* Check for ${expr} syntax */
+            if (fmt[i] == '{') {
+                /* Find closing brace */
+                size_t start = i + 1;
+                size_t end = start;
+                while (end < fmt_len && fmt[end] != '}') {
+                    end++;
+                }
+
+                if (end >= fmt_len) {
+                    /* Unclosed brace - treat as literal */
+                    i = start - 1;
+                    continue;
+                }
+
+                /* Extract the expression/variable name */
+                size_t expr_len = end - start;
+                char* var_name = malloc(expr_len + 1);
+                memcpy(var_name, &fmt[start], expr_len);
+                var_name[expr_len] = '\0';
+
+                /* Look up the variable in the symbol table to get its C name */
+                const char* c_var_name = lookup_symbol(ctx, var_name);
+                int should_free_c_name = 0;
+                if (!c_var_name) {
+                    /* Variable not found in symbol table - use mangled name as fallback */
+                    c_var_name = omni_codegen_mangle(var_name);
+                    should_free_c_name = 1;
+                }
+
+                /* Generate code to convert value to string and append */
+                if (!first_segment) {
+                    /* Append to previous segment */
+                    char* next_var = omni_codegen_temp(ctx);
+                    omni_codegen_emit(ctx, "Obj* %s = prim_strcat(%s, prim_str(", next_var, current_var);
+                    omni_codegen_emit_raw(ctx, "%s", c_var_name);  /* Variable reference */
+                    omni_codegen_emit_raw(ctx, "));\n");
+                    free(current_var);
+                    current_var = next_var;
+                } else {
+                    /* First segment - create the initial string */
+                    omni_codegen_emit(ctx, "Obj* %s = prim_str(", current_var);
+                    omni_codegen_emit_raw(ctx, "%s", c_var_name);  /* Variable reference */
+                    omni_codegen_emit_raw(ctx, ");\n");
+                }
+
+                /* Clean up */
+                free(var_name);
+                if (should_free_c_name) {
+                    free((void*)c_var_name);
+                }
+
+                i = end + 1;  /* Skip past '}' */
+                first_segment = 0;
+            } else {
+                /* $var syntax - extract variable name */
+                size_t start = i;
+                while (i < fmt_len && (isalnum(fmt[i]) || fmt[i] == '_')) {
+                    i++;
+                }
+
+                size_t var_len = i - start;
+                char* var_name = malloc(var_len + 1);
+                memcpy(var_name, &fmt[start], var_len);
+                var_name[var_len] = '\0';
+
+                /* Look up the variable in the symbol table to get its C name */
+                const char* c_var_name = lookup_symbol(ctx, var_name);
+                int should_free_c_name = 0;
+                if (!c_var_name) {
+                    /* Variable not found in symbol table - use mangled name as fallback */
+                    c_var_name = omni_codegen_mangle(var_name);
+                    should_free_c_name = 1;
+                }
+
+                /* Generate code to convert value to string and append */
+                if (!first_segment) {
+                    /* Append to previous segment */
+                    char* next_var = omni_codegen_temp(ctx);
+                    omni_codegen_emit(ctx, "Obj* %s = prim_strcat(%s, prim_str(", next_var, current_var);
+                    omni_codegen_emit_raw(ctx, "%s", c_var_name);  /* Variable reference */
+                    omni_codegen_emit_raw(ctx, "));\n");
+                    free(current_var);
+                    current_var = next_var;
+                } else {
+                    /* First segment - create the initial string */
+                    omni_codegen_emit(ctx, "Obj* %s = prim_str(", current_var);
+                    omni_codegen_emit_raw(ctx, "%s", c_var_name);  /* Variable reference */
+                    omni_codegen_emit_raw(ctx, ");\n");
+                }
+
+                /* Clean up */
+                free(var_name);
+                if (should_free_c_name) {
+                    free((void*)c_var_name);
+                }
+                first_segment = 0;
+            }
+        } else {
+            /* Literal text - accumulate until next $ or end */
+            size_t start = i;
+            while (i < fmt_len && fmt[i] != '$') {
+                i++;
+            }
+
+            size_t lit_len = i - start;
+            if (lit_len > 0) {
+                /* Allocate buffer for literal segment */
+                char* literal = malloc(lit_len + 1);
+                memcpy(literal, &fmt[start], lit_len);
+                literal[lit_len] = '\0';
+
+                if (!first_segment) {
+                    /* Append literal to current result */
+                    char* next_var = omni_codegen_temp(ctx);
+                    omni_codegen_emit(ctx, "Obj* %s = prim_strcat(%s, mk_string(\"%s\"));\n",
+                                     next_var, current_var, literal);
+                    free(current_var);
+                    current_var = next_var;
+                } else {
+                    /* First segment - start with literal */
+                    omni_codegen_emit(ctx, "Obj* %s = mk_string(\"%s\");\n", current_var, literal);
+                }
+                free(literal);
+                first_segment = 0;
+            }
+        }
+    }
+
+    /* Emit the final result variable and close the block */
+    omni_codegen_dedent(ctx);
+    omni_codegen_emit(ctx, "%s; })  /* end format string block */\n", current_var);
+    free(current_var);
+}
+
 /* T-codegen-array-01: Array literal codegen */
 /* Generate code to create an array from literal syntax [elem1 elem2 ...] */
 static void codegen_array(CodeGenContext* ctx, OmniValue* expr) {
@@ -1116,9 +1316,30 @@ static void codegen_let(CodeGenContext* ctx, OmniValue* expr) {
          * or multi-element [x val y val] -> old array style */
         if (omni_array_len(first) == 2 || omni_array_len(first) == 3) {
             /* Slot syntax: (let [x val] [y val] body...) */
-            OmniValue* current = first;
+            /* Process first binding */
+            size_t len = omni_array_len(first);
+            if (len >= 2) {
+                OmniValue* name_val = omni_array_get(first, 0);
+                if (omni_is_sym(name_val)) {
+                    char* c_name = omni_codegen_mangle(name_val->str_val);
+                    omni_codegen_emit(ctx, "Obj* %s = ", c_name);
 
-            /* Process bindings as long as they're arrays */
+                    /* Get the value - last element */
+                    if (len == 2) {
+                        codegen_expr(ctx, omni_array_get(first, 1));
+                    } else if (len == 3) {
+                        /* [name type val] - skip type at index 1, use val at index 2 */
+                        codegen_expr(ctx, omni_array_get(first, 2));
+                    }
+
+                    omni_codegen_emit_raw(ctx, ";\n");
+                    register_symbol(ctx, name_val->str_val, c_name);
+                    free(c_name);
+                }
+            }
+
+            /* Process remaining bindings from rest */
+            OmniValue* current = rest;
             while (current && !omni_is_nil(current) && omni_is_cell(current)) {
                 OmniValue* elem = omni_car(current);
 
@@ -2419,6 +2640,11 @@ static void codegen_list(CodeGenContext* ctx, OmniValue* expr) {
             }
             omni_codegen_dedent(ctx);
             omni_codegen_emit(ctx, "})");
+            return;
+        }
+        /* T-wire-fmt-string-01: Format string interpolation */
+        if (strcmp(name, "fmt-string") == 0) {
+            codegen_fmt_string(ctx, expr);
             return;
         }
     }

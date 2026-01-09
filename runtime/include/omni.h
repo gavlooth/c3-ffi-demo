@@ -596,6 +596,10 @@ Obj* prim_print(Obj* x);
 Obj* prim_println(Obj* args);
 Obj* prim_newline(void);
 
+/* ========== String Primitives ========== */
+Obj* prim_str(Obj* value);      /* Convert any value to string */
+Obj* prim_strcat(Obj* str1, Obj* str2);  /* Concatenate two strings */
+
 /* ========== Character/String Primitives ========== */
 
 Obj* char_to_int(Obj* c);
