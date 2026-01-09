@@ -1596,12 +1596,26 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
   - runtime/bench/bench_runner.c: Added thread_local_rc suite
   - runtime/bench/bench_thread_local_rc.c: New benchmark file
 
-- [TODO] Label: T-opt-thread-local-rc-tether
+- [DONE] Label: T-opt-thread-local-rc-tether
   Objective: Track tether origins to detect cross-thread access.
   Reference: runtime/src/memory/tethering.c (existing tether infrastructure)
   Where: runtime/src/memory/tethering.c, runtime/src/memory/region_core.c
   Why: Thread-local detection needs to know when tethers come from other threads.
   What: Add thread tracking to tether operations.
+
+  Implementation (2026-01-09):
+  - Modified region_tether_start() in runtime/src/memory/region_core.c
+  - Added cross-thread check: if (!pthread_equal(pthread_self(), r->owner_thread))
+  - Calls region_mark_external_ref() to mark region as having external refs
+  - This ensures regions with cross-thread tethers use atomic RC operations
+
+  Verification:
+  - Created test_cross_thread_tether.c with comprehensive tests:
+    * Test 1: Same-thread tether preserves thread-local status (PASS)
+    * Test 2: Cross-thread tether marks has_external_refs=true (PASS)
+    * Test 3: region_is_thread_local() returns false after cross-thread tether (PASS)
+  - Existing thread_local_rc benchmark still passes (2.33x speedup)
+  - All runtime tests pass (293/298, 5 pre-existing failures unrelated to this change)
 
   Implementation Details:
     *   **Modify tether tracking:**

@@ -228,6 +228,13 @@ void region_mark_external_ref(Region* r) {
 void region_tether_start(Region* r) {
     if (!r) return;
 
+    // OPTIMIZATION (T-opt-thread-local-rc-tether): Track tether origins
+    // If this tether is from a different thread than the region owner,
+    // mark the region as having external refs (will use atomic RC)
+    if (!pthread_equal(pthread_self(), r->owner_thread)) {
+        region_mark_external_ref(r);
+    }
+
     // Check local cache
     for (int i = 0; i < g_tether_cache.size; i++) {
         if (g_tether_cache.regions[i] == r) {

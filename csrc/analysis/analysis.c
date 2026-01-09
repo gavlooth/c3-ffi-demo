@@ -1003,24 +1003,66 @@ static void analyze_lambda(AnalysisContext* ctx, OmniValue* expr) {
     ctx->in_return_position = old_return_pos;
 }
 
-static void analyze_if(AnalysisContext* ctx, OmniValue* expr) {
-    /* (if cond then else) */
-    OmniValue* args = omni_cdr(expr);
-    if (omni_is_nil(args)) return;
+/*
+ * desugar_if_to_match - Convert (if cond then else) to (match cond true then false else)
+ *
+ * This implements the design principle that match is the source of truth for all
+ * control flow. The if form is syntactic sugar that desugars to a binary match.
+ *
+ * Desugaring:
+ *   (if cond then-branch else-branch)
+ *   =>
+ *   (match cond
+ *     true then-branch
+ *     false else-branch)
+ */
+static OmniValue* desugar_if_to_match(OmniValue* if_expr) {
+    /* Extract components: (if cond then else) */
+    OmniValue* args = omni_cdr(if_expr);
+    if (omni_is_nil(args)) return if_expr;  /* Invalid if, return as-is */
 
     OmniValue* cond = omni_car(args);
     args = omni_cdr(args);
-    OmniValue* then_branch = omni_is_nil(args) ? NULL : omni_car(args);
+    OmniValue* then_branch = omni_is_nil(args) ? omni_new_sym("nil") : omni_car(args);
     args = omni_cdr(args);
-    OmniValue* else_branch = omni_is_nil(args) ? NULL : omni_car(args);
+    OmniValue* else_branch = omni_is_nil(args) ? omni_new_sym("nil") : omni_car(args);
 
-    bool old_return_pos = ctx->in_return_position;
-    ctx->in_return_position = false;
-    analyze_expr(ctx, cond);
+    /* Build match expression: (match cond true then false else) */
+    OmniValue* match_sym = omni_new_sym("match");
+    OmniValue* true_sym = omni_new_sym("true");
+    OmniValue* false_sym = omni_new_sym("false");
 
-    ctx->in_return_position = old_return_pos;
-    if (then_branch) analyze_expr(ctx, then_branch);
-    if (else_branch) analyze_expr(ctx, else_branch);
+    /* Create clause pairs: (true then) and (false else) */
+    OmniValue* true_clause = omni_new_cell(true_sym, omni_new_cell(then_branch, omni_new_sym("nil")));
+    OmniValue* false_clause = omni_new_cell(false_sym, omni_new_cell(else_branch, omni_new_sym("nil")));
+
+    /* Build list of clauses: ((true then) (false else)) */
+    OmniValue* clauses = omni_new_cell(true_clause, omni_new_cell(false_clause, omni_new_sym("nil")));
+
+    /* Build final match expression: (match cond (true then) (false else)) */
+    OmniValue* match_expr = omni_new_cell(match_sym, omni_new_cell(cond, clauses));
+
+    return match_expr;
+}
+
+static void analyze_if(AnalysisContext* ctx, OmniValue* expr) {
+    /*
+     * Phase 26: if → match desugaring
+     *
+     * The if special form is now syntactic sugar that desugars to a binary match.
+     * This unifies control flow optimization and enables the match compiler to
+     * emit branchless code for boolean patterns.
+     *
+     * Before: Separate analyze_if and codegen_if paths
+     * After:  Desugar to match, use unified match analysis/codegen
+     */
+    OmniValue* match_expr = desugar_if_to_match(expr);
+
+    /* Analyze the desugared match expression
+     * Note: We analyze it as a regular application since match is handled in codegen
+     * The key is that the structure is now (match cond true-expr false-expr ...)
+     */
+    analyze_expr(ctx, match_expr);
 }
 
 static void analyze_application(AnalysisContext* ctx, OmniValue* expr) {

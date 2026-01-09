@@ -2269,6 +2269,76 @@ static void codegen_match(CodeGenContext* ctx, OmniValue* expr) {
     OmniValue* value_expr = omni_car(args);
     OmniValue* clauses = omni_cdr(args);
 
+    /*
+     * Phase 26: Binary Boolean Match Optimization
+     *
+     * Detect the pattern: (match cond true then-expr false else-expr)
+     * This is the desugared form of (if cond then-expr else-expr)
+     *
+     * When detected, emit optimized branchless ternary operator.
+     * This is faster than generic pattern matching.
+     */
+    if (omni_is_cell(clauses)) {
+        OmniValue* first_clause = omni_car(clauses);
+        OmniValue* rest = omni_cdr(clauses);
+
+        if (omni_is_cell(rest)) {
+            OmniValue* second_clause = omni_car(rest);
+
+            /* Check if this is a binary boolean match: (true X) (false Y) */
+            if (omni_is_cell(first_clause) && omni_is_cell(second_clause)) {
+                OmniValue* first_pattern = omni_car(first_clause);
+                OmniValue* first_result = omni_car(omni_cdr(first_clause));
+                OmniValue* second_pattern = omni_car(second_clause);
+                OmniValue* second_result = omni_car(omni_cdr(second_clause));
+
+                /* Check for (true expr1) (false expr2) pattern */
+                bool is_true_false_match =
+                    omni_is_sym(first_pattern) && strcmp(first_pattern->str_val, "true") == 0 &&
+                    omni_is_sym(second_pattern) && strcmp(second_pattern->str_val, "false") == 0;
+
+                /* Check for (false expr1) (true expr2) pattern (reversed) */
+                bool is_false_true_match =
+                    omni_is_sym(first_pattern) && strcmp(first_pattern->str_val, "false") == 0 &&
+                    omni_is_sym(second_pattern) && strcmp(second_pattern->str_val, "true") == 0;
+
+                if (is_true_false_match) {
+                    /* Emit optimized ternary: cond ? then-expr : else-expr */
+                    omni_codegen_emit_raw(ctx, "({ /* binary boolean match (optimized) */\n");
+                    omni_codegen_indent(ctx);
+                    omni_codegen_emit_raw(ctx, "Obj* _match_result = is_truthy(");
+                    codegen_expr(ctx, value_expr);
+                    omni_codegen_emit_raw(ctx, ") ? (");
+                    codegen_expr(ctx, first_result);
+                    omni_codegen_emit_raw(ctx, ") : (");
+                    codegen_expr(ctx, second_result);
+                    omni_codegen_emit_raw(ctx, ");\n");
+                    omni_codegen_emit(ctx, "_match_result;\n");
+                    omni_codegen_dedent(ctx);
+                    omni_codegen_emit_raw(ctx, "})\n");
+                    return;
+                }
+
+                if (is_false_true_match) {
+                    /* Emit reversed ternary: cond ? else-expr : then-expr */
+                    omni_codegen_emit_raw(ctx, "({ /* binary boolean match (reversed, optimized) */\n");
+                    omni_codegen_indent(ctx);
+                    omni_codegen_emit_raw(ctx, "Obj* _match_result = is_truthy(");
+                    codegen_expr(ctx, value_expr);
+                    omni_codegen_emit_raw(ctx, ") ? (");
+                    codegen_expr(ctx, second_result);
+                    omni_codegen_emit_raw(ctx, ") : (");
+                    codegen_expr(ctx, first_result);
+                    omni_codegen_emit_raw(ctx, ");\n");
+                    omni_codegen_emit(ctx, "_match_result;\n");
+                    omni_codegen_dedent(ctx);
+                    omni_codegen_emit_raw(ctx, "})\n");
+                    return;
+                }
+            }
+        }
+    }
+
     /* Count clauses (pairs of pattern-result) */
     size_t clause_count = 0;
     OmniValue* c = clauses;

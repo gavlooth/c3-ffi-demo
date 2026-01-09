@@ -60,17 +60,49 @@
 (define (get-string-type) String)
 (println "Kind returned from function: " (get-string-type))
 (println "type? with returned Kind: " (type? "hello" (get-string-type)))
-(println "\n--- Testing 6. Pattern Matching ---") 
-(println "match simple: " 
-  (match 1 
-    1 "one" 
-    2 "two" 
-    _ "other")) 
+(println "\n--- Testing 6. Pattern Matching ---")
+(println "match simple: "
+  (match 1
+    1 "one"
+    2 "two"
+    _ "other"))
 
-(println "match pattern: " 
-  (match [1 2] 
-    [x y] (+ x y) 
-    _ 0)) 
+(println "match pattern: "
+  (match [1 2]
+    [x y] (+ x y)
+    _ 0))
+
+;; 6.1 Nested destructuring
+(println "match nested: "
+  (match (list 1 (list 2 3))
+    [1 [x y]] (+ x y)
+    _ 0))
+
+;; 6.2 Splicing patterns
+(println "match splicing: "
+  (match [1 2 3 4]
+    [x y .. rest] (append (list x y) rest)
+    _ nil))
+
+;; 6.3 Boolean match (demonstrates if desugaring)
+(println "match boolean: "
+  (match true
+    true "yes"
+    false "no"
+    _ "other"))
+
+;; 6.4 Type constraints in patterns (when supported)
+;; (println "match with type constraint: "
+;;   (match 42
+;;     [n {Int}] "is integer"
+;;     _ "not integer"))
+
+;; 6.5 Guards (when supported)
+;; (println "match with guard: "
+;;   (match 15
+;;     [n {Int}] (when (> n 10)) "large"
+;;     [n {Int}] "small"
+;;     _ "not integer")) 
 
 (println "\n--- Testing 7. Pika Grammar DSL ---") 
 (define [grammar simple] 

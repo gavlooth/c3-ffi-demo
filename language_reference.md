@@ -472,6 +472,156 @@ Fibers communicate via **Channels**, enabling ownership transfer without shared-
 #### Ownership Transfer
 Sending a value through a channel performs an **Ownership Transfer**. The sending fiber/thread yields control of the object's lifetime to the receiver, preventing data races by ensuring only one owner exists at any time. Immutable objects (frozen) can be shared safely across Tier 1 threads.
 
+### 6.3 Pattern Matching (`match`)
+
+**Pattern matching is the source of truth for all control flow in OmniLisp.** The `if` form is syntactic sugar that desugars to a binary `match`.
+
+#### Syntax
+
+```lisp
+(match expr
+  pattern1 result1
+  pattern2 result2
+  ...
+  _ default)           ; Wildcard pattern (catch-all)
+```
+
+**Key Design Decisions:**
+- **Implicit pairs:** Each `(pattern result)` pair forms a match clause
+- **`_` wildcard:** Catches all unmatched patterns (should be last)
+- **Flat syntax:** No grouping needed - patterns and results alternate
+- **Exhaustiveness:** Compiler may warn if non-exhaustive (future feature)
+
+#### Pattern Types
+
+##### 1. Literal Patterns
+Match exact values:
+
+```lisp
+(match x
+  1 "one"
+  2 "two"
+  true "yes"
+  false "no"
+  _ "other")
+```
+
+##### 2. Variable Patterns
+Bind any value to a name:
+
+```lisp
+(match value
+  x (println "Got: " x))  ; x binds to value
+```
+
+##### 3. Destructuring Patterns
+Decompose sequences and structures:
+
+```lisp
+;; Array/list destructuring
+(match [1 2 3]
+  [x y z] (+ x y z))      ; x=1, y=2, z=3
+
+;; Nested destructuring
+(match (list 1 (list 2 3))
+  [1 [x y]] (+ x y))      ; x=2, y=3
+
+;; Dictionary destructuring
+(match #{:name "Alice" :age 30}
+  #{:name n :age a} (println n " is " a " years old"))
+```
+
+##### 4. Splicing Patterns
+Capture remaining elements with `..`:
+
+```lisp
+(match my-list
+  [x y .. rest] (cons x (cons y rest))  ; Bind first two, capture rest
+  _ nil)
+```
+
+##### 5. Type Constraints
+Patterns can include type annotations using `{}`:
+
+```lisp
+(match value
+  [n {Int}] (* n 2)         ; Only matches if n is an Int
+  [s {String}] (string-length s)
+  _ 0)
+```
+
+##### 6. Guards (`when`)
+Add additional conditions to patterns:
+
+```lisp
+(match x
+  [n {Int}] (when (> n 10)) "large"
+  [n {Int}] (when (< n 0)) "negative"
+  [n {Int}] "small or zero"
+  _ "not an integer")
+```
+
+**Guard Semantics:**
+- Guards are evaluated **after** the pattern matches
+- If the guard is false, matching continues to the next clause
+- Guards can reference bindings from the pattern
+
+#### `if` as Derived Form
+
+The `if` special form desugars to a binary match:
+
+```lisp
+;; Source
+(if condition then-branch else-branch)
+
+;; Desugars to
+(match condition
+  true then-branch
+  false else-branch)
+```
+
+**Why this matters:**
+- Single optimization pass for all control flow
+- Match compiler can emit branchless code for binary boolean matches
+- Consistent semantics across all branching constructs
+
+#### Pattern Matching and Perceus Reuse
+
+Pattern matching enables **Perceus-style in-place updates**:
+
+```lisp
+;; Can reuse x's memory for the result
+(match x
+  [(Some y) (consume y)]    ; consume() indicates x is no longer needed
+  [(None) (default-value)])
+```
+
+When the compiler proves `x` is dead after the match, it can reuse `x`'s memory for the result (same-size optimization).
+
+#### Examples
+
+```lisp
+;; Factorial with pattern matching
+(define factorial [n {Int}] {Int}
+  (match n
+    0 1
+    1 1
+    _ (* n (factorial (- n 1)))))
+
+;; List processing with guards
+(define sum-positive [nums {List}] {Int}
+  (match nums
+    _ (when (empty? nums)) 0
+    [head .. tail] (when (> head 0)) (+ head (sum-positive tail))
+    [head .. tail] (sum-positive tail)))
+
+;; Type-safe option handling
+(define get-or-default [opt {(Option {Int})}] [default {Int}] {Int}
+  (match opt
+    [(Some value)] value
+    [(None)] default))
+```
+
 ---
 
 ## 7. Pika Grammar DSL
@@ -714,10 +864,45 @@ true            ; true
 (fn x y (* x y))                     ; Shorthand (without parens)
 
 ; Conditionals and control flow
-(if cond then else)                  ; Conditional
+(if cond then else)                  ; Conditional (desugars to match)
 (and e1 e2 ...)                      ; Short-circuit and
 (or e1 e2 ...)                       ; Short-circuit or
 (do e1 e2 ... en)                    ; Sequence, return last
+
+; Pattern matching (match is the source of truth)
+(match expr
+  pattern1 result1
+  pattern2 result2
+  ...
+  _ default)                         ; Wildcard fallback
+
+;; Match examples:
+;; Simple value matching
+(match x
+  1 "one"
+  2 "two"
+  _ "other")
+
+;; Destructuring patterns
+(match [1 2 3]
+  [x y z] (+ x y z)                  ; Bind x=1, y=2, z=3
+  _ 0)
+
+;; Guards (when clauses)
+(match x
+  [n {Int}] (when (> n 10)) "large"  ; Type constraint + guard
+  [n {Int}] "small"
+  _ "not an int")
+
+;; Nested destructuring
+(match (list 1 (list 2 3))
+  [1 [x y]] (+ x y)                  ; x=2, y=3
+  _ 0)
+
+;; Splicing patterns
+(match my-list
+  [x y .. rest] (cons x (cons y rest))  ; Bind first two, capture rest
+  _ nil)
 
 ; Quoting
 (quote x) / 'x                       ; Quote

@@ -9,3 +9,7 @@ omni
 # Test artifacts
 *.test
 coverage.out
+
+# Output files (large temporary files)
+ouput.save
+*.save
