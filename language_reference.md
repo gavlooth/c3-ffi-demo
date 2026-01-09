@@ -155,6 +155,42 @@ Let bindings use Slot `[]` syntax with optional types: `[name {Type}? value]`
 
 **Consistency:** Let bindings follow the same `[name {Type}?]` pattern as function parameters.
 
+### 2.4.1 Destructuring in `let`
+
+`let` supports minimal destructuring patterns for sequences and dictionaries/plists.
+
+#### Sequence Destructuring
+Positional destructuring works for **both lists and arrays**:
+
+```lisp
+;; Destructure a sequence into x, y, z
+(let [[x y z] my-seq]
+  (+ x y z))
+;; my-seq can be: (list 1 2 3) OR [1 2 3] - same behavior!
+```
+
+#### Splicing
+Capture remaining elements with `..`:
+
+```lisp
+;; Bind first two elements, capture rest
+(let [[x y .. rest] my-seq]
+  (append (list x y) rest))
+;; x = first element, y = second, rest = remaining elements
+```
+
+#### Dictionary/Plist Destructuring
+Pull symbols by name from dictionaries or property lists:
+
+```lisp
+;; Pull symbols :x and :y from dictionary/plist
+(let [(:x :y) my-dict]
+  (+ x y))
+;; Equivalent to: x = my-dict[:x], y = my-dict[:y]
+```
+
+**Note:** In OmniLisp, `:x` creates a symbol (equivalent to `'x`), not a keyword. The destructuring pattern `(:x :y)` extracts the values associated with those symbols from the dictionary.
+
 ### 2.5 Type Enforcement
 Every variable has an associated Kind. If no Kind is specified, it defaults to **`Any`**.
 *   **Assignments:** `define`, `let`, and `set!` validate values against the Kind blueprint.
@@ -243,6 +279,7 @@ Represents a value that can be one of several types. Unions are **Flow construct
     [x {Int} (* x 2)]
     [s {String} (string-length s)]))
 ```
+
 
 **Note:** The empty union `(union [])` is the **bottom type** (called `Union{}` in Julia). No value can have this type, making it useful for type theory and proving impossibility.
 
@@ -557,3 +594,134 @@ The `(define ...)` form unifies all top-level definitions.
 | `[x {Int}]` | Typed parameter |
 | `[x 10]` | Parameter with default value |
 | `[x {Int} 10]` | Typed parameter with default |
+
+
+## Tower of interpeters
+```lisp
+(lift val)           ; value → code
+(run code)           ; execute code (JIT)
+(EM expr)            ; meta-level evaluation
+(shift n expr)       ; go up n levels
+(meta-level)         ; current tower level
+(clambda (x) body)   ; compile lambda
+
+```
+
+## Lexical Rules
+
+### Symbol Character Rules
+
+Symbols can contain letters and certain operators, but have specific rules about which characters can appear where.
+
+**Start with (first character):**
+- Letters: `a-z`, `A-Z`
+- Operators: `*`, `!`, `-`, `_`, `?`, `%`, `/`, `=`, `<`, `>`
+
+**Excluded from start:**
+- Digits: `0-9` (to avoid confusion with integers)
+- Reserved syntax: `.`, `@`, `#`, `&`, `:`, `;`
+
+**Middle/subsequent characters:**
+- All of the above (letters + operators)
+- **Plus:** Digits `0-9`
+
+**Excluded entirely:**
+- `.` - Used for module paths (`Math.sin`)
+- `@` - Used for metadata (`^:where`)
+- `#` - Used for reader macros (`#val`, `#\newline`)
+- `&` - Excluded
+- `:` - Used for type annotations (`{Type}`)
+- `;` - Used for comments
+
+**Convention (not enforced):**
+`!` and `?` are typically only at the **start or end** of symbols:
+- At end: `set!`, `define!`, `null?`, `empty?`
+- At start: `!not`, `!null`, `?maybe`, `?value`
+- Not in middle: `foo!bar`, `set!value` (conventionally weird)
+
+**Examples:**
+```scheme
+; Valid symbols
+foo                ; letters
+foo-bar            ; - as separator
+foo123             ; digits in middle
+x1_y2              ; _ as separator
+set!               ; ! at end
+null?              ; ? at end
+!not               ; ! at start
+?maybe             ; ? at start
+*                  ; single operator
+<=                 ; comparison operators
+==                 ; equality
+50%off             ; % in middle
+3/4                ; / in middle
+
+; Invalid (can't start with digits)
+123foo             ; integer, not symbol
+3d                 ; digit first
+7up                ; digit first
+
+; Invalid (reserved for syntax)
+.foo               ; . for paths
+foo.bar            ; . for paths (not a single symbol)
+@meta              ; @ for metadata
+#reader           ; # for reader macros
+&and               ; & excluded
+:type              ; : for types
+comment;more       ; ; for comments
+```
+
+## Data Types
+```scheme
+42              ; integer
+3.14            ; float
+'foo            ; symbol
+#\a #\newline   ; character
+'(1 2 3)        ; list
+()              ; empty list
+nothing         ; nothing (falsy)
+false           ; false (falsy)
+true            ; true
+0               ; integer (truthy)
+```
+
+## Special Forms
+**Implemented subset (current C compiler/runtime):** `define`, `lambda`/`fn`, `let`, `let*`, `if`, `do`/`begin`, and `quote`. Other forms listed below are design target.
+```scheme
+; Let bindings with destructuring
+(let [x 10] [y 20]                    ; Simple bindings
+  (+ x y))
+
+(let [[x y z] my-vec]                 ; Array destructuring
+  (+ x y z))
+
+(let [(Point x y) my-point]            ; Constructor destructuring
+  (* x y))
+
+(let [x {Int} 10] [y {Int} 20]        ; Typed bindings
+  (+ x y))
+
+(let ^:seq [x 1] [y (+ x 1)]         ; Sequential (like let*)
+  (* x y))
+
+; Traditional list-style also supported
+(let ((x 10) (y 20))
+  (+ x y))
+
+; Lambda/function
+(lambda (x) body)                    ; Function
+(lambda self (x) body)               ; Recursive function
+(fn x y (* x y))                     ; Shorthand (without parens)
+
+; Conditionals and control flow
+(if cond then else)                  ; Conditional
+(and e1 e2 ...)                      ; Short-circuit and
+(or e1 e2 ...)                       ; Short-circuit or
+(do e1 e2 ... en)                    ; Sequence, return last
+
+; Quoting
+(quote x) / 'x                       ; Quote
+(quasiquote x) / `x                  ; Quasiquote
+(unquote x) / ,x                     ; Unquote in quasiquote
+(unquote-splicing x) / ,@x           ; Splice in quasiquote
+```
