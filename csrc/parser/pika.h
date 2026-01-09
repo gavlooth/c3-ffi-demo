@@ -96,6 +96,22 @@ OmniValue* pika_run(PikaState* state, int root_rule_id);
 /* Get match at position for rule (useful for semantic actions) */
 PikaMatch* pika_get_match(PikaState* state, size_t pos, int rule_id);
 
+/* Convenience function: Run pattern matching in one call
+ * Creates PikaState, runs parser, and returns result.
+ * Caller is responsible for freeing the returned OmniValue (if applicable).
+ *
+ * Parameters:
+ *   - input: Input string to parse
+ *   - rules: Array of PikaRule definitions
+ *   - num_rules: Number of rules in the array
+ *   - root_rule: Index of the rule to use as root (typically 0)
+ *
+ * Returns:
+ *   - OmniValue* representing the match result (may be AST node, string, symbol, or error)
+ *   - NULL if parser state allocation failed
+ */
+OmniValue* omni_pika_match(const char* input, PikaRule* rules, int num_rules, int root_rule);
+
 #ifdef __cplusplus
 }
 #endif

@@ -195,7 +195,7 @@ Replace hybrid memory management with a unified Region-RC architecture.
     - Return pattern object that can be passed to match functions
   Verification: (define p (compile-pattern "[0-9]+")) should work in REPL.
 
-- [TODO] Label: T-wire-pika-exec-01
+- [R] Label: T-wire-pika-exec-01
   Objective: Expose pattern matching API from Pika parser.
   Reference: csrc/parser/pika_core.c (pika_run implementation)
   Where: csrc/parser/pika.h, csrc/parser/pika_core.c

@@ -241,3 +241,47 @@ OmniValue* pika_run(PikaState* state, int root_rule_id) {
 
     return omni_new_error("Parse failed");
 }
+
+/* Convenience function: Run pattern matching in one call
+ * Creates PikaState, runs parser, and returns result.
+ * This is the main entry point for runtime pattern matching.
+ *
+ * The returned OmniValue* is owned by the caller and should be freed
+ * according to the value type (e.g., strings, symbols, AST nodes).
+ *
+ * Parameters:
+ *   - input: Input string to parse
+ *   - rules: Array of PikaRule definitions
+ *   - num_rules: Number of rules in the array
+ *   - root_rule: Index of the rule to use as root (typically 0)
+ *
+ * Returns:
+ *   - OmniValue* representing the match result (may be AST node, string, symbol, or error)
+ *   - NULL if parser state allocation failed
+ */
+OmniValue* omni_pika_match(const char* input, PikaRule* rules, int num_rules, int root_rule) {
+    /* Validate input parameters */
+    if (!input) {
+        return omni_new_error("omni_pika_match: input is NULL");
+    }
+    if (!rules || num_rules <= 0) {
+        return omni_new_error("omni_pika_match: invalid rules array");
+    }
+    if (root_rule < 0 || root_rule >= num_rules) {
+        return omni_new_error("omni_pika_match: root_rule out of bounds");
+    }
+
+    /* Create parser state */
+    PikaState* state = pika_new(input, rules, num_rules);
+    if (!state) {
+        return NULL;  /* Allocation failed */
+    }
+
+    /* Run the parser with the specified root rule */
+    OmniValue* result = pika_run(state, root_rule);
+
+    /* Clean up parser state */
+    pika_free(state);
+
+    return result;
+}
