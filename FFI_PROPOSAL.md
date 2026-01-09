@@ -24,16 +24,16 @@ A comprehensive Foreign Function Interface design for Omnilisp, leveraging the C
 (import {ffi "libfoo.so"})
 
 ;; With namespace alias
-(import {ffi "libSDL2.so" :as sdl})
+(import {ffi "libSDL2.so" ^:as sdl})
 
 ;; System library with version
-(import {ffi "libc.so.6" :as libc})
+(import {ffi "libc.so.6" ^:as libc})
 
 ;; Platform-specific loading
-(import {ffi :darwin "libfoo.dylib"
-             :linux  "libfoo.so"
-             :windows "foo.dll"
-        :as foo})
+(import {ffi ^:darwin "libfoo.dylib"
+             ^:linux  "libfoo.so"
+             ^:windows "foo.dll"
+        ^:as foo})
 ```
 
 ### 1.2 Inline Loading
@@ -112,23 +112,23 @@ A comprehensive Foreign Function Interface design for Omnilisp, leveraging the C
 
 ```lisp
 ;; Declare foreign function
-(define {extern puts :from libc}
+(define {extern puts ^:from libc}
   [s {CString}]
-  -> {CInt})
+  {CInt})
 
 ;; Multiple parameters
-(define {extern fwrite :from libc}
+(define {extern fwrite ^:from libc}
   [ptr {CPtr}]
   [size {CSize}]
   [nmemb {CSize}]
   [stream {Handle FILE}]
-  -> {CSize})
+  {CSize})
 
 ;; Variadic function
-(define {extern printf :from libc :variadic}
+(define {extern printf ^:from libc ^:variadic}
   [format {CString}]
   [.. args]
-  -> {CInt})
+  {CInt})
 ```
 
 ### 3.2 Ownership Annotations
@@ -137,19 +137,19 @@ Ownership is specified via metadata on parameters and return type:
 
 ```lisp
 ;; Caller owns returned pointer (must free)
-(define {extern malloc :from libc}
+(define {extern malloc ^:from libc}
   [size {CSize}]
-  -> {^:owned CPtr})
+  {^:owned CPtr})
 
 ;; Function consumes (takes ownership of) parameter
-(define {extern free :from libc}
+(define {extern free ^:from libc}
   [^:consumed ptr {CPtr}]
-  -> {Nothing})
+  {Nothing})
 
 ;; Function borrows parameter (doesn't affect ownership)
-(define {extern strlen :from libc}
+(define {extern strlen ^:from libc}
   [^:borrowed s {CString}]
-  -> {CSize})
+  {CSize})
 
 ;; Function may store reference (escapes)
 (define {extern set_callback}
@@ -170,23 +170,23 @@ Ownership is specified via metadata on parameters and return type:
 
 ```lisp
 ;; Function that may fail (returns -1 on error)
-(define {extern open :from libc :may-fail}
+(define {extern open ^:from libc ^:may-fail}
   [path {CString}]
   [flags {CInt}]
-  -> {Result CInt CInt})  ; Ok(fd) or Err(errno)
+  {(Result CInt CInt)})  ; Ok(fd) or Err(errno)
 
 ;; C NULL-returning function (returns Nothing on NULL)
-(define {extern fopen :from libc :nothing-on-error}
+(define {extern fopen ^:from libc ^:nothing-on-error}
   [path {CString}]
   [mode {CString}]
-  -> {Option {Handle FILE}})
+  {Option {Handle FILE}})
 
 ;; Custom error check
-(define {extern custom_api :from libfoo}
+(define {extern custom_api ^:from libfoo}
   [x {CInt}]
-  -> {CInt}
-  :error-when (-> r (< r 0))
-  :error-code errno)
+  {CInt}
+  ^:error-when (fn [r] (< r 0))
+  ^:error-code errno)
 ```
 
 ---
@@ -197,19 +197,19 @@ Ownership is specified via metadata on parameters and return type:
 
 ```lisp
 ;; Basic C struct
-(define {struct :ffi Point}
+(define {struct ^:ffi Point}
   [x {CFloat}]
   [y {CFloat}])
 
 ;; Packed struct (no padding)
-(define {struct :ffi :packed PacketHeader}
+(define {struct ^:ffi ^:packed PacketHeader}
   [magic {CUInt32}]
   [length {CUInt16}]
   [flags {CUInt8}]
   [checksum {CUInt8}])
 
 ;; With explicit alignment
-(define {struct :ffi :align 16 AlignedData}
+(define {struct ^:ffi ^:align-16 AlignedData}
   [data {CArray CFloat 4}])
 
 ;; Nested struct
@@ -228,17 +228,17 @@ Ownership is specified via metadata on parameters and return type:
 
 ;; With destructor (for automatic cleanup)
 (define {opaque SDL_Surface
-  :destructor SDL_FreeSurface})
+  ^:destructor SDL_FreeSurface})
 
 ;; With custom release
 (define {opaque sqlite3_stmt
-  :destructor (-> stmt (sqlite3_finalize stmt))})
+  ^:destructor (fn [stmt] (sqlite3_finalize stmt))})
 ```
 
 ### 4.3 Unions
 
 ```lisp
-(define {union :ffi Value}
+(define {union ^:ffi Value}
   [i {CInt64}]
   [f {CDouble}]
   [p {CPtr}])

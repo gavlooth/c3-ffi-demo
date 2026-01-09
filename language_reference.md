@@ -4,38 +4,6 @@ This is the authoritative reference for the OmniLisp language, its "Character Ca
 
 ---
 
-## Revision Tracking
-
-This section tracks known inconsistencies and pending revisions to ensure OmniLisp's type system is correct, consistent, and well-documented.
-
-### Open Questions & Inconsistencies
-
-| Issue | Status | Expected Behavior | Current State | Action Needed |
-|-------|--------|-------------------|---------------|---------------|
-| **Top type** | ✅ VERIFIED | `Any` is the universal supertype of all types | `prim_kind_any()` implemented in runtime | **OK** |
-| **Bottom type** | ✅ VERIFIED | Empty union is the bottom type (no values) | `(union [])` returns bottom type | **OK** |
-| **Nothing type** | ✅ FIXED | `Nothing` is a singleton type with value `nothing` | Comment correctly says "singleton type" | **OK** |
-| **Type parameters** | ✅ VERIFIED | Parametric types use `{struct [T]}` syntax | Parser handles correctly | **OK** |
-| **Type predicate** | ✅ ADDED | `type?` predicate for runtime type checking | `prim_type_is()` implemented | **OK** |
-
-### Type System Design Principles
-- **Top type:** `Any` - all types are subtypes of `Any`
-- **Bottom type:** Empty union `(union [])` - no values can have this type
-- **Nothing:** A concrete singleton type with single value `nothing`
-- **Abstract types:** Cannot be instantiated (e.g., `Number`, `Shape`)
-- **Concrete types:** Can be instantiated (e.g., `Int`, `String`, `Point`)
-- **Type parameters:** Declared as `{struct [Pair T]}` where `T` is a parameter
-- **Variance:** Immutable containers are covariant, mutable are invariant
-
-### Implementation Notes
-- `prim_kind_any()` (runtime.c:1191) - Returns the Any Kind object (top type)
-- `prim_kind_nothing()` (runtime.c:1199) - Returns the Nothing Kind object (singleton type)
-- `prim_type_is()` (runtime.c:1218) - Check if a value is of a specific type
-- `prim_union()` (runtime.c:722) - Creates union types; empty list returns bottom type
-- Empty union syntax: `(union [])` creates bottom type
-
----
-
 ## 1. The Character Calculus (Delimiters)
 
 OmniLisp uses a fixed semantic "Charge" for every delimiter to ensure absolute consistency across the value and type domains.
