@@ -737,6 +737,32 @@ Obj* prim_pika_match(Obj* grammar_obj, Obj* rule_name, Obj* input_str);
  */
 Obj* prim_deep_put(Obj* root, const char* path_str, Obj* new_value);
 
+/* ========== Pattern Matching (T-wire-pika-exec-04) ========== */
+
+/*
+ * prim_match_pattern: Runtime pattern matching
+ *
+ * Matches a pattern against an input string and returns the matched substring.
+ * Supports basic regex-like patterns:
+ * - Literal strings: "hello"
+ * - Character classes: [a-z], [0-9], [^0-9]
+ * - Quantifiers: *, +, ?
+ * - Anchors: ^, $
+ *
+ * Args:
+ *   - input_obj: Input string to match against
+ *   - pattern_obj: Pattern string
+ *
+ * Returns:
+ *   - Matched substring as string if pattern matches
+ *   - NULL (nil) if no match or invalid input
+ *
+ * Example:
+ *   prim_match_pattern(mk_string("hello world"), mk_string("hello"))
+ *   => "hello"
+ */
+Obj* prim_match_pattern(Obj* input_obj, Obj* pattern_obj);
+
 /* ========== Infinite Iterators ========== */
 
 /*

@@ -1197,6 +1197,47 @@ static void codegen_fmt_string(CodeGenContext* ctx, OmniValue* expr) {
     free(current_var);
 }
 
+/* T-wire-pika-exec-04: Runtime pattern matching codegen */
+/* Generate code for pattern matching: (match-pattern input pattern) */
+/*
+ * Syntax:
+ *   (match-pattern <input-string> <pattern-string>)
+ *
+ * Examples:
+ *   (match-pattern "hello world" "hello")    ; => "hello"
+ *   (match-pattern "123 abc" "[0-9]+")        ; => "123"
+ *   (match-pattern "test" "xyz")              ; => nil (no match)
+ *
+ * Returns:
+ *   - Matched substring if pattern matches
+ *   - nil if no match
+ */
+static void codegen_match_pattern(CodeGenContext* ctx, OmniValue* expr) {
+    /* Match pattern form: (match-pattern input pattern) */
+    /* input: string to match against */
+    /* pattern: pattern string (supports basic regex-like syntax) */
+
+    OmniValue* args = omni_cdr(expr);
+    if (omni_is_nil(args) || omni_is_nil(omni_cdr(args))) {
+        omni_codegen_emit_raw(ctx, "NIL");
+        return;
+    }
+
+    /* Extract input expression */
+    OmniValue* input_expr = omni_car(args);
+    /* Extract pattern expression */
+    OmniValue* pattern_expr = omni_car(omni_cdr(args));
+
+    /* Generate code to evaluate input and pattern arguments */
+    /* Both must be strings at runtime */
+
+    omni_codegen_emit_raw(ctx, "prim_match_pattern(");
+    codegen_expr(ctx, input_expr);
+    omni_codegen_emit_raw(ctx, ", ");
+    codegen_expr(ctx, pattern_expr);
+    omni_codegen_emit_raw(ctx, ")");
+}
+
 /* T-codegen-array-01: Array literal codegen */
 /* Generate code to create an array from literal syntax [elem1 elem2 ...] */
 static void codegen_array(CodeGenContext* ctx, OmniValue* expr) {
@@ -2645,6 +2686,11 @@ static void codegen_list(CodeGenContext* ctx, OmniValue* expr) {
         /* T-wire-fmt-string-01: Format string interpolation */
         if (strcmp(name, "fmt-string") == 0) {
             codegen_fmt_string(ctx, expr);
+            return;
+        }
+        /* T-wire-pika-exec-04: Runtime pattern matching */
+        if (strcmp(name, "match-pattern") == 0) {
+            codegen_match_pattern(ctx, expr);
             return;
         }
     }

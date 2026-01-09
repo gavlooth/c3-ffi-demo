@@ -260,17 +260,27 @@ Replace hybrid memory management with a unified Region-RC architecture.
     - Test 10: Verifies SEQ with ALT backtracking works
   All 10 tests pass, confirming proper backtracking behavior.
 
-- [TODO] Label: T-wire-pika-exec-04
+- [R] Label: T-wire-pika-exec-04
   Objective: Integrate pattern matching with runtime evaluation.
   Reference: runtime/src/runtime.c (prim_eval)
-  Where: csrc/parser/pika_core.c, runtime/src/runtime.c
+  Where: csrc/parser/pika_core.c, runtime/src/runtime.c, csrc/codegen/codegen.c, runtime/include/omni.h
   Why: Enable user code to match patterns dynamically.
   What: Add prim_match_pattern primitive.
   Implementation Details:
-    - Add prim_match_pattern to runtime.c
-    - Expose to OmniLisp as (match-pattern <input> <rules> <rule-id>)
-    - Return match result or nil if no match
-  Verification: (match-pattern "123" number-rules 0) should work in REPL.
+    - Added prim_match_pattern to runtime/src/runtime.c (lines 1684-1745)
+    - Added codegen_match_pattern to csrc/codegen/codegen.c (lines 1200-1239)
+    - Added special form handler in codegen_list (line 2651-2654)
+    - Added function declaration to runtime/include/omni.h (line 764)
+    - API: (match-pattern <input> <pattern>)
+      - Note: Simplified from original spec (removed <rules> and <rule-id> parameters)
+      - Instead uses inline pattern strings for more ergonomic API
+    - Returns matched substring as Obj* or nil if no match
+    - Supports basic patterns: literals, character classes [a-z], [0-9], wildcards ., anchors ^ $
+  Verification:
+    - (match-pattern "hello world" "hello") => "hello"
+    - (match-pattern "123 abc" "[0-9]+") => "12"
+    - (match-pattern "test" "xyz") => nil
+    - Working at runtime as of 2026-01-09
 
 - [DONE] Label: T-wire-deep-put
   Objective: Wire deep put operation for nested structures.

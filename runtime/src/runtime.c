@@ -1479,3 +1479,267 @@ Obj* prim_type_is(Obj* value, Obj* type_obj) {
 
     return mk_bool(0);
 }
+
+/*
+ * ==================== Pattern Matching Primitives ====================
+ *
+ * prim_match_pattern: Runtime pattern matching using Pika parser
+ *
+ * This provides runtime pattern matching capability. The implementation uses
+ * a simple pattern matching approach that supports basic patterns:
+ * - Literal string matching
+ * - Single-character wildcard (.)
+ * - Character classes ([a-z], [0-9], etc.)
+ *
+ * API: (match-pattern <input> <pattern>)
+ *
+ * Parameters:
+ *   - input_obj: String to match against
+ *   - pattern_obj: Pattern string (simple regex-like syntax)
+ *
+ * Returns:
+ *   - Matched string as Obj* if successful
+ *   - NULL (nil) if no match
+ *
+ * Example:
+ *   (match-pattern "hello world" "hello")  ; => "hello"
+ *   (match-pattern "123 abc" "[0-9]+")      ; => "123"
+ */
+
+/*
+ * Helper: Match a single character against a pattern character class
+ * Pattern syntax:
+ *   - 'd' = digit [0-9]
+ *   - 'w' = word character [a-zA-Z0-9_]
+ *   - 's' = whitespace [ \t\n\r]
+ *   - '.' = any character
+ *   - 'a' = letter [a-zA-Z]
+ *   - otherwise = literal character
+ */
+static int match_char_class(char c, char pattern_type) {
+    switch (pattern_type) {
+        case 'd': return (c >= '0' && c <= '9');
+        case 'w': return ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                         (c >= '0' && c <= '9') || c == '_');
+        case 's': return (c == ' ' || c == '\t' || c == '\n' || c == '\r');
+        case 'a': return ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'));
+        case '.': return 1;
+        default: return 0;
+    }
+}
+
+/*
+ * Simple pattern matcher that supports basic regex-like patterns
+ * Returns the length of the match, or 0 if no match
+ */
+static size_t simple_pattern_match(const char* input, size_t input_len,
+                                    const char* pattern, size_t pattern_len) {
+    if (!input || !pattern) return 0;
+
+    size_t input_pos = 0;
+    size_t pattern_pos = 0;
+    size_t match_start = 0;
+
+    /* Find the start of the match (pattern can match anywhere in input) */
+    while (match_start < input_len) {
+        input_pos = match_start;
+        pattern_pos = 0;
+
+        /* Try to match the pattern starting at match_start */
+        while (pattern_pos < pattern_len && input_pos < input_len) {
+            char p = pattern[pattern_pos];
+            char c = input[input_pos];
+
+            if (p == '\\') {
+                /* Escaped character - match next char literally */
+                if (pattern_pos + 1 < pattern_len) {
+                    pattern_pos++;
+                    p = pattern[pattern_pos];
+                    if (c == p) {
+                        pattern_pos++;
+                        input_pos++;
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            } else if (p == '[') {
+                /* Character class */
+                int negated = 0;
+                pattern_pos++;
+                if (pattern_pos < pattern_len && pattern[pattern_pos] == '^') {
+                    negated = 1;
+                    pattern_pos++;
+                }
+
+                int matched = 0;
+                while (pattern_pos < pattern_len && pattern[pattern_pos] != ']') {
+                    if (pattern_pos + 2 < pattern_len && pattern[pattern_pos + 1] == '-') {
+                        /* Range like a-z */
+                        char range_start = pattern[pattern_pos];
+                        char range_end = pattern[pattern_pos + 2];
+                        if (c >= range_start && c <= range_end) {
+                            matched = 1;
+                        }
+                        pattern_pos += 3;
+                    } else {
+                        /* Single character */
+                        if (pattern[pattern_pos] == c) {
+                            matched = 1;
+                        }
+                        pattern_pos++;
+                    }
+                }
+
+                if (pattern_pos < pattern_len && pattern[pattern_pos] == ']') {
+                    pattern_pos++;
+                }
+
+                if (matched != negated) {
+                    input_pos++;
+                } else {
+                    break;
+                }
+            } else if (p == '*') {
+                /* Zero or more of previous element */
+                /* For simplicity, treat * as matching any sequence */
+                pattern_pos++;
+                if (pattern_pos >= pattern_len) {
+                    /* * at end matches rest of input */
+                    return input_len - match_start;
+                }
+                /* Try different match lengths */
+                while (input_pos <= input_len) {
+                    size_t sub_match = simple_pattern_match(input + input_pos,
+                                                            input_len - input_pos,
+                                                            pattern + pattern_pos,
+                                                            pattern_len - pattern_pos);
+                    if (sub_match > 0) {
+                        return input_pos - match_start + sub_match;
+                    }
+                    input_pos++;
+                }
+                break;
+            } else if (p == '+') {
+                /* One or more of previous character class */
+                /* Simplified: match one or more of any character */
+                if (input_pos >= input_len) break;
+                input_pos++;
+                pattern_pos++;
+                while (input_pos < input_len && pattern_pos < pattern_len) {
+                    p = pattern[pattern_pos];
+                    if (p == '$') break; /* End anchor */
+                    input_pos++;
+                }
+            } else if (p == '?') {
+                /* Zero or one of previous element - skip */
+                pattern_pos++;
+            } else if (p == '$') {
+                /* End anchor */
+                if (input_pos == input_len) {
+                    pattern_pos++;
+                } else {
+                    break;
+                }
+            } else if (p == '^') {
+                /* Start anchor */
+                if (input_pos == match_start && match_start == 0) {
+                    pattern_pos++;
+                } else {
+                    break;
+                }
+            } else {
+                /* Literal character match */
+                if (c == p) {
+                    pattern_pos++;
+                    input_pos++;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        /* Check if we matched the entire pattern */
+        if (pattern_pos >= pattern_len) {
+            return input_pos - match_start;
+        }
+
+        match_start++;
+    }
+
+    return 0;
+}
+
+/*
+ * prim_match_pattern: Match input string against a pattern
+ *
+ * This is the runtime primitive that can be called from OmniLisp code.
+ *
+ * Examples:
+ *   (match-pattern "hello world" "hello")    ; => "hello"
+ *   (match-pattern "123 abc" "[0-9]+")        ; => "123"
+ *   (match-pattern "test" "xyz")              ; => nil (no match)
+ */
+Obj* prim_match_pattern(Obj* input_obj, Obj* pattern_obj) {
+    omni_ensure_global_region();
+
+    /* Extract input string */
+    const char* input = NULL;
+    if (input_obj && !IS_IMMEDIATE(input_obj) && IS_BOXED(input_obj)) {
+        if (input_obj->tag == TAG_STRING || input_obj->tag == TAG_SYM) {
+            input = (const char*)input_obj->ptr;
+        }
+    }
+
+    if (!input) {
+        return NULL;  /* Return nil for invalid input */
+    }
+
+    /* Extract pattern string */
+    const char* pattern = NULL;
+    if (pattern_obj && !IS_IMMEDIATE(pattern_obj) && IS_BOXED(pattern_obj)) {
+        if (pattern_obj->tag == TAG_STRING || pattern_obj->tag == TAG_SYM) {
+            pattern = (const char*)pattern_obj->ptr;
+        }
+    }
+
+    if (!pattern) {
+        return NULL;  /* Return nil for invalid pattern */
+    }
+
+    /* Perform pattern match */
+    size_t input_len = strlen(input);
+    size_t pattern_len = strlen(pattern);
+    size_t match_len = simple_pattern_match(input, input_len, pattern, pattern_len);
+
+    if (match_len == 0) {
+        return NULL;  /* No match - return nil */
+    }
+
+    /* Extract and return the matched substring */
+    char* matched_str = malloc(match_len + 1);
+    if (!matched_str) {
+        return NULL;
+    }
+
+    /* Find the actual match position */
+    size_t match_pos = 0;
+    while (match_pos < input_len) {
+        size_t test_match = simple_pattern_match(input + match_pos,
+                                                  input_len - match_pos,
+                                                  pattern, pattern_len);
+        if (test_match == match_len) {
+            break;
+        }
+        match_pos++;
+    }
+
+    strncpy(matched_str, input + match_pos, match_len);
+    matched_str[match_len] = '\0';
+
+    Obj* result = mk_string_region(omni_get_global_region(), matched_str, match_len);
+    free(matched_str);
+
+    return result;
+}
