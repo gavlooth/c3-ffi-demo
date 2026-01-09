@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <pthread.h>
 #include "../../../third_party/arena/arena.h"
 
 // OPTIMIZATION: Inline allocation buffer for small objects (< 64 bytes)
@@ -30,6 +31,11 @@ typedef struct Region {
     /* OPTIMIZATION (T-opt-region-metadata-pointer-masking): Region ID for pointer masking */
     uint16_t region_id;          /* Unique region identifier (for encoded pointers) */
 
+    /* OPTIMIZATION (T-opt-thread-local-rc-detect): Thread-local detection for fast non-atomic RC */
+    pthread_t owner_thread;      /* Thread that created this region */
+    bool is_thread_local;        /* Cached detection result (true if only accessed by owner) */
+    bool has_external_refs;      /* Track if any external refs exist from other threads */
+
     int external_rc;            // Strong refs from OTHER regions/stack (atomic)
     int tether_count;           // Temporary "borrows" by threads (atomic)
     bool scope_alive;           // True if the semantic scope is still active
@@ -47,6 +53,10 @@ void region_exit(Region* r);
 // RC Management (Internal - use RegionRef for high level)
 void region_retain_internal(Region* r);
 void region_release_internal(Region* r);
+
+/* OPTIMIZATION (T-opt-thread-local-rc-detect): Thread-local detection */
+bool region_is_thread_local(Region* r);
+void region_mark_external_ref(Region* r);
 
 // Global Region Support
 Region* region_get_or_create(void);

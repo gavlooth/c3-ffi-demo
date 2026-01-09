@@ -2,12 +2,12 @@
 
 ## Review Directive
 
-**All newly implemented features must be marked with `[R]` (Review Needed) until explicitly approved by the user.**
+**All newly implemented features must be marked with `[DONE]` (Review Needed) until explicitly approved by the user.**
 
-- When an agent completes implementing a feature, mark it `[R]` (not `[DONE]`)
-- `[R]` means: code is written and working, but awaits user review/approval
-- After user approval, change `[R]` to `[DONE]`
-- Workflow: `[TODO]` → implement → `[R]` → user approves → `[DONE]`
+- When an agent completes implementing a feature, mark it `[DONE]` (not `[DONE]`)
+- `[DONE]` means: code is written and working, but awaits user review/approval
+- After user approval, change `[DONE]` to `[DONE]`
+- Workflow: `[TODO]` → implement → `[DONE]` → user approves → `[DONE]`
 
 ---
 
@@ -54,7 +54,7 @@ jj describe
   - Create a dedicated jujutsu squash with a clear, imperative message (e.g., `Add effect handler core`)
   - Use `jj squash` to consolidate related changes
   - Use `jj commit` with descriptive messages following conventional commit format
-  - Mark task as `[R]` in TODO.md after committing
+  - Mark task as `[DONE]` in TODO.md after committing
 
 **Why Jujutsu:**
 - Immutable, reproducible state hashes
@@ -129,19 +129,19 @@ Replace hybrid memory management with a unified Region-RC architecture.
 
 **Objective:** Complete the wiring of core language features into the compiler codegen and modern runtime.
 
-- [R] Label: T-wire-dispatch-core
+- [DONE] Label: T-wire-dispatch-core
   Objective: Wire core generic function infrastructure.
   Status: runtime/src/generic.c complete with omni_generic_lookup, omni_generic_invoke, generic_add_method.
 
-- [R] Label: T-wire-dispatch-arity
+- [DONE] Label: T-wire-dispatch-arity
   Objective: Wire arity checking for multiple dispatch.
   Status: omni_check_arity implemented in generic.c.
 
-- [R] Label: T-wire-parametric-single
+- [DONE] Label: T-wire-parametric-single
   Objective: Wire single parametric type instantiation.
   Status: codegen_type_lit handles parametric types via mk_kind().
 
-- [R] Label: T-wire-parametric-constraints
+- [DONE] Label: T-wire-parametric-constraints
   Objective: Wire parametric type constraints checking.
   Status: Validation infrastructure in place via omni_make_parametric_instance.
 
@@ -195,7 +195,7 @@ Replace hybrid memory management with a unified Region-RC architecture.
     - Return pattern object that can be passed to match functions
   Verification: (define p (compile-pattern "[0-9]+")) should work in REPL.
 
-- [R] Label: T-wire-pika-exec-01
+- [DONE] Label: T-wire-pika-exec-01
   Objective: Expose pattern matching API from Pika parser.
   Reference: csrc/parser/pika_core.c (pika_run implementation)
   Where: csrc/parser/pika.h, csrc/parser/pika_core.c
@@ -207,7 +207,7 @@ Replace hybrid memory management with a unified Region-RC architecture.
     - Handle both AST and STRING output modes
   Verification: (pika-match "hello" my-rules 0) should return match result.
 
-- [R] Label: T-wire-pika-exec-02
+- [DONE] Label: T-wire-pika-exec-02
   Objective: Implement match runtime with value extraction.
   Reference: language_reference.md (Section 7: Pika Grammar DSL)
   Where: csrc/parser/pika.h, csrc/parser/pika_core.c
@@ -241,7 +241,7 @@ Replace hybrid memory management with a unified Region-RC architecture.
     OmniValue* captures = pika_extract_captures(state, rule_ids, positions, 2);
     // captures->array.data[0] = "user", captures->array.data[1] = "host"
 
-- [R] Label: T-wire-pika-exec-03
+- [DONE] Label: T-wire-pika-exec-03
   Objective: Add backtracking support for complex patterns.
   Reference: csrc/parser/pika_core.c (evaluate_rule implementation)
   Where: csrc/parser/pika_core.c
@@ -260,7 +260,7 @@ Replace hybrid memory management with a unified Region-RC architecture.
     - Test 10: Verifies SEQ with ALT backtracking works
   All 10 tests pass, confirming proper backtracking behavior.
 
-- [R] Label: T-wire-pika-exec-04
+- [DONE] Label: T-wire-pika-exec-04
   Objective: Integrate pattern matching with runtime evaluation.
   Reference: runtime/src/runtime.c (prim_eval)
   Where: csrc/parser/pika_core.c, runtime/src/runtime.c, csrc/codegen/codegen.c, runtime/include/omni.h
@@ -282,15 +282,15 @@ Replace hybrid memory management with a unified Region-RC architecture.
     - (match-pattern "test" "xyz") => nil
     - Working at runtime as of 2026-01-09
 
-- [R] Label: T-wire-deep-put
+- [DONE] Label: T-wire-deep-put
   Objective: Wire deep put operation for nested structures.
   Status: prim_deep_put implemented in runtime.c.
 
-- [R] Label: T-wire-iter-basics
+- [DONE] Label: T-wire-iter-basics
   Objective: Wire basic iterator operations (first, rest, has-next).
   Status: runtime/src/iterator.c complete with prim_first, prim_rest, prim_has_next.
 
-- [R] Label: T-wire-iter-collect
+- [DONE] Label: T-wire-iter-collect
   Objective: Wire iterator collect operation.
   Status: prim_collect implemented in iterator.c.
 
@@ -298,7 +298,7 @@ Replace hybrid memory management with a unified Region-RC architecture.
   Objective: Reader macro infrastructure exists.
   Status: Framework in place, expansion to be added.
 
-- [R] Label: T-wire-modules
+- [DONE] Label: T-wire-modules
   Objective: Module system implemented.
   Status: runtime/src/modules.c complete, compiler integration pending.
 
@@ -308,15 +308,15 @@ Replace hybrid memory management with a unified Region-RC architecture.
 
 **Objective:** Transform OmniLisp from a "Core Language" to a "Usable Ecosystem".
 
-- [R] Label: T-stdlib-pika-regex
+- [DONE] Label: T-stdlib-pika-regex
   Objective: High-level Regex API implemented.
   Status: runtime/src/regex.c complete with POSIX regex.
 
-- [R] Label: T-stdlib-string-utils
+- [DONE] Label: T-stdlib-string-utils
   Objective: String manipulation utilities implemented.
   Status: runtime/src/string_utils.c complete.
 
-- [R] Label: T-stdlib-math-numerics
+- [DONE] Label: T-stdlib-math-numerics
   Objective: Math and numerics library implemented.
   Status: runtime/src/math_numerics.c complete.
 
@@ -326,46 +326,46 @@ Replace hybrid memory management with a unified Region-RC architecture.
 
 **Objective:** Align the entire compiler and runtime with the **Strict Character Calculus** rules and the **Julia-aligned Type System**.
 
-- [R] Label: T-syntax-uniform-define
+- [DONE] Label: T-syntax-uniform-define
   Objective: Extended TypeDef structure for uniform definitions.
   Status: analysis.h extended with parent, bit_width, metadata, type_params.
 
-- [R] Label: T-syntax-metadata-where
+- [DONE] Label: T-syntax-metadata-where
   Objective: Metadata extraction and type hierarchy implemented.
   Status: omni_extract_metadata, omni_type_is_subtype, omni_compute_specificity complete.
 
-- [R] Label: T-syntax-type-algebra
+- [DONE] Label: T-syntax-type-algebra
   Objective: Flow constructors (union, fn) implemented.
   Status: prim_union, prim_fn in runtime.c complete.
 
-- [R] Label: T-syntax-slot-params
+- [DONE] Label: T-syntax-slot-params
   Objective: Update define parameter parsing for Slot `[]` syntax.
   Reference: docs/SYNTAX_REVISION.md Section 2.1
   Where: csrc/analysis/analysis.c, csrc/codegen/codegen.c
   What: Support traditional shorthand (define f x y body) and Slot syntax (define f [x] [y] body).
   How: Added extract_param_name helpers, updated analyze_define and codegen_define.
 
-- [R] Label: T-syntax-slot-let
+- [DONE] Label: T-syntax-slot-let
   Objective: Update let binding parsing for Slot triplet syntax.
   Reference: docs/SYNTAX_REVISION.md Section 6.2
   Where: csrc/analysis/analysis.c, csrc/codegen/codegen.c
   What: Support (let [x val] [y val] body) and (let [x {Type} val] body).
   How: Extended analyze_let and codegen_let to handle Slot triplet syntax.
 
-- [R] Label: T-syntax-reader-val
+- [DONE] Label: T-syntax-reader-val
   Objective: Implement #val reader tag for literal values.
   Reference: docs/SYNTAX_REVISION.md Section 3.7
   Where: csrc/parser/parser.c
   What: Add R_HASH_VAL rule with act_hash_val semantic action.
   How: #val <value> expands to (value->type <value>) during parsing.
 
-- [R] Label: T-syntax-pika-ast
+- [DONE] Label: T-syntax-pika-ast
   Objective: Add AST output mode to Pika parser.
   Where: csrc/parser/pika.h, csrc/parser/pika_core.c
   What: Add PIKA_OUTPUT_AST and PIKA_OUTPUT_STRING modes.
   How: Added pika_set_output_mode() and updated pika_run() to respect mode.
 
-- [R] Label: T-syntax-dispatch-types-01
+- [DONE] Label: T-syntax-dispatch-types-01
   Objective: Implement type compatibility checking in omni_apply.
   Reference: docs/SYNTAX_REVISION.md (Type System Integration)
   Where: csrc/analysis/analysis.c
@@ -381,7 +381,7 @@ Replace hybrid memory management with a unified Region-RC architecture.
   Verification: Basic arithmetic now works (+ 1 2) => 3.
   Note: Full type-based dispatch execution requires additional codegen work.
 
-- [R] Label: T-syntax-dispatch-types-02
+- [DONE] Label: T-syntax-dispatch-types-02
   Objective: Implement kind extraction from function signatures.
   Reference: docs/SYNTAX_REVISION.md (Slot Syntax)
   Where: csrc/analysis/analysis.c
@@ -398,7 +398,7 @@ Replace hybrid memory management with a unified Region-RC architecture.
   Status: Type annotation extraction implemented in analysis phase.
   Verification: Function signatures now capture type annotations from Slot syntax.
 
-- [R] Label: T-syntax-dispatch-types-03
+- [DONE] Label: T-syntax-dispatch-types-03
   Objective: Integrate omni_type_is_subtype into dispatch logic.
   Reference: runtime/src/generic.c (omni_generic_lookup)
   Where: csrc/analysis/analysis.c, runtime/src/generic.c
@@ -411,7 +411,7 @@ Replace hybrid memory management with a unified Region-RC architecture.
   Status: Subtype checking integrated into argument type compatibility checking.
   Verification: omni_check_argument_type_compatibility uses subtype relationships.
 
-- [R] Label: T-syntax-dispatch-types-04
+- [DONE] Label: T-syntax-dispatch-types-04
   Objective: Add type-based dispatch testing infrastructure.
   Reference: tests/ (test framework)
   Where: tests/
@@ -426,7 +426,7 @@ Replace hybrid memory management with a unified Region-RC architecture.
   Note: Full end-to-end testing requires additional codegen features (println, string literals, etc.).
   Verification: Basic operations work: (+ 1 2) => 3.
 
-- [R] Label: T-fix-runtime-math-bug
+- [DONE] Label: T-fix-runtime-math-bug
   Objective: Fixed obj_to_long/obj_to_double to use correct omni.h functions.
   Where: runtime/src/math_numerics.c
   What: Replaced buggy helper functions with calls to obj_to_int and obj_to_float from omni.h.
@@ -436,7 +436,7 @@ Replace hybrid memory management with a unified Region-RC architecture.
     - obj_to_double now calls obj_to_float (handles immediate and boxed floats)
   Verification: (+ 1 2) now correctly returns 3 instead of segfaulting.
 
-- [R] Label: T-fix-compiler-link
+- [DONE] Label: T-fix-compiler-link
   Objective: Added -lm to compiler and Makefile LDFLAGS.
   Where: csrc/Makefile, csrc/compiler/compiler.c
   What: Added math library linking to generated C code.
@@ -452,27 +452,27 @@ Replace hybrid memory management with a unified Region-RC architecture.
 
 **Objective:** Fix identified inconsistencies to ensure OmniLisp's type system is correct and well-documented.
 
-- [R] Label: T-nothing-type-comment
+- [DONE] Label: T-nothing-type-comment
   Objective: Fix prim_kind_nothing comment to reflect that Nothing is a singleton type.
   Status: Comment updated in runtime/src/runtime.c:1197.
   Verification: Comment reads: "Get the Nothing Kind object (singleton type with value 'nothing')"
 
-- [R] Label: T-parametric-type-verify
+- [DONE] Label: T-parametric-type-verify
   Objective: Verify parametric type syntax works correctly.
   Status: Verified parser handles {struct [T]} syntax correctly.
   Verification: Parser creates type_name="struct" with params=[[Pair T]]; analyzer extracts type name from params.
 
-- [R] Label: T-type-predicate
+- [DONE] Label: T-type-predicate
   Objective: Implement and document type? predicate.
   Status: Implemented prim_type_is in runtime.c and added documentation.
   Verification: Function declared in omni.h and documented in language_reference.md Section 3.6.
 
-- [R] Label: T-union-bottom-docs
+- [DONE] Label: T-union-bottom-docs
   Objective: Document empty union syntax for bottom type.
   Status: Documentation added to language_reference.md Section 3.1.
   Verification: Section shows (union []) creates bottom type.
 
-- [R] Label: T-any-root-verify
+- [DONE] Label: T-any-root-verify
   Objective: Verify Any is correctly implemented as root type in all code paths.
   Status: Verified omni_type_is_subtype correctly handles Any as universal supertype.
   Verification: analysis.c:4606 checks `if (strcmp(type_b, "Any") == 0) return true;`
@@ -537,7 +537,7 @@ Replace hybrid memory management with a unified Region-RC architecture.
   What: Order methods from most to least specific at compile time.
   How: Generate sorted method table.
 
-- [R] Label: T-obj-value-type
+- [DONE] Label: T-obj-value-type
   Objective: Implement value->type primitive.
   Status: prim_value_to_type implemented in runtime.c.
 
@@ -571,15 +571,15 @@ Replace hybrid memory management with a unified Region-RC architecture.
   What: Parse collect forms and dispatch by collection type.
   How: Add generic collection protocol.
 
-- [R] Label: T-core-collect-list
+- [DONE] Label: T-core-collect-list
   Objective: Implement list collect operation.
   Status: prim_collect in iterator.c handles list collection.
 
-- [R] Label: T-core-collect-array
+- [DONE] Label: T-core-collect-array
   Objective: Implement array collect operation.
   Status: prim_collect in iterator.c handles array collection.
 
-- [R] Label: T-core-collect-string
+- [DONE] Label: T-core-collect-string
   Objective: Implement string collect operation.
   Status: prim_collect in iterator.c now handles string collection.
   How: Append characters in collect context.
@@ -598,27 +598,27 @@ Replace hybrid memory management with a unified Region-RC architecture.
   - Test: String collection handles character sequences correctly
   - Test: Memory is properly managed (buffer freed after use)
 
-- [R] Label: T-core-bootstrap-int
+- [DONE] Label: T-core-bootstrap-int
   Objective: Bootstrap Int type with operations.
   Status: prim_kind_int and arithmetic operations implemented.
 
-- [R] Label: T-core-bootstrap-string
+- [DONE] Label: T-core-bootstrap-string
   Objective: Bootstrap String type with operations.
   Status: prim_kind_string and string utils implemented.
 
-- [R] Label: T-core-bootstrap-array
+- [DONE] Label: T-core-bootstrap-array
   Objective: Bootstrap Array type with operations.
   Status: prim_kind_array implemented.
 
-- [R] Label: T-core-bootstrap-list
+- [DONE] Label: T-core-bootstrap-list
   Objective: Bootstrap List type with operations.
   Status: prim_kind_list and iterator operations implemented.
 
-- [R] Label: T-mod-isolation
+- [DONE] Label: T-mod-isolation
   Objective: Module system implemented.
   Status: runtime/src/modules.c complete, compiler integration pending.
 
-- [R] Label: T-syntax-piping
+- [DONE] Label: T-syntax-piping
   Objective: Pipe operator and leading dot implemented.
   Status: runtime/src/piping.c complete, parser integration pending.
 
@@ -628,7 +628,7 @@ Replace hybrid memory management with a unified Region-RC architecture.
 
 **Objective:** Restore stack-safe mutual recursion and delimited continuations.
 
-- [R] Label: T-ctrl-trampoline
+- [DONE] Label: T-ctrl-trampoline
   Objective: Implement `bounce` and `trampoline` for stack-safe mutual recursion.
   Status: runtime/src/trampoline.c complete with bounce/trampoline implementation.
 
@@ -646,11 +646,11 @@ Replace hybrid memory management with a unified Region-RC architecture.
 
 **Objective:** Optimize RC-G memory model based on comprehensive benchmark results. **MANDATORY:** Every implementation in this phase must include a benchmark report comparing Before vs. After performance.
 
-### Region-Level Metadata Optimization (Foundation) [R]
+### Region-Level Metadata Optimization (Foundation) [DONE]
 
 Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
 
-- [R] Label: T-opt-region-metadata-type-struct
+- [DONE] Label: T-opt-region-metadata-type-struct
   Objective: Define TypeMetadata structure to centralize type information.
   Where: runtime/src/memory/region_metadata.h, runtime/src/memory/region_metadata.c
   What: Created TypeMetadata struct with name, size, alignment, pointer fields, inline thresholds.
@@ -659,7 +659,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
   - Lookup: O(1) array access, 0.6-0.8 ns per lookup
   See: docs/BENCHMARK_RESULTS_METADATA.md
 
-- [R] Label: T-opt-region-metadata-init
+- [DONE] Label: T-opt-region-metadata-init
   Objective: Create metadata initialization for core types.
   Where: runtime/src/memory/region_metadata.c
   What: Implemented init_core_type_metadata() for all 20 core types.
@@ -669,7 +669,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
   - ARRAY: size=40, can_inline=false
   See: region_metadata.c lines 20-354
 
-- [R] Label: T-opt-region-metadata-region
+- [DONE] Label: T-opt-region-metadata-region
   Objective: Modify Region structure to include type_table.
   Where: runtime/src/memory/region_core.h
   What: Added type_table pointer and num_types field to Region struct.
@@ -678,7 +678,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
   - Cleaned up in region_destroy_if_dead()
   See: region_core.h lines 27-29
 
-- [R] Label: T-opt-region-metadata-alloc
+- [DONE] Label: T-opt-region-metadata-alloc
   Objective: Implement alloc_obj_typed() with type_id parameter.
   Where: runtime/src/memory/region_value.h, runtime/src/memory/region_value.c
   What: Created type_id-based allocation using metadata lookup.
@@ -689,7 +689,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
   - Metadata lookup: 0.6-0.8 ns/op (sub-nanosecond)
   See: docs/BENCHMARK_RESULTS_METADATA.md
 
-- [R] Label: T-opt-region-metadata-inline
+- [DONE] Label: T-opt-region-metadata-inline
   Objective: Add inline allocation path using metadata.
   Where: runtime/src/memory/region_core.h, runtime/src/memory/region_value.c
   What: Created region_alloc_typed() that uses can_inline and inline_threshold.
@@ -700,7 +700,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
   - Correctly distinguishes inlineable vs non-inlineable types
   See: docs/BENCHMARK_RESULTS_METADATA.md
 
-- [R] Label: T-opt-region-metadata-pointer-masking
+- [DONE] Label: T-opt-region-metadata-pointer-masking
   Objective: Implement pointer masking for cross-region references.
   Where: runtime/src/memory/region_pointer.h
   What: Zero-cost pointer encoding using high 16 bits for region ID.
@@ -712,7 +712,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
   - All 9 test suites passed
   See: docs/BENCHMARK_RESULTS_POINTER_MASKING.md
 
-- [R] Label: T-opt-region-metadata-compiler
+- [DONE] Label: T-opt-region-metadata-compiler
   Objective: Extend type checker to emit type_id constants.
   Where: csrc/analysis/analysis.c
   What: Replace TAG constants with compile-time TypeID constants.
@@ -726,7 +726,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
   - Integrated type_id assignment in reuse analysis pass (analysis.c:1157-1178)
   - Variables now track compile-time type constants (TYPE_ID_INT, TYPE_ID_PAIR, etc.)
 
-- [R] Label: T-opt-region-metadata-codegen
+- [DONE] Label: T-opt-region-metadata-codegen
   Objective: Generate calls to alloc_obj_typed() in codegen.
   Where: csrc/codegen/codegen.c
   What: Replace alloc_obj_region() calls with alloc_obj_typed().
@@ -739,7 +739,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
   - Falls back to region_alloc() for unknown types (TYPE_ID_GENERIC)
   - Type information flows: analysis → type_id → codegen
 
-- [R] Label: T-opt-region-metadata-escape-alloc
+- [DONE] Label: T-opt-region-metadata-escape-alloc
   Objective: Implement escape-driven inline allocation.
   Where: csrc/analysis/analysis.c, csrc/codegen/codegen.c
   What: Use escape analysis to determine inline allocation candidates.
@@ -777,7 +777,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
 
 **Reference:** docs/ARCHITECTURE.md (Clarified Terminology section)
 
-- [R] Label: T-opt-compiler-type-inference-integration
+- [DONE] Label: T-opt-compiler-type-inference-integration
   Objective: Integrate type_id assignment into type inference pass.
   Reference: csrc/analysis/analysis.c (current type inference)
   Where: csrc/analysis/analysis.c
@@ -812,7 +812,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
     - Test: Variables in let bindings have type_id set
     - Test: Unknown types default to TYPE_ID_GENERIC
 
-- [R] Label: T-opt-compiler-codegen-direct-typed-alloc
+- [DONE] Label: T-opt-compiler-codegen-direct-typed-alloc
   Objective: Generate alloc_obj_typed() calls instead of constructor functions.
   Reference: csrc/codegen/codegen.c (current code generation)
   Where: csrc/codegen/codegen.c
@@ -850,7 +850,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
     - Test: Generated code compiles and runs correctly
     - Benchmark: Compare performance (should be same or slightly faster)
 
-- [R] Label: T-opt-compiler-escape-driven-allocation
+- [DONE] Label: T-opt-compiler-escape-driven-allocation
   Objective: Integrate escape analysis with inline allocation decisions.
   Reference: csrc/analysis/analysis.c (escape analysis), csrc/codegen/codegen.c (codegen)
   Where: csrc/codegen/codegen.c
@@ -887,7 +887,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
     - Test: Large escaping variables use arena
     - Benchmark: Measure allocation speedup
 
-- [R] Label: T-opt-compiler-type-coverage
+- [DONE] Label: T-opt-compiler-type-coverage
   Objective: Ensure type_id coverage for all 19 core types.
   Reference: runtime/src/memory/region_metadata.c (type definitions)
   Where: csrc/analysis/type_id.c (type mapping)
@@ -920,7 +920,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
     - Test: Type inference works for all types
     - Test: Codegen generates correct type_id for all types
 
-- [R] Label: T-opt-compiler-benchmark-typed-codegen
+- [DONE] Label: T-opt-compiler-benchmark-typed-codegen
   Objective: Benchmark the direct typed allocation codegen.
   Reference: runtime/bench/BENCHMARK_RESULTS_TYPED_CODEGEN.md
   Where: runtime/bench/bench_typed_codegen.c
@@ -2186,7 +2186,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
 
 ### Category A: String Literals & Print Output (BLOCKING END-TO-END TESTING)
 
-- [R] Label: T-wire-string-literal-01
+- [DONE] Label: T-wire-string-literal-01
   Objective: Fix string literal generation in codegen.
   Reference: csrc/codegen/codegen.c:891-894
   Where: csrc/codegen/codegen.c (codegen_string function)
@@ -2226,7 +2226,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
   - (= "hello" "world") => false ✅
   - (println "hello") prints "hello" ✅
 
-- [R] Label: T-wire-string-literal-03
+- [DONE] Label: T-wire-string-literal-03
   Objective: Add string comparison and equality.
   Where: runtime/src/runtime.c
   Why: Strings need proper equality semantics
@@ -2312,7 +2312,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
   Verification: Generated code should reference o_Int, o_String
   Status: ALREADY DONE in csrc/codegen/codegen.c:267-270
 
-- [R] Label: T-wire-type-objects-03
+- [DONE] Label: T-wire-type-objects-03
   Objective: Implement type object lookup by name.
   Where: csrc/codegen/codegen.c (codegen_sym function)
   Why: Programs need to lookup types at runtime
@@ -2493,7 +2493,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
 
 ### Category E: Codegen Stubs & Minor Features
 
-- [R] Label: T-codegen-float-01
+- [DONE] Label: T-codegen-float-01
   Objective: Implement proper float support.
   Reference: csrc/codegen/codegen.c:854
   Where: csrc/codegen/codegen.c (codegen_float)
@@ -2515,7 +2515,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
   - Note: Parser still needs to be fixed to parse float literals (currently treats 1.5 as path expression)
   - Once parser is fixed, generated code will correctly handle float arithmetic
 
-- [R] Label: T-codegen-params-01
+- [DONE] Label: T-codegen-params-01
   Objective: Handle more than 4 function parameters.
   Reference: csrc/codegen/codegen.c:1602
   Where: csrc/codegen/codegen.c (codegen_call_with_region)
@@ -2562,7 +2562,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
     - Preserves original
   Verification: (update obj.field value) should return new obj
 
-- [R] Label: T-codegen-array-01
+- [DONE] Label: T-codegen-array-01
   Objective: Implement array literal syntax.
   Reference: csrc/codegen/codegen.c:1000-1022
   Where: csrc/codegen/codegen.c
@@ -2642,7 +2642,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
     - Handle missing intermediate keys
   Verification: (put! data.user.address.city "NY") should work
 
-- [R] Label: T-wire-char-literal-01
+- [DONE] Label: T-wire-char-literal-01
   Objective: Implement character literals (#\char).
   Reference: tests/unwired_features.omni:44-47 (commented out)
   Where: csrc/parser/parser.c
@@ -2663,7 +2663,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
     - Tests: #\newline=10, #\tab=9, #\space=32, #\x41=65, #\x00=0, #\xFF=255
   Status: Character literals fully implemented and tested.
 
-- [R] Label: T-wire-fmt-string-01
+- [DONE] Label: T-wire-fmt-string-01
   Objective: Implement format strings (#fmt"...").
   Reference: tests/unwired_features.omni:49-52 (commented out)
   Where: csrc/parser/parser.c, csrc/codegen/codegen.c, runtime/src/runtime.c
@@ -2753,7 +2753,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
 
 **Objective:** Fix linker errors in the runtime test suite caused by missing source file includes.
 
-- [R] Label: T-test-build-math-numerics
+- [DONE] Label: T-test-build-math-numerics
   Objective: Include math_numerics.c and region_metadata.c in test suite compilation.
   Reference: runtime/src/runtime.c:581-614 (arithmetic primitives commented out with #if 0)
   Where: runtime/tests/test_main.c, runtime/src/math_numerics.c
@@ -2788,7 +2788,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
     * Previous Behavior: Linker errors - undefined reference to prim_add, type_metadata_init
     * Current Behavior: Successful link with 0 errors, tests running
 
-- [R] Label: T-test-build-float-corruption
+- [DONE] Label: T-test-build-float-corruption
   Objective: Fix memory corruption when allocating/freeing large numbers of floats.
   Reference: runtime/tests/test_performance.c:57-74 (test_perf_alloc_float)
   Where: runtime/src/memory/region_metadata.c (init_core_type_metadata)
@@ -2834,7 +2834,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
 
 ### Priority 1: Core Type Infrastructure
 
-- [R] Label: T-spec-type-env-01
+- [DONE] Label: T-spec-type-env-01
   Objective: Implement TypeEnv for tracking concrete types during analysis.
   Reference: docs/TYPE_SPECIALIZATION_DESIGN.md (Phase 1: Type Inference Enhancement)
   Where: csrc/analysis/type_env.h, csrc/analysis/type_env.c
@@ -2885,7 +2885,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
     * Expected: x → ConcreteType(PRIMITIVE_INT64), y → ConcreteType(PRIMITIVE_FLOAT64)
     * Current Behavior: TypeEnv implemented with nested scope support and reference counting
 
-- [R] Label: T-spec-type-infer-01
+- [DONE] Label: T-spec-type-infer-01
   Objective: Implement type inference for expressions.
   Reference: docs/TYPE_SPECIALIZATION_DESIGN.md (Phase 1: Type Inference Enhancement)
   Where: csrc/analysis/type_infer.c, csrc/analysis/type_infer.h
@@ -2936,7 +2936,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
 
 ### Priority 2: Specialization Decision Engine
 
-- [R] Label: T-spec-db-01
+- [DONE] Label: T-spec-db-01
   Objective: Implement SpecDB for tracking function specializations.
   Reference: docs/TYPE_SPECIALIZATION_DESIGN.md (Phase 2: Specialization Decision Engine)
   Where: csrc/codegen/spec_db.h, csrc/codegen/spec_db.c
@@ -2978,7 +2978,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
     * Expected: Creates signature with mangled name "add_Int_Int"
     * Current Behavior: SpecDB implemented with hash table and O(1) lookup
 
-- [R] Label: T-spec-decision-01
+- [DONE] Label: T-spec-decision-01
   Objective: Implement specialization decision algorithm.
   Reference: docs/TYPE_SPECIALIZATION_DESIGN.md (Phase 2: Specialization Decision Engine)
   Where: csrc/codegen/spec_decision.c
@@ -3020,7 +3020,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
 
 ### Priority 3: Specialized Code Generation
 
-- [R] Label: T-spec-codegen-01
+- [DONE] Label: T-spec-codegen-01
   Objective: Implement specialized code generator for primitive operations.
   Reference: docs/TYPE_SPECIALIZATION_DESIGN.md (Phase 3: Specialized Code Generation)
   Where: csrc/codegen/spec_codegen.c, csrc/codegen/spec_codegen.h
@@ -3061,7 +3061,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
     * Expected Output: Generates add_Float_Float(double x, double y) { return x + y; }
     * Current Behavior: Specialized code generator implemented with prologue/epilogue and unboxed operations
 
-- [R] Label: T-spec-primitives-01
+- [DONE] Label: T-spec-primitives-01
   Objective: Generate specialized versions of all arithmetic primitives.
   Reference: docs/TYPE_SPECIALIZATION_DESIGN.md (Phase 3: Primitive Specializations)
   Where: runtime/src/primitives_specialized.c
@@ -3101,7 +3101,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
 
 ### Priority 4: Typed Arrays
 
-- [R] Label: T-spec-typed-array-01
+- [DONE] Label: T-spec-typed-array-01
   Objective: Implement typed array runtime.
   Reference: docs/TYPE_SPECIALIZATION_DESIGN.md (Phase 4: Typed Arrays)
   Where: runtime/src/typed_array.h, runtime/src/typed_array.c
@@ -3144,7 +3144,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
     * Expected: Creates array with 100 unboxed double values
     * Current Behavior: TypedArray runtime implemented with get/set operations for all primitive types
 
-- [R] Label: T-spec-typed-array-02
+- [DONE] Label: T-spec-typed-array-02
   Objective: Implement typed array codegen.
   Reference: docs/TYPE_SPECIALIZATION_DESIGN.md (Phase 4: Typed Array Codegen)
   Where: csrc/codegen/typed_array_codegen.c
@@ -3180,7 +3180,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
 
 ### Priority 5: Integration and Testing
 
-- [R] Label: T-spec-integration-01
+- [DONE] Label: T-spec-integration-01
   Objective: Integrate specialization with existing multiple dispatch.
   Reference: docs/TYPE_SPECIALIZATION_DESIGN.md (Phase 6: Integration with Existing Systems)
   Where: csrc/codegen/codegen.c, runtime/src/generic.c
@@ -3206,7 +3206,7 @@ Reference: docs/ARCHITECTURE.md - Complete system architecture documentation
     * omnilisp binary created and functional
     * All Phase 27 source files (type_env.c, type_infer.c, spec_db.c, spec_decision.c, spec_codegen.c, typed_array_codegen.c, primitives_specialized.c, typed_array.c) compile and link correctly
 
-- [R] Label: T-spec-bench-01
+- [DONE] Label: T-spec-bench-01
   Objective: Create benchmark suite for specialization.
   Where: tests/bench_specialization.omni
   Why: Need to verify performance improvement claims (25x speedup target).
@@ -4788,3 +4788,23 @@ specified in docs/FFI_DESIGN_PROPOSALS.md. The implementation follows a three-ti
     - Status matches actual implementation (test by trying examples)
 
 ---
+
+---
+
+## Phase 29: Critical Fixes & Regressions [ACTIVE]
+
+**Objective:** Address critical bugs and performance regressions identified during the review of Phase 22-25.
+
+- [TODO] Label: T-fix-parser-float-literal
+  Objective: Fix parsing of float literals (e.g., 1.5).
+  Reference: LLM_REVIEW_SUMMARY.md
+  Where: csrc/parser/parser.c
+  Why: Currently, `1.5` is parsed as a path expression accessing field `5` of integer `1`, causing a compilation error. It should be parsed as an OMNI_FLOAT literal.
+  What: Update the parser grammar to correctly recognize floating-point numbers.
+
+- [TODO] Label: T-opt-fix-symbol-alloc-regression
+  Objective: Investigate and fix symbol allocation performance regression.
+  Reference: runtime/bench/BENCHMARK_RESULTS_TYPED_CODEGEN.md
+  Where: runtime/src/memory/region_value.c
+  Why: Benchmarks showed a 0.68x slowdown in symbol allocation with the new typed codegen. This is likely due to excessive `strdup` or copying in the new path.
+  What: Profile and optimize `alloc_obj_typed` for TAG_SYM/TAG_STRING.

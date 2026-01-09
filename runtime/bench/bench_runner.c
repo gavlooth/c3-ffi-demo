@@ -28,6 +28,7 @@ extern int main_specialized(int argc, char** argv);
 extern int main_batched_transmigrate(int argc, char** argv);
 extern int main_fat_baseline(int argc, char** argv);
 extern int main_typed_codegen(int argc, char** argv);
+extern int main_thread_local_rc(int argc, char** argv);
 
 typedef struct {
     const char* name;
@@ -90,6 +91,11 @@ static BenchmarkSuite suites[] = {
         "typed_codegen",
         "Typed allocation codegen benchmark (T-opt-compiler-benchmark-typed-codegen)",
         main_typed_codegen
+    },
+    {
+        "thread_local_rc",
+        "Thread-local RC detection (T-opt-thread-local-rc-detect)",
+        main_thread_local_rc
     },
     { NULL, NULL, NULL }
 };
