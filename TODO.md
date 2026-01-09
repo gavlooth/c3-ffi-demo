@@ -231,6 +231,92 @@ Replace hybrid memory management with a unified Region-RC architecture.
     - Return pattern object that can be passed to match functions
   Verification: (define p (compile-pattern "[0-9]+")) should work in REPL.
 
+- [TODO] Label: T-wire-pattern-match-01
+  Objective: Implement is_pattern_match runtime function for match expressions.
+  Reference: docs/SYNTAX_REVISION.md (Pattern Matching), language_reference.md Section 6.3
+  Where: runtime/src/runtime.c or runtime/src/match.c (new file)
+  Why: Match expressions cannot execute without pattern matching runtime. Currently codegen generates calls to is_pattern_match but function doesn't exist.
+  What: Implement is_pattern_match function with support for literals, variables, destructuring, guards.
+
+  Implementation Details:
+    - **Function signature**: bool is_pattern_match(Obj* pattern, Obj* value)
+    - **Pattern types to support**:
+      * Literals: Int, Float, String, Char, Bool (true/false symbols), Nil
+      * Variables: Any symbol (except true/false/nil/_/&/when) binds and returns true
+      * Wildcard: _ symbol always matches
+      * Arrays: [x y z] destructuring (recursively call is_pattern_match)
+      * Guards: & syntax - evaluate guard expression after pattern match
+
+    - **Algorithm**:
+      1. Check pattern type (symbol vs array vs literal)
+      2. For symbols:
+         - _ → always return true
+         - true/false → compare with bool_value
+         - nil → compare with is_nil(value)
+         - other → bind as variable (return true, side effect binding)
+      3. For arrays:
+         - Value must be array/list with same length
+         - Recursively match each element
+         - Handle nested arrays
+      4. For literals:
+         - Direct equality comparison (== for ints, strcmp for strings, etc.)
+      5. Guards (& syntax):
+         - After pattern matches, evaluate guard expression
+         - Return is_truthy(guard_result)
+
+    - **Binding handling**:
+      - Pattern matching needs to support variable bindings
+      - Use a thread-local binding stack or pass binding context
+      - Bindings are visible in result expression and guard
+      - Example: (match [1 2] [x y] (+ x y)) → x=1, y=2
+
+    - **Code structure**:
+      ```c
+      // runtime/src/match.c
+      typedef struct PatternMatchContext {
+          HashTable* bindings;  // Variable bindings from pattern
+          Region* region;       // Region for allocations
+      } PatternMatchContext;
+
+      bool is_pattern_match(Obj* pattern, Obj* value, PatternMatchContext* ctx);
+      bool match_literal(Obj* pattern, Obj* value);
+      bool match_array(Obj* pattern, Obj* value, PatternMatchContext* ctx);
+      bool match_guard(Obj* guard_expr, PatternMatchContext* ctx);
+      ```
+
+    - **Dependencies**:
+      - Hashtable for bindings (use existing runtime/src/hashtable.c if available)
+      - Region for temporary allocations
+      - is_truthy() predicate (already exists)
+
+    - **Test cases**:
+      ```lisp
+      ;; Literals
+      (match 1 1 "yes" _ "no") → "yes"
+      (match 1 2 "yes" _ "no") → "no"
+
+      ;; Variables
+      (match 42 x x) → 42
+      (match [1 2] [x y] (+ x y)) → 3
+
+      ;; Arrays
+      (match [1 2] [x y] (+ x y)) → 3
+      (match (list 1 (list 2 3)) [1 [x y]] (+ x y)) → 5
+
+      ;; Guards (when & is implemented)
+      (match 15 [n & (> n 10)] "large" [n] "small") → "large"
+
+      ;; Wildcard
+      (match anything _ "caught") → "caught"
+      ```
+
+  Verification:
+    - Input: (match 1 1 "one" _ "other") should return "one"
+    - Input: (match 42 x x) should return 42
+    - Input: (match [1 2 3] [x y z] (+ x y)) should return 3
+    - Current Behavior: Compilation error "implicit declaration of function 'is_pattern_match'"
+    - Expected After: Match expressions execute correctly
+
 - [DONE] Label: T-wire-pika-exec-01
   Objective: Expose pattern matching API from Pika parser.
   Reference: csrc/parser/pika_core.c (pika_run implementation)

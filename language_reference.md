@@ -472,6 +472,27 @@ Sending a value through a channel performs an **Ownership Transfer**. The sendin
 
 **Pattern matching is the source of truth for all control flow in OmniLisp.** The `if` form is syntactic sugar that desugars to a binary `match`.
 
+#### Implementation Status
+
+**✅ Currently Working:**
+- `if` → `match` desugaring (all `if` expressions work)
+- Binary boolean match optimization (emits branchless ternary)
+- Guard syntax parsing and code generation
+- Match AST construction
+
+**⚠️ Partially Working:**
+- Literal pattern matching (infrastructure in place, needs `is_pattern_match`)
+- Variable pattern binding
+- Simple destructuring patterns
+
+**❌ Not Yet Implemented:**
+- `is_pattern_match()` runtime function
+- Full pattern matching execution
+- Complex destructuring with nested patterns
+- Splicing patterns (`..`)
+
+**TODO:** See task **T-wire-pattern-match-01** for `is_pattern_match` implementation.
+
 #### Syntax
 
 ```lisp
@@ -524,7 +545,7 @@ Decompose sequences and structures:
 
 ;; Dictionary destructuring
 (match #{:name "Alice" :age 30}
-  #{:name n :age a} (println n " is " a " years old"))
+  (:name :age) (println name " is " age " years old"))
 ```
 
 ##### 4. Splicing Patterns
@@ -910,7 +931,4 @@ true            ; true
 
 ; Quoting
 (quote x) / 'x                       ; Quote
-(quasiquote x) / `x                  ; Quasiquote
-(unquote x) / ,x                     ; Unquote in quasiquote
-(unquote-splicing x) / ,@x           ; Splice in quasiquote
 ```
