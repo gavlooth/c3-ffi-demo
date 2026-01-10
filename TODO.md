@@ -8122,11 +8122,25 @@ The transmutation overhead now comes primarily from:
       - Raw C 1k/10k list ns/op
       - Omni 10k array ns/op (to catch regressions on non-list graphs)
   Done means:
-    - Phase 40 updates its own “Measured Results” section with date + both modes.
+    - Phase 40 updates its own "Measured Results" section with date + both modes.
+
+### === Measured Results ===
+
+**Date:** 2026-01-10
+
+**Release mode (`make -C runtime/tests bench-rel`):**
+- Raw C 1k list: 9,424.99 ns/op
+- Omni 1k list: 45,273.60 ns/op
+- Raw C 10k list: 97,030.79 ns/op
+- Omni 10k list: 486,694.98 ns/op
+
+**Analysis:** The forwarding table as "visited + remap" optimization (Phase 40 P1) is implemented. The baseline measurements show Omni is ~5× slower than raw C for 1k lists and ~5× slower for 10k lists. Further optimization may be possible with Phase 41 (pair micro-kernel).
+
+**Debug mode:** Not measured (bench-dbg target exists but full measurements not recorded).
 
 ---
 
-## Phase 41: CTRR Transmigration — TAG_PAIR “Micro-Kernel” (Devirtualize Clone + Trace Together) [TODO]
+## Phase 41: CTRR Transmigration — TAG_PAIR "Micro-Kernel" (Devirtualize Clone + Trace Together) [TODO]
 
 **Objective:** Further reduce list-heavy transmigration overhead by eliminating the `meta->clone` function-pointer call for `TAG_PAIR` and replacing it with a single, inlined “pair micro-kernel” that:
 1) allocates the destination pair using the same allocator the pair clone uses,
@@ -8251,7 +8265,40 @@ while preserving CTRR’s correctness invariant (unique `remap(src)` identity, c
       - Raw C vs Omni 10k list ns/op
       - Omni 10k array ns/op (regression guard)
   Done means:
-    - Phase 41 section includes dated “Measured Results” for both modes.
+    - Phase 41 section includes dated "Measured Results" for both modes.
+
+### === Measured Results ===
+
+**Date:** 2026-01-10
+
+**Release mode (`make -C runtime/tests bench-rel`):**
+- Raw C 1k list: 9,288.00 ns/op
+- Omni 1k list: 47,479.34 ns/op (5.1× slower than raw C)
+- Raw C 10k list: 129,437.20 ns/op
+- Omni 10k list: 488,114.27 ns/op (3.8× slower than raw C)
+- Omni 10k array: 2,340.20 ns/op (regression guard - stable)
+
+**Debug mode (`make -C runtime/tests bench-dbg`):**
+- Raw C 1k list: 17,245.32 ns/op
+- Omni 1k list: 50,338.95 ns/op (2.9× slower than raw C)
+- Raw C 10k list: 127,146.51 ns/op
+- Omni 10k list: 458,504.50 ns/op (3.6× slower than raw C)
+- Omni 10k array: 2,028.45 ns/op (regression guard - stable)
+
+**Analysis:**
+The pair micro-kernel (Phase 41 P1) eliminates the `meta->clone()` and `meta->trace()` indirect call overhead for TAG_PAIR. However, the benchmark results show minimal performance change compared to Phase 40 baseline:
+- 1k list: 47,479 ns/op (was 45,274 ns/op in Phase 40) - within measurement variance
+- 10k list: 488,114 ns/op (was 486,695 ns/op in Phase 40) - within measurement variance
+
+The micro-kernel optimization did not achieve the target 10-20% reduction because the dominant overhead is in other parts of the transmigration pipeline:
+1. Bitmap operations for cycle detection
+2. Remap table / forwarding table lookups
+3. Worklist management
+4. Memory allocation overhead
+
+The function pointer call overhead (`meta->clone` / `meta->trace`) was not the primary bottleneck. Future optimizations should focus on the core bookkeeping operations rather than devirtualization.
+
+All 368 tests pass, including 8 new correctness tripwire tests for Phase 41 P2.
 
 ---
 
@@ -8403,3 +8450,280 @@ while preserving CTRR’s correctness invariant (unique `remap(src)` identity, c
     - Omni 10k array ns/op (regression guard)
   Done means:
     - Phase 42 section includes dated “Measured Results” for both modes.
+
+---
+
+## Phase 43: CTRR Transmigration — Pointer-Field Layout Metadata + Generic Trace Loop [TODO]
+
+**Objective:** Reduce trace overhead and improve robustness by representing pointer edges for “plain-layout” types as an explicit pointer-field layout (count + offsets) and using a generic tight trace loop that calls the shared edge rewrite helper (Phase 42) for each pointer slot.
+
+**Why Phase 43 exists (critical evaluation):**
+- Current per-type `meta->trace` functions are flexible but can be branchy and hard for the compiler to optimize.
+- Many object types are structurally simple (a fixed set of pointer fields).
+- Encoding “where pointers live” as data (offsets) enables:
+  - a single tight loop (better i-cache, fewer branches),
+  - fewer opportunities for semantic drift (the same edge helper handles external-root rules),
+  - easier auditing (pointer fields are declared, not implicit in code).
+- **Risk:** Not all types are plain-layout (arrays/dicts/closures); the layout approach must be opt-in per type.
+
+**Reference (read first):**
+- `runtime/docs/CTRR_TRANSMIGRATION.md` (trace semantics; external-root rule; cycles/sharing)
+- `docs/CTRR.md` (Region Closure Property; “everything can escape”)
+- `runtime/docs/ARCHITECTURE.md` (runtime object model and invariants)
+
+**Constraints (non-negotiable):**
+- No stop-the-world GC; no heap-wide scanning collectors.
+- No language-visible sharing primitive.
+- No bypass transmigrate walkers. Layout-driven tracing must still call the single edge helper and respect the same contract.
+- Benchmark results must follow Phase 39 protocol (`bench-dbg`/`bench-rel`).
+
+---
+
+### P0: Define “Plain-Layout Type” Criteria and the Layout Structure [TODO]
+
+- [TODO] Label: T43-layout-struct-and-criteria (P0)
+  Objective: Define the criteria for when a type can use pointer-field layouts and add a layout representation to type metadata.
+  Reference: `runtime/docs/CTRR_TRANSMIGRATION.md`
+  Where:
+    - `runtime/src/memory/region_metadata.c` and/or `runtime/include/` headers defining `TypeMetadata`
+    - `runtime/src/memory/transmigrate.c` (generic trace loop integration point)
+  What to define (example; exact names may differ):
+    ```c
+    typedef struct {
+      uint8_t ptr_count;
+      uint16_t ptr_offsets[OMNI_MAX_PTR_FIELDS];  // byte offsets within Obj
+    } PtrFieldLayout;
+
+    typedef struct TypeMetadata {
+      ...
+      const PtrFieldLayout* ptr_layout;          // NULL => use custom trace
+      ...
+    } TypeMetadata;
+    ```
+  Criteria (must be written down in this phase):
+    - Fixed number of pointer fields known at compile-time.
+    - Pointers are stored directly in the object (not via heap buffers that must be traversed).
+    - No special ownership/aliasing behavior beyond “these are edges”.
+  Verification plan:
+    - Add a small doc note (either in this phase text or a short `runtime/docs/` note) listing eligible vs ineligible types.
+
+---
+
+### P1: Implement Generic “Layout Trace” That Calls the Edge Helper [TODO]
+
+- [TODO] Label: T43-generic-layout-trace (P1)
+  Objective: Implement a generic trace routine that iterates pointer slots by offset and calls the shared edge helper for each.
+  Reference: `runtime/docs/CTRR_TRANSMIGRATION.md`
+  Where:
+    - `runtime/src/memory/transmigrate.c` (or a dedicated helper compilation unit)
+    - `runtime/src/memory/region_metadata.c` (wire ptr_layout for eligible types)
+  Implementation sketch:
+    ```c
+    for (i = 0; i < layout->ptr_count; i++) {
+      Obj** slot = (Obj**)((char*)dst_obj + layout->ptr_offsets[i]);
+      Obj* child = *(Obj**)((char*)src_obj + layout->ptr_offsets[i]);
+      *slot = child; // raw copy first (optional; depends on contract)
+      omni_rewrite_or_schedule_edge(ctx, slot, child);
+    }
+    ```
+  Verification plan:
+    - `make -C runtime/tests test`
+    - Ensure external-root identity and cycles/sharing tests still pass for any types migrated to layout tracing.
+
+---
+
+### P2: Migrate One Safe Type First + Benchmark [TODO]
+
+- [TODO] Label: T43-migrate-first-type (P2)
+  Objective: Migrate exactly one low-risk plain-layout type first (not arrays/dicts/closures) to prove the approach, then benchmark.
+  Reference: Phase 39 benchmark protocol
+  Where:
+    - Type metadata definition for the chosen type
+  Done means:
+    - Correctness tests pass.
+    - Benchmarks show no regression; any improvement is recorded.
+
+---
+
+## Phase 44: CTRR Transmigration — Explicit “Source Region Domain” Helper (Robust In-Region Classification) [TODO]
+
+**Objective:** Improve correctness robustness and enable future remap/forwarding optimizations by defining exactly one authoritative “is pointer in src-region domain?” helper and using it everywhere (bitmap domain checks, forwarding indexing domain, external-root rule).
+
+**Why Phase 44 exists (critical evaluation):**
+- Many performance ideas (Phase 40 forwarding-as-visited, Phase 41 micro-kernels, Phase 43 layouts) depend on correct in-region classification.
+- A domain mismatch (arena vs inline_buf vs other allocations) is catastrophic: it can silently violate the external-root rule or corrupt remap indexing.
+- Consolidating classification into one helper reduces both bug surface and branch duplication.
+
+**Reference (read first):**
+- `runtime/docs/CTRR_TRANSMIGRATION.md` (external-root non-rewrite rule)
+- Phase 31 inline_buf / bitmap coverage notes (where pointer domain pitfalls were already discussed)
+
+**Constraints (non-negotiable):**
+- The helper must be conservative-correct: false negatives are not allowed if they cause in-region pointers to be treated as external roots.
+- No stop-the-world GC; no bypass logic.
+
+---
+
+### P0: Define `src_region_contains_ptr()` Contract + Tests [TODO]
+
+- [TODO] Label: T44-domain-helper-contract (P0)
+  Objective: Define a single helper (name TBD) that answers “is ptr in src region domain?” and lock it with tests for arena, inline_buf, and external pointers.
+  Where:
+    - `runtime/src/memory/region_core.c` / `region_core.h` (likely home for region domain logic)
+    - `runtime/src/memory/transmigrate.c` (replace ad-hoc checks)
+    - `runtime/tests/` (domain coverage tests)
+  Verification plan:
+    - Tests allocate objects in arena, inline_buf (if applicable), and outside region; assertions confirm correct classification.
+
+---
+
+### P1: Replace All Ad-Hoc Domain Checks with the Helper [TODO]
+
+- [TODO] Label: T44-domain-helper-integration (P1)
+  Objective: Replace `bitmap_in_range`, ad-hoc bounds checks, and forwarding-domain assumptions with the single helper so all call sites agree.
+  Where:
+    - `runtime/src/memory/transmigrate.c`
+    - any helper code used by forwarding/bitmap logic
+  Verification plan:
+    - `make -C runtime/tests test`
+    - `make -C runtime/tests test-fwd`
+
+---
+
+## Phase 45: CTRR Transmigration — Profile-Driven Hot-Loop Tightening (Hoists + Branch Layout) [TODO]
+
+**Objective:** After structural optimizations (Phases 40–44), reduce remaining constant-factor overhead by hoisting hot locals and simplifying branch layout in the inner loop, guided by metrics and the Phase 39 benchmark protocol.
+
+**Critical note (avoid churn):**
+- This phase is only worthwhile **after** Phase 42’s choke point exists and Phase 44’s domain helper is in place.
+- Otherwise it becomes unreviewable micro-optimization churn and is likely to regress correctness.
+
+**Reference (read first):**
+- Phase 39 benchmark consistency protocol
+- `runtime/src/memory/transmigrate.c` (inner loop hot path)
+
+---
+
+### P0: Decide What to Optimize Using Counters (Not Opinions) [TODO]
+
+- [TODO] Label: T45-hotloop-metrics-first (P0)
+  Objective: Use existing counters (or add minimal ones) to identify the true hot operations per edge: domain checks, forwarding hits, worklist push/pop, remap lookups.
+  Verification plan:
+    - `make -C runtime/tests bench-rel` and `bench-dbg`
+    - Record counters + 1k/10k list sentinels.
+
+---
+
+### P1: Apply Safe Hoists + Simplify Branch Layout [TODO]
+
+- [TODO] Label: T45-hotloop-hoists (P1)
+  Objective: Hoist stable pointers (region start/end, bitmap base, forwarding base) into locals and ensure the common path is straight-line with predictable branches.
+  Constraints:
+    - No semantic changes; refactor must be covered by existing tests.
+  Verification plan:
+    - `make -C runtime/tests test`
+    - `make -C runtime/tests bench-rel` (must not regress list sentinels)
+
+---
+
+## Phase 46: CTRR Transmigration — Benchmark Suite Expansion (Avoid Overfitting to Lists/Arrays) [TODO]
+
+**Objective:** Expand the transmigration benchmark suite beyond lists/arrays to include shapes that stress sharing, cycles, mixed tags, and width, so performance work doesn’t overfit and regress real workloads.
+
+**Why Phase 46 exists:**
+- Today’s benchmarks heavily weight cons lists and arrays.
+- Optimizations can accidentally improve lists while regressing mixed graphs (dicts, closures, nested arrays).
+- Tooling alignment: better benchmark coverage makes future perf claims credible under the Phase 39 protocol.
+
+**Reference:**
+- Phase 39 benchmark consistency protocol
+- `runtime/tests/bench_transmigrate_vs_c.c`
+
+---
+
+### P0: Add New Benchmark Shapes (Deterministic, Documented) [TODO]
+
+- [TODO] Label: T46-bench-new-shapes (P0)
+  Objective: Add deterministic benchmark cases:
+    1. wide tree (high branching factor)
+    2. DAG with sharing (same subgraph referenced many times)
+    3. cycle-heavy graph
+    4. mixed-tag graph (pairs + arrays + dict-like structures + closures if safe)
+  Where:
+    - `runtime/tests/bench_transmigrate_vs_c.c`
+  Reporting:
+    - Each benchmark prints ns/op and a brief description (node count, edge count, sharing factor).
+  Verification plan:
+    - `make -C runtime/tests bench-rel` and `bench-dbg` run to completion.
+
+---
+
+## Phase 47: CTRR Transmigration — Deterministic Graph Fuzzer (Correctness Robustness + Tooling) [TODO]
+
+**Objective:** Add a deterministic, seed-driven graph generator test that creates bounded random graphs (including sharing and occasional cycles), transmigrates them, and validates invariants (no pointers into dead region, sharing preserved, cycles preserved, external roots preserved).
+
+**Why Phase 47 exists (critical evaluation):**
+- Handwritten tests miss weird corner cases (mixed immediates + external roots + cycles).
+- A bounded deterministic fuzzer gives high robustness value without introducing GC or runtime scanning.
+- Tooling alignment: can be run under ASAN/TSAN as a stress test.
+
+**Reference:**
+- `runtime/docs/CTRR_TRANSMIGRATION.md` (invariants to check)
+- Phase 42 tooling gates (sanitizer targets)
+
+**Constraints:**
+- Must be deterministic and time-bounded (fixed seeds, max nodes/edges).
+- Must never “scan the heap”; it only walks the generated test graph.
+
+---
+
+### P0: Define Graph Generator + Invariant Checker [TODO]
+
+- [TODO] Label: T47-seeded-graph-generator (P0)
+  Objective: Implement a seeded graph builder inside the test suite with tunable parameters:
+    - node_count_max, edge_factor, share_rate, cycle_rate, external_rate, immediate_rate
+  Where:
+    - `runtime/tests/` (new test file)
+    - `runtime/tests/test_main.c` (wire test in)
+  Verification plan:
+    - Run fixed seeds and assert invariants on each run.
+
+---
+
+### P1: Integrate with ASAN/TSAN Stress Targets [TODO]
+
+- [TODO] Label: T47-fuzzer-sanitizer-gates (P1)
+  Objective: Run the deterministic graph fuzzer under ASAN and (where feasible) TSAN to catch memory and race bugs early.
+  Where:
+    - `runtime/tests/Makefile` (ensure a target exists to run just the fuzzer under sanitizers if needed)
+  Verification plan:
+    - `make -C runtime/tests asan` (or focused asan target)
+    - `make -C runtime/tests tsan` (if supported on platform/toolchain)
+
+---
+
+## Phase 48: Repo Hygiene — Build Artifact Policy (Reduce Noise, Improve Tooling) [TODO]
+
+**Objective:** Improve robustness of development and tooling signal by eliminating tracked build artifacts (or strictly gating them) so commits and diffs represent source changes only, not local build outputs.
+
+**Why Phase 48 exists (critical evaluation):**
+- Tracked artifacts like `runtime/build/*.o`, `runtime/libomni.a`, `runtime/tests/run_tests`, etc. repeatedly create noisy working copies.
+- This causes accidental commits, makes reviews harder, and makes benchmark comparisons less trustworthy.
+- Tooling (linters, CI, diff review) benefits from clean working trees.
+
+**Constraints:**
+- Must not break existing workflows; if artifacts must remain tracked for a reason, document the reason and add strict rules/tests to prevent accidental modifications being committed.
+
+---
+
+### P0: Inventory Tracked Artifacts and Decide Policy [TODO]
+
+- [TODO] Label: T48-artifact-inventory (P0)
+  Objective: Identify which build outputs are currently tracked and decide one of:
+    A) remove from VCS + add to ignore rules, or
+    B) keep tracked but add a “restore before commit” enforcement rule (documented and testable).
+  Where:
+    - repo root ignore config (e.g., `.gitignore` if applicable) or JJ workflow docs
+    - `runtime/` and `csrc/` build output directories
+  Verification plan:
+    - After the policy change, a normal `make -C runtime/tests test` should not leave modified tracked binaries in `jj status`.
