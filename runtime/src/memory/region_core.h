@@ -55,6 +55,14 @@ struct Region {
     int external_rc;            // Strong refs from OTHER regions/stack (atomic)
     int tether_count;           // Temporary "borrows" by threads (atomic)
     bool scope_alive;           // True if the semantic scope is still active
+
+    /* Issue 2 P3: Region accounting counters */
+    size_t bytes_allocated_total;     /* Total bytes allocated in this region */
+    size_t bytes_allocated_peak;      /* Peak allocation for memory pressure detection */
+    size_t inline_buf_used_bytes;   /* Bytes used in inline buffer */
+    size_t escape_repair_count;      /* How often auto-repair triggered */
+    size_t chunk_count;             /* Number of arena chunks allocated */
+    ArenaChunk* last_arena_end;     /* Internal: detect chunk growth without touching third_party */
 };
 
 #include "region_metadata.h"  /* Region-level type metadata (must come after Region typedef) */
@@ -93,6 +101,8 @@ void region_tether_end(Region* r);
  * For large objects or exhausted buffer: Falls back to arena_alloc
  */
 static inline void* region_alloc(Region* r, size_t size) {
+    if (!r) return NULL;
+
     // FAST PATH: Inline buffer for small objects (< 64 bytes)
     if (size <= REGION_INLINE_MAX_ALLOC && r) {
         InlineBuffer* buf = &r->inline_buf;
@@ -106,13 +116,34 @@ static inline void* region_alloc(Region* r, size_t size) {
         if (buf->offset + aligned_size <= buf->capacity) {
             void* ptr = &buf->buffer[buf->offset];
             buf->offset += aligned_size;
+
+            /* Issue 2 P3: Update accounting for inline allocation */
+            r->bytes_allocated_total += aligned_size;
+            r->inline_buf_used_bytes += aligned_size;
+            if (r->inline_buf_used_bytes > r->bytes_allocated_peak) {
+                r->bytes_allocated_peak = r->inline_buf_used_bytes;
+            }
+
             return ptr;
         }
         // Fall through to arena if inline buffer is exhausted
     }
 
-    // SLOW PATH: use arena allocator for large objects or exhausted inline buffer
-    return arena_alloc(&r->arena, size);
+    /* Issue 2 P3: Update accounting for arena allocation and track chunk count */
+    ArenaChunk* before = r->arena.end;
+    void* ptr = arena_alloc(&r->arena, size);
+
+    if (r->arena.end != before) {
+        r->chunk_count++;
+        r->last_arena_end = r->arena.end;
+    }
+
+    r->bytes_allocated_total += size;
+    if (r->bytes_allocated_total > r->bytes_allocated_peak) {
+        r->bytes_allocated_peak = r->bytes_allocated_total;
+    }
+
+    return ptr;
 }
 
 void region_splice(Region* dest, Region* src, void* start_ptr, void* end_ptr);

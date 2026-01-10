@@ -328,9 +328,9 @@ jj describe
 
 **Reality check (constructive criticism):** `runtime/docs/REGION_ACCOUNTING.md` is normative, but `struct Region` currently has none of the required accounting fields, and the runtime has multiple pointer-storing primitives (arrays/dicts/atoms/channels) that bypass any “auto-repair” barrier. That means the *contract* is not currently enforced.
 
-#### P3: Implement per-region accounting counters (minimal, deterministic, low overhead) [TODO]
+#### P3: Implement per-region accounting counters (minimal, deterministic, low overhead) [DONE] (Review Needed)
 
-- [TODO] Label: I2-impl-region-accounting-counters (P3)
+- [DONE] (Review Needed) Label: I2-impl-region-accounting-counters (P3)
   Objective: Implement the **required** per-region accounting counters described in `runtime/docs/REGION_ACCOUNTING.md`, including a way to count arena chunk growth without heap scanning.
   Reference (read first):
     - `runtime/docs/REGION_ACCOUNTING.md` (Sections 2–4)

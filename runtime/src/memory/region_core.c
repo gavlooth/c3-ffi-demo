@@ -40,8 +40,16 @@ static inline void region_reset(Region* r) {
     r->scope_alive = true;
     // Reset thread-local tracking (OPTIMIZATION: T-opt-thread-local-rc-detect)
     r->owner_thread = pthread_self();
-    r->is_thread_local = true;  // Assume thread-local until proven otherwise
+    r->is_thread_local = true; // Assume thread-local until proven otherwise
     r->has_external_refs = false;
+
+    /* Issue 2 P3: Reset accounting counters */
+    r->bytes_allocated_total = 0;
+    r->bytes_allocated_peak = 0;
+    r->inline_buf_used_bytes = 0;
+    r->escape_repair_count = 0;
+    r->chunk_count = 0;
+    r->last_arena_end = NULL;
 }
 
 Region* region_create(void) {
@@ -78,6 +86,13 @@ Region* region_create(void) {
     // Initialize type metadata (OPTIMIZATION: T-opt-region-metadata)
     type_metadata_init(r);
 
+    /* Issue 2 P3: Initialize accounting counters */
+    r->bytes_allocated_total = 0;
+    r->bytes_allocated_peak = 0;
+    r->inline_buf_used_bytes = 0;
+    r->escape_repair_count = 0;
+    r->chunk_count = 0;
+    r->last_arena_end = NULL;
     // Assign region ID (OPTIMIZATION: T-opt-region-metadata-pointer-masking)
     r->region_id = __atomic_fetch_add(&g_next_region_id, 1, __ATOMIC_SEQ_CST);
 
