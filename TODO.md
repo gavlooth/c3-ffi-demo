@@ -8123,3 +8123,132 @@ The transmutation overhead now comes primarily from:
       - Omni 10k array ns/op (to catch regressions on non-list graphs)
   Done means:
     - Phase 40 updates its own “Measured Results” section with date + both modes.
+
+---
+
+## Phase 41: CTRR Transmigration — TAG_PAIR “Micro-Kernel” (Devirtualize Clone + Trace Together) [TODO]
+
+**Objective:** Further reduce list-heavy transmigration overhead by eliminating the `meta->clone` function-pointer call for `TAG_PAIR` and replacing it with a single, inlined “pair micro-kernel” that:
+1) allocates the destination pair using the same allocator the pair clone uses,
+2) copies raw `car/cdr` fields from the source pair into the destination pair,
+3) applies the exact same edge rewrite rules (immediates skip; external roots preserved; in-region pointers scheduled/remapped),
+while preserving CTRR’s correctness invariant (unique `remap(src)` identity, cycles/sharing preservation, and external-root non-rewrite).
+
+**Why Phase 41 exists (risk/benefit analysis):**
+- After Phase 38/39, list performance is still dominated by constant-factor per-node overhead.
+- Phase 38 removed the indirect `meta->trace` call for pairs; Phase 41 targets the remaining indirect call in the hot loop: `meta->clone`.
+- **Risk:** This is high-ROI but high-risk: it can silently diverge from metadata semantics if the pair layout changes, if clone semantics change (e.g., header-only clone), or if hidden invariants exist (header flags, marks, RC fields, etc.).
+- Mitigation: (1) audit the real pair-clone semantics first, (2) centralize pair field access, and (3) add “tripwire tests” that fail on semantic drift.
+
+**Reference (read first):**
+- `runtime/docs/CTRR_TRANSMIGRATION.md` (clone/trace contract; cycles/sharing; external-root rule)
+- `docs/CTRR.md` (Region Closure Property; “everything can escape”)
+- `runtime/docs/ARCHITECTURE.md` (CTRR vs runtime responsibilities)
+- `TODO.md` (Head-of-file “Transmigration Directive” correctness invariant)
+
+**Constraints (non-negotiable):**
+- No stop-the-world GC; no heap-wide scanning collectors.
+- No language-visible sharing primitive (`(share v)` or similar is forbidden).
+- No alternate transmigrate implementation / shape-specific bypass walker.
+- Must stay inside the single metadata-driven transmigration machinery (clone/remap/trace + worklist); Phase 41 is a *dispatch specialization*, not a second algorithm.
+- Benchmark claims must follow the Phase 39 benchmark consistency protocol (`bench-dbg` and `bench-rel`).
+
+**Baseline / ROI target (record before implementation):**
+- Run:
+  - `make -C runtime/tests bench-rel`
+  - `make -C runtime/tests bench-dbg`
+- Success target:
+  - ≥ 10–20% reduction in Omni 10k list ns/op in **bench-rel**, with no regressions on arrays or correctness.
+
+---
+
+### P0: Locate the Real Pair Clone Semantics (No Guessing) [TODO]
+
+- [TODO] Label: T41-pair-clone-audit (P0)
+  Objective: Identify exactly what the current pair clone does (allocator used + fields initialized + invariants), and document it as the contract the micro-kernel must match.
+  Reference: `runtime/docs/CTRR_TRANSMIGRATION.md`
+  Where:
+    - `runtime/src/memory/region_metadata.c` (or wherever `TAG_PAIR` metadata is defined)
+    - `runtime/src/memory/transmigrate.c` (current pair inline dispatch sites)
+    - `runtime/include/` headers that define `Obj` layout / pair helpers
+  Why:
+    We must not “reimplement clone” by assumption. If pair clone initializes extra fields (tag/type_id/mark/rc flags), the micro-kernel must do the same.
+  What to produce:
+    1. A short “Pair Clone Contract” note embedded in this phase section (or a small doc in `runtime/docs/` if it’s too long).
+    2. A checklist of fields that must be initialized identically to the metadata clone.
+  Verification plan:
+    - Add a debug-only test that compares a metadata-cloned pair vs micro-kernel-cloned pair for expected header invariants (only fields that are stable/meaningful).
+
+---
+
+### P1: Implement Pair Micro-Kernel (Allocate + Copy + Edge Rewrite) [TODO]
+
+- [TODO] Label: T41-pair-microkernel (P1)
+  Objective: Replace the pair metadata clone+trace path with an inlined, single-pass micro-kernel for `TAG_PAIR` that removes both indirect calls (`meta->clone` and `meta->trace`) in the hot loop.
+  Reference: `runtime/docs/CTRR_TRANSMIGRATION.md` (must preserve semantics)
+  Where:
+    - `runtime/src/memory/transmigrate.c` (the core “process item” loop and the `TAG_PAIR` specialization)
+    - Pair allocation helpers (wherever the metadata clone currently allocates pairs in `dest_region`)
+    - `runtime/src/memory/region_metadata.c` (only if metadata must expose a safe allocator helper; do not fork semantics)
+  Required semantics (must match metadata behavior):
+    1. **Allocation:** allocate destination pair in `dest_region` using the same allocator as the pair metadata clone.
+    2. **Header init:** set tag/type_id/flags exactly as metadata clone would.
+    3. **Field copy:** copy raw edges from `old_obj->a` and `old_obj->b` into `new_obj->a/b` before rewrite logic.
+    4. **Edge rewrite rules (unchanged):**
+       - immediates: leave as-is (do not schedule)
+       - external pointers (not in src region): treat as roots, never rewrite
+       - in-region pointers:
+         - if already remapped: rewrite immediately to `remap(child)`
+         - else: push to Phase 37 inline worklist (no per-edge allocation)
+    5. **Remap identity:** register `remap_put(src_pair, dst_pair)` exactly once.
+  Pseudocode:
+    ```c
+    // in processing loop, when old_tag == TAG_PAIR:
+    Obj *dst = alloc_pair_in_dest(dest_region);      // same allocator as metadata clone
+    init_pair_header_like_clone(dst);
+    dst->a = old->a; dst->b = old->b;               // raw copy
+    remap_register(old, dst);                       // unique identity
+    rewrite_or_schedule_edge(&dst->a, old->a);
+    rewrite_or_schedule_edge(&dst->b, old->b);
+    *slot = dst;
+    ```
+  Verification plan:
+    - `make -C runtime/tests test`
+    - `make -C runtime/tests test-fwd` (exercise forwarding path + pair micro-kernel together)
+    - `make -C runtime/tests bench-rel` and `bench-dbg` (record sentinels)
+
+---
+
+### P2: Correctness “Tripwires” (Prevent Semantic Drift) [TODO]
+
+- [TODO] Label: T41-pair-microkernel-tests (P2)
+  Objective: Add tests that would fail if the micro-kernel deviates from metadata clone+trace semantics (cycles, sharing, external roots, immediates, header invariants).
+  Reference: `runtime/docs/CTRR_TRANSMIGRATION.md`
+  Where:
+    - `runtime/tests/` (new test file; wired into `runtime/tests/test_main.c`)
+  What to test (minimum):
+    1. **Cycle preservation:** cyclic pair list remains cyclic after transmigrate.
+    2. **Sharing preservation:** DAG sharing is preserved (two edges pointing to same src map to same dst).
+    3. **External root rule:** external pointers remain identical (not rewritten) even when encountered via pairs.
+    4. **Immediate edges:** immediate car/cdr are preserved and do not trigger worklist pushes.
+    5. **Header consistency tripwire:** in a debug build, compare pair created by metadata clone vs micro-kernel clone for expected header invariants.
+  Verification plan:
+    - `make -C runtime/tests test`
+
+---
+
+### P3: Benchmark Reporting (Phase 39 Protocol) [TODO]
+
+- [TODO] Label: T41-bench-reporting (P3)
+  Objective: Record before/after using Phase 39’s benchmark consistency protocol and report the impact on list sentinels without regressing arrays.
+  Reference: `runtime/tests/Makefile` (bench-dbg/bench-rel), `runtime/tests/bench_transmigrate_vs_c.c`
+  Protocol:
+    - Run both:
+      - `make -C runtime/tests bench-rel`
+      - `make -C runtime/tests bench-dbg`
+    - Record:
+      - Raw C vs Omni 1k list ns/op
+      - Raw C vs Omni 10k list ns/op
+      - Omni 10k array ns/op (regression guard)
+  Done means:
+    - Phase 41 section includes dated “Measured Results” for both modes.
