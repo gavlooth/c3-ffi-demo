@@ -98,7 +98,10 @@ This is the largest “robustness unlock”. Per-region RC cannot reclaim cycles
     - Define a region partial order (e.g., creation time / nesting depth).
     - Rule: a store into an object in region `R_old` may only reference values in `R_old` or an “older/equal” region (never a younger region).
     - If code attempts to store a younger pointer into an older object:
-      - CTRR must either (a) transmigrate first, or (b) prohibit/guard with runtime barrier in debug builds.
+      - The runtime must **auto-repair** the store (no language changes, no user-visible `(share ...)`), using:
+        - transmigration for “small” values/regions,
+        - region coalescing/merge (“promote the region”) for “large” values/regions,
+        - and a well-defined, reproducible size heuristic (see R2-auto-repair-policy below).
   Verification plan:
     - Doc includes a table of allowed/disallowed cases with examples.
     - Include at least 2 examples showing how this prevents region cycles.
@@ -111,16 +114,86 @@ This is the largest “robustness unlock”. Per-region RC cannot reclaim cycles
     - `runtime/src/memory/` (helpers to map pointer→region id/domain)
   Why:
     The language is mutable; if we don’t enforce the region rule at mutation points, cycles/leaks appear.
-  Implementation plan (pseudocode):
+  Implementation plan (pseudocode; auto-repair, never abort):
     - `store_slot(obj_in_Rold, slot, value)`:
       1. Determine region of `obj` (R_obj).
       2. Determine region of `value` if pointer into a region (R_val).
       3. If `R_val` is younger than `R_obj`:
-         - Option A (preferred, transparent): `value2 = transmigrate(value, src=R_val, dst=R_obj_or_parent)` then store `value2`.
-         - Option B (debug gate): abort with message explaining illegal store and suggesting transmigrate insertion.
+         - Choose repair action via the size heuristic (see R2-auto-repair-policy):
+           - If “small”: `value2 = transmigrate(value, src=R_val, dst=R_obj_or_parent)` then store `value2`.
+           - If “large”: `region_merge(R_val, into=R_obj_or_parent)` then store original `value` (now in unified lifetime).
   Verification plan:
-    - Define tests that attempt illegal stores and confirm behavior (abort in debug OR auto-transmigrate if that’s the chosen contract).
+    - Define tests that attempt illegal stores and confirm behavior is always safe and automatic (no abort):
+      - illegal younger→older store triggers *either* transmigrate or merge, depending on configured heuristic thresholds.
     - Run under ASAN/TSAN once tooling exists (Issue 7/9).
+
+- [TODO] Label: R2-auto-repair-policy
+  Objective: Specify the **auto-repair** policy for illegal younger→older stores, including the “size heuristic” you want: small ⇒ transmigrate, large ⇒ coalesce/merge.
+  Reference: `runtime/docs/REGION_DEPENDENCY_RULES.md`, `runtime/docs/REGION_RC_MODEL.md`
+  Where:
+    - Add section: `runtime/docs/REGION_DEPENDENCY_RULES.md` (“Auto-Repair Policy: Transmigrate vs Merge”)
+    - Add section: `runtime/docs/REGION_RC_MODEL.md` (“Why region cycles must be prevented; why auto-repair is mandatory in a mutable Lisp”)
+  Why:
+    In a mutable Lisp, the program can create new lifetime dependencies at runtime via mutation. If the runtime doesn’t auto-repair these, per-region RC is either:
+    - unsound (dangling pointers when younger regions die), or
+    - incomplete (region cycles retained forever if cross-region refs keep regions alive).
+    Auto-repair turns mutation-time lifetime changes into a guaranteed-safe operation.
+  Policy requirements (must be explicit in the doc):
+    1. **No user-visible syntax:** no `(share v)` or opt-in primitives.
+    2. **No debug abort as the contract:** aborts may exist as optional instrumentation, but the language/runtime contract is “always repairs automatically”.
+    3. **Deterministic decision:** given the same configuration and same allocation sizes, the repair choice should be predictable (for reproducible benchmarks).
+    4. **No STW GC:** repair must be local (transmigrate) or structural (merge), never heap scanning.
+  Size heuristic (recommended to document and implement in this order, from simplest to more precise):
+    - Heuristic H0 (default): compare **region allocated bytes**:
+      - if `bytes_allocated(R_val) >= MERGE_THRESHOLD_BYTES` ⇒ merge `R_val` into `R_obj`
+      - else ⇒ transmigrate the stored value into `R_obj`
+    - Heuristic H1 (optional): compare **estimated reachable size** from the stored root, with a bounded traversal budget:
+      - stop after N nodes/bytes and treat as “large” if budget exceeded
+      - NOTE: this is still not a GC (it only traverses the value graph being stored), but it is more complex and must be justified by perf wins.
+  Merge safety constraints (must be explicit):
+    - If merge cannot be performed safely (e.g., region ownership/threading constraints, or region is already shared in an incompatible way), then the runtime must fall back to transmigration (correctness over performance).
+  Verification plan:
+    - Provide 3 concrete behavioral examples in the doc:
+      1. small young list stored into older dict ⇒ transmigrate
+      2. large young region stored into older structure ⇒ merge
+      3. merge not permitted ⇒ transmigrate fallback (still safe)
+
+- [TODO] Label: R2-mutation-site-inventory
+  Objective: Inventory every runtime mutation primitive that can create cross-region edges and therefore must use the store barrier / auto-repair policy.
+  Reference: `runtime/docs/REGION_DEPENDENCY_RULES.md` (auto-repair contract)
+  Where:
+    - List and link to the exact functions implementing:
+      - `set-car!`, `set-cdr!`
+      - array/vector set
+      - dict/map set
+      - any internal structure mutations (closure/env updates, object field sets)
+  Why:
+    Region-cycle prevention fails if even one mutation path bypasses the barrier.
+  Done means:
+    - The inventory is complete and includes “how to test” each mutation site.
+    - The inventory explicitly says “all must call the same store helper”.
+
+- [TODO] Label: R2-auto-repair-tests
+  Objective: Define a regression test plan proving auto-repair prevents region cycles without changing language syntax.
+  Reference: `runtime/docs/REGION_DEPENDENCY_RULES.md`
+  Where:
+    - Planned tests: `runtime/tests/` (new test file, e.g. `test_region_cycle_prevention.c`)
+  Test plan (minimum):
+    1. **Younger→older store repairs safely (no dangling pointers):**
+       - Create `R_old` and `R_young`.
+       - Allocate container in `R_old`, value in `R_young`.
+       - Perform mutation store.
+       - Exit `R_young` scope.
+       - Assert container still points to a valid object/value (either migrated or merged).
+    2. **Heuristic branch coverage:**
+       - Configure threshold low to force merge; verify merge path taken.
+       - Configure threshold high to force transmigrate; verify transmigrate path taken.
+    3. **No region cycles retained:**
+       - Construct scenario that would create `R_old ↔ R_young` cycle without repair.
+       - Verify that after repair the graph does not contain any pointer into a dead region and region liveness counters drop as expected.
+  Verification commands:
+    - `make -C runtime/tests test`
+    - Add ASAN/TSAN commands once sanitizer gates exist (Issue 9).
 
 ------------------------------------------------------------------------------
 
@@ -324,4 +397,3 @@ This is not “runtime code” but it materially affects robustness of the workf
     - Decide policy in `runtime/docs/DEV_HYGIENE.md` (new) and align with JJ workflow.
   Verification plan:
     - After running tests/bench, `jj status` should not show modified tracked binaries/objects under normal workflows.
-
