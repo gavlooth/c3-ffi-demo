@@ -103,6 +103,29 @@ TODO.md must be updated when task are complete
 
 Every task added to `TODO.md` MUST be written with sufficient detail that a developer with **zero context** could implement it immediately without asking clarifying questions.
 
+### Issue / Phase Authoring Directive (Agent-Proof)
+
+**Do not insert new “issues” (phases) near the top of `TODO.md`.** Phases are numbered and referenced by number in discussions, commits, and docs, so the file must remain stable and append-oriented.
+
+Rules (mandatory):
+1. **Append-only numbering:** When creating a new phase, add it as `## Phase NN: ...` using the next available integer `NN`. Never renumber existing phases.
+2. **No duplicates:** There must be exactly one header for each phase number. If a phase needs revision, append an “Amendment” subsection inside that phase instead of creating a second copy elsewhere.
+3. **Dependency order:** Phases must be ordered top-to-bottom by dependency (earlier phases provide prerequisites/invariants for later phases).
+4. **Status required:** Every task line must be marked as one of: `TODO`, `IN_PROGRESS`, `DONE`, or `N/A`. If `N/A`, include a one-line reason. Never delete old tasks; mark them `N/A` instead.
+
+Required “agent-proof” structure for new phases/tasks:
+- **Objective:** 1–2 sentences describing the concrete outcome.
+- **Reference (read first):** exact doc paths that explain the theory/contract (e.g. `runtime/docs/CTRR_TRANSMIGRATION.md`).
+- **Constraints:** explicitly restate “no stop-the-world GC”, “no language-visible sharing primitives”, and any phase-specific invariants.
+- **Subtasks (P0/P1/P2…):** each subtask must include:
+  - **Label:** short, unique, grep-able (e.g. `T38-hot-tag-inline-dispatch`).
+  - **Where:** exact file paths to modify.
+  - **Why:** the architectural reason; what breaks or is slow today.
+  - **What to change:** numbered steps (what to add/remove/change).
+  - **Implementation details:** include pseudocode in C/Lisp and name the key structs/functions/macros to touch.
+  - **Verification plan:** at least one concrete test case (source + expected behavior) and the exact command(s) to run.
+  - **Performance plan (if perf-related):** baseline numbers + a measurable target (e.g. “`bench` 10k list ns/op improves ≥ 20%”).
+
 **A task is INCOMPLETE if it lacks:**
 1.  **Reference:** A link to the specific documentation file (e.g., `docs/BRANCH_LEVEL_REGION_NARROWING.md`) that explains the theory/design. **The developer is explicitly required to study this document before starting.**
 2.  **Context/Why:** Explain the architectural goal. *Why* are we doing this? What problem does it solve?
