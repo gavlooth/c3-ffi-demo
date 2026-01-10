@@ -1,0 +1,76 @@
+;; bench_simple.omni - Simple Type Specialization Benchmarks
+;;
+;; Simple benchmarks for numeric operations without complex syntax.
+;;
+
+;; Helper: Manual loop using recursion
+(define (loop-n n f)
+  (if (<= n 0)
+      0
+      (begin
+        (f)
+        (loop-n (- n 1) f))))
+
+;; ============================================================================
+;; Benchmark 1: Float Addition
+;; ============================================================================
+
+(define (bench-float-add n)
+  (let ((result 0.0))
+    (loop-n n (fn [] (set! result (+ result 1.5))))
+    result))
+
+;; ============================================================================
+;; Benchmark 2: Float Multiplication
+;; ============================================================================
+
+(define (bench-float-mul n)
+  (let ((result 1.0))
+    (loop-n n (fn [] (set! result (* result 1.001))))
+    result))
+
+;; ============================================================================
+;; Benchmark 3: Integer Addition
+;; ============================================================================
+
+(define (bench-int-add n)
+  (let ((result 0))
+    (loop-n n (fn [] (set! result (+ result 42))))
+    result))
+
+;; ============================================================================
+;; Benchmark 4: Integer Multiplication
+;; ============================================================================
+
+(define (bench-int-mul n)
+  (let ((result 1))
+    (loop-n n (fn [] (set! result (* result 2))))
+    result))
+
+;; ============================================================================
+;; Main Test Runner
+;; ============================================================================
+
+(define (run-benchmarks)
+  (println "==========================================")
+  (println "Type Specialization Benchmark Suite")
+  (println "==========================================")
+
+  (println "Testing Float Add (10000 iterations)...")
+  (println "Result: " (bench-float-add 10000))
+
+  (println "Testing Float Mul (10000 iterations)...")
+  (println "Result: " (bench-float-mul 10000))
+
+  (println "Testing Int Add (10000 iterations)...")
+  (println "Result: " (bench-int-add 10000))
+
+  (println "Testing Int Mul (10000 iterations)...")
+  (println "Result: " (bench-int-mul 10000))
+
+  (println "==========================================")
+  (println "Benchmark Suite Complete")
+  (println "=========================================="))
+
+;; Run the benchmarks
+(run-benchmarks)

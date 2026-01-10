@@ -1,0 +1,53 @@
+;; ============================================================ 
+;; OmniLisp Unwired Features Test 
+;; ============================================================ 
+
+(println "--- 1. Testing Multiple Dispatch (UNWIRED) ---")
+;; Type Specialization
+(define (describe-val x {Int}) "It's an integer")
+(define (describe-val x {String}) "It's a string")
+
+;; Multi-arity
+(define (area) 0)
+(define (area r) (* 3.14 (* r r)))
+
+(try
+  (println "Dispatch (Int): " (describe-val 42))
+  (println "Dispatch (String): " (describe-val "hi"))
+  (println "Arity 0: " (area))
+  (println "Arity 1: " (area 5))
+  (catch e (println "FAILED: Multiple dispatch / Multi-arity not supported. " e)))
+(println "\n--- 2. Testing Parametric Subtyping (UNWIRED) ---") 
+(define int-list {List Int}) 
+(define any-list {List Any}) 
+(println "Is {List Int} a subtype of {List Any}? " (type? int-list any-list)) 
+
+(println "\n--- 3. Testing Pika Runtime API (UNWIRED) ---") 
+(define [grammar simple] [greeting "hello"]) 
+(try 
+  (println "Pika Match: " (pika-match simple "greeting" "hello")) 
+  (catch e (println "FAILED: pika-match primitive not registered."))) 
+
+(println "\n--- 4. Testing Nested Path Mutation (PARTIAL/UNWIRED) ---") 
+(define data #{:user #{:name "Bob" :address #{:city "London"}}}) 
+(try 
+  (put! data.user.address.city "New York") 
+  (println "Nested put!: " data.user.address.city) 
+  (catch e (println "FAILED: Deep path mutation failed. " e))) 
+
+(println "\n--- 5. Testing Infinite Iterators (UNWIRED) ---") 
+(try 
+  (define naturals (iterate (lambda [x] (+ x 1)) 0)) 
+  (println "Iterate first 3: " (collect-list (take 3 naturals))) 
+  (catch e (println "FAILED: 'iterate' and 'take' primitives missing."))) 
+
+;; (println "\n--- 6. Testing Character Literals (UNWIRED) ---")
+;; (try
+;;   (println "Newline char: " #\newline)
+;;   (catch e (println "FAILED: Named characters not recognized by reader.")))
+
+;; (println "\n--- 7. Testing Format Strings (UNWIRED) ---")
+;; (try
+;;   (println #fmt"Hello $da")
+;;   (catch e (println "FAILED: #fmt strings not recognized by reader.")))
+(println "\n--- End of Unwired Tests ---") 

@@ -1,0 +1,159 @@
+;; bench_specialization.omni - Type Specialization Benchmarks
+;;
+;; Benchmark suite for measuring the performance impact of type specialization.
+;; Expected speedup: 20-30x for numeric operations.
+;;
+;; Part of Phase 27: Julia-Level Type Specialization.
+;; Reference: docs/TYPE_SPECIALIZATION_DESIGN.md
+
+;; Helper function to measure execution time
+(define (time-it [name {String}] [f {->Any}] {Any})
+  (let ((start (current-time-millis))
+        (result (f))
+        (end (current-time-millis))
+        (elapsed (- end start)))
+    (println name ": " elapsed "ms")
+    result))
+
+;; ============================================================================
+;; Benchmark 1: Float Arithmetic Operations
+;; ============================================================================
+
+(define (bench-float-add [n {Int}] {Float})
+  (let ((result 0.0))
+    (for ((i (range n)))
+      (set! result (+ result 1.5)))
+    result))
+
+(define (bench-float-mul [n {Int}] {Float})
+  (let ((result 1.0))
+    (for ((i (range n)))
+      (set! result (* result 1.001)))
+    result))
+
+(define (bench-float-div [n {Int}] {Float})
+  (let ((result 1000000.0))
+    (for ((i (range n)))
+      (set! result (/ result 1.001)))
+    result))
+
+(define (run-float-benchmarks [n {Int}])
+  (println "--- Float Arithmetic Benchmarks (n=" n ") ---")
+  (time-it "Float Add" (fn [] (bench-float-add n)))
+  (time-it "Float Mul" (fn [] (bench-float-mul n)))
+  (time-it "Float Div" (fn [] (bench-float-div n))))
+
+;; ============================================================================
+;; Benchmark 2: Int Arithmetic Operations
+;; ============================================================================
+
+(define (bench-int-add [n {Int}] {Int})
+  (let ((result 0))
+    (for ((i (range n)))
+      (set! result (+ result 42)))
+    result))
+
+(define (bench-int-mul [n {Int}] {Int})
+  (let ((result 1))
+    (for ((i (range n)))
+      (set! result (* result 2)))
+    result))
+
+(define (run-int-benchmarks [n {Int}])
+  (println "--- Int Arithmetic Benchmarks (n=" n ") ---")
+  (time-it "Int Add" (fn [] (bench-int-add n)))
+  (time-it "Int Mul" (fn [] (bench-int-mul n))))
+
+;; ============================================================================
+;; Benchmark 3: Mixed Operations
+;; ============================================================================
+
+(define (bench-mixed-add [n {Int}] {Float})
+  (let ((result 0.0))
+    (for ((i (range n)))
+      (set! result (+ result i)))  ; Int + Float = Float
+    result))
+
+(define (run-mixed-benchmarks [n {Int}])
+  (println "--- Mixed Operation Benchmarks (n=" n ") ---")
+  (time-it "Mixed Add" (fn [] (bench-mixed-add n))))
+
+;; ============================================================================
+;; Benchmark 4: Comparison Operations
+;; ============================================================================
+
+(define (bench-comparisons [n {Int}] {Int})
+  (let ((count 0))
+    (for ((i (range n)))
+      (when (< i 500000)
+        (set! count (+ count 1))))
+    count))
+
+(define (run-comparison-benchmarks [n {Int}])
+  (println "--- Comparison Benchmarks (n=" n ") ---")
+  (time-it "Comparisons" (fn [] (bench-comparisons n))))
+
+;; ============================================================================
+;; Benchmark 5: Math Library Functions
+;; ============================================================================
+
+(define (bench-sqrt [n {Int}] {Float})
+  (let ((result 0.0))
+    (for ((i (range n)))
+      (set! result (sqrt (+ i 1.0))))
+    result))
+
+(define (bench-sin [n {Int}] {Float})
+  (let ((result 0.0))
+    (for ((i (range n)))
+      (set! result (sin (* i 0.01))))
+    result))
+
+(define (run-math-benchmarks [n {Int}])
+  (println "--- Math Library Benchmarks (n=" n ") ---")
+  (time-it "Sqrt" (fn [] (bench-sqrt n)))
+  (time-it "Sin" (fn [] (bench-sin n))))
+
+;; ============================================================================
+;; Benchmark 6: Array Operations (when typed arrays are implemented)
+;; ============================================================================
+
+(define (bench-array-access [n {Int}] {Float})
+  (let ((arr (array n))
+        (result 0.0))
+    ;; Initialize array
+    (for ((i (range n)))
+      (array-set arr i (* i 1.5)))
+    ;; Access array
+    (for ((i (range n)))
+      (set! result (+ result (array-ref arr i))))
+    result))
+
+(define (run-array-benchmarks [n {Int}])
+  (println "--- Array Operation Benchmarks (n=" n ") ---")
+  (time-it "Array Access" (fn [] (bench-array-access n))))
+
+;; ============================================================================
+;; Main Benchmark Runner
+;; ============================================================================
+
+(define (run-all-benchmarks)
+  (println "==========================================")
+  (println "Type Specialization Benchmark Suite")
+  (println "Expected Speedup: 20-30x for numeric ops")
+  (println "==========================================")
+
+  ;; Small benchmarks for quick testing
+  (run-float-benchmarks 100000)
+  (run-int-benchmarks 100000)
+  (run-mixed-benchmarks 100000)
+  (run-comparison-benchmarks 1000000)
+  (run-math-benchmarks 10000)
+  (run-array-benchmarks 10000)
+
+  (println "==========================================")
+  (println "Benchmark Suite Complete")
+  (println "=========================================="))
+
+;; Run benchmarks if this file is executed
+(run-all-benchmarks)

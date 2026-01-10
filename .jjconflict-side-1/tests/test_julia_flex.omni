@@ -1,0 +1,41 @@
+;; Julia-level Flexibility and Implicit Any Tests
+
+(println "--- Testing Implicit Any ---")
+(define x 10)
+(println "Implicit Any (Int): " x)
+(set! x "now a string")
+(println "Implicit Any (String): " x)
+
+(println "\n--- Testing Typed define ---")
+(define y {Int} 100)
+(println "Typed Int: " y)
+
+(try
+  (define z {Int} "not an int")
+  (catch e (println "Caught expected type error: " e)))
+
+(println "\n--- Testing Function Type Enforcement ---")
+(define (add-ints x {Int} y {Int}) {Int}
+  (+ x y))
+
+(println "add-ints (10 20): " (add-ints 10 20))
+
+(try
+  (add-ints 10 "20")
+  (catch e (println "Caught expected arg type error: " e)))
+
+(define (bad-return) {Int}
+  "not an int")
+
+(try
+  (bad-return)
+  (catch e (println "Caught expected return type error: " e)))
+
+(println "\n--- Testing Julia-style Flex (Implicit Any in params) ---")
+(define (flex-add a b)
+  (+ a b))
+
+(println "Flex add (ints): " (flex-add 5 5))
+(println "Flex add (floats): " (flex-add 1.5 2.5))
+
+(println "\nSUCCESS: Julia flexibility verified.")

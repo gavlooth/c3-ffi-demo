@@ -1,0 +1,240 @@
+;;; immer.omni - Persistent data structures via Immer FFI
+;;;
+;;; This library provides Clojure-compatible persistent immutable
+;;; data structures backed by the Immer C++ library.
+;;;
+;;; Usage:
+;;;   (load "lib/immer.omni")
+;;;   (define v (vector 1 2 3))
+;;;   (define v2 (conj v 4))
+;;;   (nth v2 0)  ; => 1
+;;;
+;;; All operations return NEW collections (originals unchanged).
+;;; Structural sharing makes this efficient.
+
+;;; ========== FFI Declarations ==========
+
+;; Vector operations
+(ffi-declare "void*" "immer_vector_empty")
+(ffi-declare "void*" "immer_vector_push" "void*" "void*")
+(ffi-declare "void*" "immer_vector_set" "void*" "int" "void*")
+(ffi-declare "void*" "immer_vector_get" "void*" "int")
+(ffi-declare "int" "immer_vector_size" "void*")
+(ffi-declare "void*" "immer_vector_pop" "void*")
+(ffi-declare "void*" "immer_vector_take" "void*" "int")
+(ffi-declare "void*" "immer_vector_drop" "void*" "int")
+(ffi-declare "void" "immer_vector_free" "void*")
+
+;; Map operations
+(ffi-declare "void*" "immer_map_empty")
+(ffi-declare "void*" "immer_map_assoc" "void*" "void*" "void*")
+(ffi-declare "void*" "immer_map_get" "void*" "void*" "void*")
+(ffi-declare "void*" "immer_map_dissoc" "void*" "void*")
+(ffi-declare "int" "immer_map_contains" "void*" "void*")
+(ffi-declare "int" "immer_map_count" "void*")
+(ffi-declare "void" "immer_map_free" "void*")
+
+;; Set operations
+(ffi-declare "void*" "immer_set_empty")
+(ffi-declare "void*" "immer_set_conj" "void*" "void*")
+(ffi-declare "void*" "immer_set_disj" "void*" "void*")
+(ffi-declare "int" "immer_set_contains" "void*" "void*")
+(ffi-declare "int" "immer_set_count" "void*")
+(ffi-declare "void" "immer_set_free" "void*")
+
+;;; ========== Vector API ==========
+
+;; Create a vector from arguments
+;; (vector 1 2 3) => [1 2 3]
+(define (vector . args)
+  (define (build-vec v items)
+    (if (null? items)
+        v
+        (build-vec (ffi "immer_vector_push" v (car items))
+                   (cdr items))))
+  (build-vec (ffi "immer_vector_empty") args))
+
+;; Get element at index
+;; (nth v 0) => first element
+(define (nth v idx)
+  (ffi "immer_vector_get" v idx))
+
+;; Get element at index with default
+;; (nth v 10 :not-found) => :not-found if out of bounds
+(define (nth-or v idx default)
+  (let ((result (ffi "immer_vector_get" v idx)))
+    (if (null? result) default result)))
+
+;; Get vector size
+(define (vector-count v)
+  (ffi "immer_vector_size" v))
+
+;; Add element to end (returns new vector)
+(define (vector-push v elem)
+  (ffi "immer_vector_push" v elem))
+
+;; Set element at index (returns new vector)
+(define (vector-assoc v idx elem)
+  (ffi "immer_vector_set" v idx elem))
+
+;; Remove last element (returns new vector)
+(define (vector-pop v)
+  (ffi "immer_vector_pop" v))
+
+;; Take first n elements
+(define (vector-take v n)
+  (ffi "immer_vector_take" v n))
+
+;; Drop first n elements
+(define (vector-drop v n)
+  (ffi "immer_vector_drop" v n))
+
+;; Get first element
+(define (vector-first v)
+  (if (= (vector-count v) 0)
+      nil
+      (nth v 0)))
+
+;; Get rest (all but first)
+(define (vector-rest v)
+  (vector-drop v 1))
+
+;; Check if empty
+(define (vector-empty? v)
+  (= (vector-count v) 0))
+
+;;; ========== Map API ==========
+
+;; Create a hash-map from key-value pairs
+;; (hash-map k1 v1 k2 v2) => {k1 v1, k2 v2}
+(define (hash-map . args)
+  (define (build-map m pairs)
+    (if (null? pairs)
+        m
+        (if (null? (cdr pairs))
+            m  ; Odd number of args, ignore last
+            (build-map (ffi "immer_map_assoc" m (car pairs) (car (cdr pairs)))
+                       (cdr (cdr pairs))))))
+  (build-map (ffi "immer_map_empty") args))
+
+;; Get value for key
+;; (get m key) => value or nil
+(define (get m key)
+  (ffi "immer_map_get" m key nil))
+
+;; Get value for key with default
+;; (get m key default) => value or default
+(define (get-or m key default)
+  (ffi "immer_map_get" m key default))
+
+;; Associate key with value (returns new map)
+;; (assoc m key val) => new map with key->val
+(define (assoc m key val)
+  (ffi "immer_map_assoc" m key val))
+
+;; Remove key (returns new map)
+;; (dissoc m key) => new map without key
+(define (dissoc m key)
+  (ffi "immer_map_dissoc" m key))
+
+;; Check if key exists
+(define (contains? m key)
+  (= (ffi "immer_map_contains" m key) 1))
+
+;; Get map size
+(define (map-count m)
+  (ffi "immer_map_count" m))
+
+;; Check if empty
+(define (map-empty? m)
+  (= (map-count m) 0))
+
+;;; ========== Set API ==========
+
+;; Create a hash-set from elements
+;; (hash-set 1 2 3) => #{1 2 3}
+(define (hash-set . args)
+  (define (build-set s items)
+    (if (null? items)
+        s
+        (build-set (ffi "immer_set_conj" s (car items))
+                   (cdr items))))
+  (build-set (ffi "immer_set_empty") args))
+
+;; Add element (returns new set)
+(define (set-conj s elem)
+  (ffi "immer_set_conj" s elem))
+
+;; Remove element (returns new set)
+(define (set-disj s elem)
+  (ffi "immer_set_disj" s elem))
+
+;; Check if element exists
+(define (set-contains? s elem)
+  (= (ffi "immer_set_contains" s elem) 1))
+
+;; Get set size
+(define (set-count s)
+  (ffi "immer_set_count" s))
+
+;; Check if empty
+(define (set-empty? s)
+  (= (set-count s) 0))
+
+;;; ========== Polymorphic Operations ==========
+
+;; These work on any collection type
+
+;; Count elements in collection
+(define (count coll)
+  (cond
+    ((null? coll) 0)
+    ((pair? coll) (length coll))  ; list
+    ;; For vectors/maps/sets, need type tag check
+    ;; For now, assume caller knows the type
+    (else 0)))
+
+;; conj - add to collection (polymorphic)
+;; For vectors: adds to end
+;; For sets: adds element
+;; For lists: adds to front
+(define (conj coll elem)
+  (cond
+    ((null? coll) (cons elem nil))  ; nil becomes list
+    ((pair? coll) (cons elem coll)) ; list: prepend
+    ;; vector/set: use FFI (need type dispatch)
+    (else coll)))
+
+;; into - pour elements from one collection into another
+(define (into to from)
+  (if (null? from)
+      to
+      (into (conj to (car from)) (cdr from))))
+
+;;; ========== Keyword Support ==========
+
+;; Keywords are just symbols starting with :
+;; They're interned by OmniLisp's symbol system, so eq? works.
+;; Usage: (define k (keyword "foo")) => :foo
+;;        (get m (keyword "foo"))
+
+(define (keyword name)
+  (string->symbol (string-append ":" name)))
+
+(define (keyword? x)
+  (and (symbol? x)
+       (let ((s (symbol->string x)))
+         (and (> (string-length s) 0)
+              (eq? (string-ref s 0) #\:)))))
+
+;;; ========== Notes ==========
+
+;; These persistent structures use structural sharing internally.
+;; Creating a new version of a million-element vector with one
+;; changed element only allocates O(log n) new nodes.
+;;
+;; Memory is managed by ASAP - when a vector goes out of scope,
+;; the compiler inserts immer_vector_free() calls automatically.
+;;
+;; For the interpreter, the FFI calls won't work - this library
+;; is designed for compiled OmniLisp programs.

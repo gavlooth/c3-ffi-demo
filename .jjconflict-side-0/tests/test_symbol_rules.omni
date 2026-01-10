@@ -1,0 +1,147 @@
+;; ============================================================
+;; OmniLisp Symbol Rules Test Suite
+;; ============================================================
+;;
+;; This test suite verifies the symbol character rules as specified
+;; in the T-syntax-symbol-rules task.
+;;
+;; Symbol Character Rules:
+;;
+;;   START WITH (first character):
+;;     Letters:     a-z, A-Z
+;;     Operators:   * ! - _ ? % / = < >
+;;
+;;     EXCLUDE:     . @ # & : ; 0-9
+;;
+;;   MIDDLE (subsequent characters):
+;;     All of START + digits (0-9)
+;;
+;;     EXCLUDE:     . @ # & : ;
+;;
+;;   Convention (not enforced by parser):
+;;     ! and ? are typically only at START or END of symbols
+;;
+;; ============================================================
+
+(println "--- Testing Symbol Rules ---")
+
+;; Valid symbols starting with letters
+(println "Valid letters: foo " foo)
+(println "Valid letters: Foo " Foo)
+(println "Valid letters: fooBar " fooBar)
+(println "Valid letters: foo_bar " foo_bar)
+(println "Valid letters: foo-bar " foo-bar)
+
+;; Valid symbols starting with operators
+(define *test* 42)
+(println "Valid operator *: " *test*)
+
+(define -test- 10)
+(println "Valid operator -: " -test-)
+
+(define _test_ 20)
+(println "Valid operator _: " _test_)
+
+(define !test 30)
+(println "Valid operator !: " !test)
+
+(define ?test 40)
+(println "Valid operator ?: " ?test)
+
+(define %test 50)
+(println "Valid operator %: " %test)
+
+;; Note: /, =, <, > are operators but may be parsed as special forms
+;; so we test them in quoted form
+
+;; Valid symbols with digits in middle (not first)
+(println "Valid with digits: foo123 " foo123)
+(println "Valid with digits: x1_y2 " x1_y2)
+
+;; Valid symbols with ! and ? at end
+(define set!test 100)
+(println "Valid ! at end: " set!test)
+
+(define null?test 200)
+(println "Valid ? at end: " null?test)
+
+;; Valid symbols with ! and ? at start
+(println "Valid ! at start: " !test)
+(println "Valid ? at start: " ?test)
+
+;; Edge cases - single character symbols
+(println "Valid single char: a " a)
+(println "Valid single char: * " *)
+(println "Valid single char: - " -)
+
+;; ============================================================
+;; Test that these are NOT valid symbols (should parse as other things)
+;; ============================================================
+
+(println "\n--- Testing Invalid Symbol Patterns ---")
+
+;; Dots should NOT be in symbols (they are for paths)
+;; my.field should NOT be a single symbol
+;; (try
+;;   (define my.field 1)
+;;   (println "ERROR: my.field should not be a valid symbol")
+;;   (catch e (println "OK: my.field is not a symbol (expected)")))
+
+;; @ should NOT be in symbols (it's for metadata)
+;; @meta should NOT be a symbol
+;; (try
+;;   (define @meta 1)
+;;   (println "ERROR: @meta should not be a valid symbol")
+;;   (catch e (println "OK: @meta is not a symbol (expected)")))
+
+;; # should NOT be in symbols (it's for reader macros)
+;; #reader should NOT be a symbol
+;; (try
+;;   (define #reader 1)
+;;   (println "ERROR: #reader should not be a valid symbol")
+;;   (catch e (println "OK: #reader is not a symbol (expected)")))
+
+;; Digits should NOT be at start of symbols
+;; 123foo should NOT be a valid symbol
+;; (try
+;;   (define 123foo 1)
+;;   (println "ERROR: 123foo should not be a valid symbol")
+;;   (catch e (println "OK: 123foo is not a symbol (expected)")))
+
+;; : should NOT be in symbols (it's for keywords)
+;; & should NOT be in symbols (it's for special forms)
+;; ; should NOT be in symbols (it's for comments)
+
+;; ============================================================
+;; Test symbols in expressions
+;; ============================================================
+
+(println "\n--- Testing Symbols in Expressions ---")
+
+(define (test-fn x y) (+ x y))
+(println "Function call: " (test-fn 10 20))
+
+(let [x 5 y 10]
+  (println "let with symbols: " (+ x y)))
+
+;; Test symbols in various contexts
+(define list-test '(1 2 3))
+(println "Quoted list: " list-test)
+
+(define array-test [1 2 3])
+(println "Array literal: " array-test)
+
+;; ============================================================
+;; Test symbol equality
+;; ============================================================
+
+(println "\n--- Testing Symbol Equality ---")
+
+(println "foo == foo: " (= 'foo 'foo))
+(println "foo != bar: " (not (= 'foo 'bar)))
+
+;; ============================================================
+;; End of Symbol Rules Test
+;; ============================================================
+
+(println "\n--- Symbol Rules Test Complete ---")

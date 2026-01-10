@@ -1,0 +1,3 @@
+(println "String equality test:")
+(println (= "hello" "hello"))
+(println (= "hello" "world"))

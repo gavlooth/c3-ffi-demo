@@ -1,0 +1,16 @@
+;; Test array literal codegen (T-codegen-array-01)
+;; Simple array literal with integers
+(println "Test 1: Array of integers")
+(define arr1 [1 2 3])
+(println arr1)
+
+;; Empty array
+(println "Test 2: Empty array")
+(define arr2 [])
+(println arr2)
+
+;; Array with mixed expressions
+(println "Test 3: Array with expressions")
+(define x 42)
+(define arr3 [x (+ 1 2) "hello"])
+(println arr3)

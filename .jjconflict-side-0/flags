@@ -1,0 +1,64 @@
+  Initial Red Flags (Architecture Mismatches)
+
+  - Compiler/runtime type mismatch: Codegen emits sym_release_handle(x->comp) and sym_tether_begin(x->comp) but runtime Obj has no comp field, and there’s no free_scc_static implementation. That means any path
+    that emits component/tether/SCC‑static code won’t compile or won’t link. (csrc/codegen/codegen.c, runtime/src/runtime.c)
+  - Component system not wired in: SymObj->comp is never set in the runtime path; sym_component_add_member is unused, so dynamic merging/tethering never actually happens. Current component logic is essentially
+    inert. (runtime/src/memory/symmetric.c, runtime/src/memory/component.c)
+  - Handle/slot‑pool safety is not integrated: Constructors use malloc, but borrow safety relies on slot‑pool handles. free_obj/dec_ref/free_tree always call free, not handle_free_obj, so slot‑allocated objects
+    would be freed incorrectly and handles would stay “valid” forever. This undermines the GenRef/handle safety story. (runtime/src/runtime.c, runtime/src/memory/handle.c, runtime/src/memory/slot_pool.h)
+  - Region system is half‑stubbed: region_exit only marks closed and never frees; Region‑RC fusion functions are placeholders; component handles are acquired but never released. Also uses <stdatomic.h> which
+    violates the stated C99‑only target. (runtime/src/memory/region.c)
+  - Thread‑safety is undefined: Global free list, weak‑ref list, stack pool, and refcounts aren’t atomic or per‑thread. With pthreads enabled, this is a correctness risk unless you explicitly forbid
+    cross‑thread sharing. (runtime/src/runtime.c, runtime/src/memory/component.c)
+
+  Constructive criticism (design clarity issue):
+  Right now there are three partially‑implemented cycle strategies (runtime SCC Tarjan, symmetric RC components, and region‑arena). Without a clear “source‑of‑truth” path that the compiler targets, you’ll keep
+  accruing dead code and unsound edges. This isn’t just cleanup—it blocks correctness because codegen can emit APIs that don’t exist or don’t match runtime layout.
+
+  Immediate Improvement Targets (no new programmer restrictions)
+
+  - Align compiler/runtime APIs: Either add comp to Obj (and wire it through allocation/linking), or remove component/tether emissions until runtime supports them. Same for free_scc_static vs release_with_scc.
+    (csrc/codegen/codegen.c, runtime/src/runtime.c)
+  - Integrate slot‑pool into allocation/free paths: If borrowed refs are allowed, pool allocation and handle_free_obj need to be the default for those objects—or you need an automatic fallback to pool when a
+    borrow occurs. (runtime/src/runtime.c, runtime/src/memory/handle.c)
+  - Finalize region semantics: Implement actual bulk free on region_exit and either remove or finish Region‑RC fusion. (runtime/src/memory/region.c)
+  - Define concurrency story: Decide if RC/components are single‑threaded or thread‑safe; right now it’s neither. (runtime/src/runtime.c)
+
+  If you want me to keep going, I’ll next map which code paths the compiler actually emits (CFG → free strategy → runtime call) and produce a precise “canonical path” proposal.
+
+  Pick a focus so I don’t waste cycles:
+
+  1. Align codegen/runtime APIs (components + SCC).
+  2. Slot‑pool/borrow safety integration.
+  3. Region exit + Region‑RC fusion.
+
+
+› write down plans and we will pick them layter, right now you are low in tokens
+
+
+• Here are concise plan options you can pick later. I’m keeping them short, but each is multi‑step and TDD‑compliant.
+
+  Plan A — Align codegen/runtime APIs (components + SCC)
+
+  - Step 1: Inventory all emitted memory APIs in codegen and match to runtime symbols; list gaps (comp field, free_scc_static, tethers).
+  - Step 2: Decide canonical cycle strategy (component vs SCC) and remove/guard unused paths.
+  - Step 3: Implement missing runtime API or adjust codegen emission accordingly.
+  - Step 4: Add tests first (compiler output + runtime behavior), then update docs + commit.
+
+  Plan B — Slot‑pool & borrow safety integration
+
+  - Step 1: Trace borrowed‑ref creation paths and allocations; identify objects that can be borrowed.
+  - Step 2: Route those allocations to slot‑pool (or add auto‑promotion) and ensure frees use handle_free_obj.
+  - Step 3: Update borrow validation to avoid unsound IPGE path where possible.
+  - Step 4: Write tests first for UAF detection + pool lifecycle, then implement + docs + commit.
+
+  Plan C — Region exit + Region‑RC fusion hardening
+
+  - Step 1: Define concrete region lifecycle (enter/exit/close/free) and what “closed” means.
+  - Step 2: Implement actual bulk free on region_exit + component cleanup semantics.
+  - Step 3: Wire region_inc_ref/dec_ref to real counters or remove stubs.
+  - Step 4: Add tests first for region isolation + bulk free, then implement + docs + commit.
+
+  Constructive criticism: choosing none of these leaves the memory model in a “half‑wired” state where compiler emissions don’t match runtime reality. That’s a correctness risk, not just tech debt.
+
+  Tell me which plan you want (A/B/C), or mix them.

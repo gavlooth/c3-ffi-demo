@@ -1,0 +1,124 @@
+;; Phase 15: Branch-Level Region Narrowing Tests
+;; This file tests the scoped escape analysis implementation
+
+;; Test 1: Simple non-escaping variable in if-then branch
+;; Variable x is defined in the then branch and doesn't escape
+;; Should be stack-allocated
+(define test1-simple-non-escaping
+  (lambda (cond)
+    (if cond
+        (let [x 42]
+          (+ x 10))  ; x doesn't escape the if-then branch
+        0)))
+
+;; Test 2: Variable that escapes to parent scope
+;; Variable y is defined in the then branch and returned
+;; Should be region-allocated (escapes via RETURN)
+(define test2-escaping-return
+  (lambda (cond)
+    (if cond
+        (let [y 100]
+          y)       ; y escapes via return
+        0)))
+
+;; Test 3: Non-escaping variable in let body
+;; Variable z is defined in let but doesn't escape the let body
+;; Should be stack-allocated
+(define test3-let-non-escaping
+  (lambda (n)
+    (let [z (* n 2)]
+      (+ z 5))))    ; z used but doesn't escape
+
+;; Test 4: Let variable that escapes via return
+;; Variable w is defined in let and returned
+;; Should be region-allocated
+(define test4-let-escaping
+  (lambda (n)
+    (let [w (* n 3)]
+      w)))          ; w escapes via return
+
+;; Test 5: Nested if with non-escaping variables
+;; Variables in different branches should have independent scopes
+(define test5-nested-if
+  (lambda (a b)
+    (if a
+        (let [x 10]
+          (+ x 1))   ; x doesn't escape
+        (if b
+            (let [y 20]
+              (+ y 2))  ; y doesn't escape (different scope)
+            0))))
+
+;; Test 6: Variable passed to function (escapes via ARG)
+;; Variable is passed to a function, should be region-allocated
+(define test6-escapes-via-arg
+  (lambda (n)
+    (let [v 42]
+      (+ v (factorial v)))))  ; v escapes via argument to factorial
+
+;; Test 7: Multiple bindings, some escaping some not
+;; Mix of escaping and non-escaping variables
+(define test7-mixed-escape
+  (lambda (flag)
+    (let [x 1
+          y 2
+          z 3]
+      (if flag
+          x       ; only x escapes via return
+          (+ y z)))))  ; y and z don't escape
+
+;; Test 8: Variable captured by closure (escapes via CLOSURE)
+;; Variable captured by lambda should be region-allocated
+(define test8-closure-capture
+  (lambda (n)
+    (let [counter 0]
+      (lambda ()
+        (set! counter (+ counter 1))
+        counter))))  ; counter escapes via closure
+
+;; Test 9: Deep nesting with non-escaping variables
+;; Variables at different nesting levels
+(define test9-deep-nesting
+  (lambda (a b c)
+    (if a
+        (let [x 10]
+          (if b
+              (let [y 20]
+                (+ x y))  ; x and y don't escape
+              x))         ; x doesn't escape
+        0)))
+
+;; Test 10: Variable used in computation but returned indirectly
+;; The result of computation escapes, not the original variable
+(define test10-indirect-escape
+  (lambda (n)
+    (let [x (* n 2)]
+      (* x 3))))    ; computation escapes, but x itself doesn't
+
+;; Main test runner
+(define run-phase15-tests
+  (lambda ()
+    (display "Phase 15: Branch-Level Region Narrowing Tests")
+    (display "=============================================")
+    (display "")
+    (display "Test 1: Simple non-escaping variable")
+    (display (test1-simple-non-escaping true))
+    (display "Expected: 52")
+    (display "")
+    (display "Test 2: Escaping via return")
+    (display (test2-escaping-return true))
+    (display "Expected: 100")
+    (display "")
+    (display "Test 3: Let non-escaping")
+    (display (test3-let-non-escaping 5))
+    (display "Expected: 15")
+    (display "")
+    (display "Test 4: Let escaping")
+    (display (test4-let-escaping 5))
+    (display "Expected: 15")
+    (display "")
+    (display "Test 5: Nested if")
+    (display (test5-nested-if true true))
+    (display "Expected: 11 (then-then branch)")
+    (display "")
+    (display "All tests completed!"))

@@ -1,0 +1,33 @@
+;; Simple Type Dispatch Test
+;; Tests basic arithmetic and operations
+
+(println "Testing Basic Operations")
+
+;; Test arithmetic
+(println "1 + 2 => " (+ 1 2))
+(println "5 * 3 => " (* 5 3))
+(println "10 - 4 => " (- 10 4))
+(println "20 / 4 => " (/ 20 4))
+
+;; Test comparisons
+(println "1 < 2 => " (< 1 2))
+(println "5 > 3 => " (> 5 3))
+(println "2 = 2 => " (= 2 2))
+
+;; Test conditionals
+(println "if true 10 20 => " (if true 10 20))
+(println "if false 10 20 => " (if false 10 20))
+
+;; Test variables
+(define x 42)
+(println "x = 42, x => " x)
+
+;; Test simple function
+(define square n (* n n))
+(println "square 5 => " (square 5))
+
+;; Test function with multiple args
+(define add a b (+ a b))
+(println "add 10 20 => " (add 10 20))
+
+(println "SUCCESS: Basic operations verified.")

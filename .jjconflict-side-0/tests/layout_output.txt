@@ -1,0 +1,7 @@
+Verifying Obj layout in omni.h...
+sizeof(Obj) = 40
+Offset of generation: 0
+Offset of mark: 4
+Offset of tag: 8
+sizeof(Obj) = 40
+Layout test passed (merely printing for now, but divergence is confirmed by manual check).

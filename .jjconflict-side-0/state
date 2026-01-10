@@ -1,0 +1,35 @@
+  <state_snapshot>
+      <overall_goal>
+          Implement a self-consistent, optionally-typed Lisp runtime (OmniLisp) with Julia-level flexibility, adhering to the "Character Calculus" specification.
+      </overall_goal>
+
+      <key_knowledge>
+           - Character Calculus: ()=Flow, []=Slot, {}=Kind, .=Path, ^=Tag, #=Sign.
+           - Two-Tier Concurrency: Tier 1 (pthreads), Tier 2 (Fibers/Continuations).
+           - Algebraic Effects: handle/perform/resume replaces try/catch.
+           - Memory Management: ASAP (Static Analysis) + RC-G (Region-Based RC with Transmigration).
+           - Multiple Dispatch: Based on Arity and Kind specificity.
+      </key_knowledge>
+
+      <file_system_state>
+           - MODIFIED: language_reference.md - Comprehensive documentation of the current implemented state.
+           - MODIFIED: src/runtime/eval/omni_eval.c - Implemented Kind system, Multiple Dispatch, Lazy Iterators, and updated primitive registrations.
+           - CREATED: tests/test_julia_flex.omni - Tests for implicit Any and type enforcement.
+      </file_system_state>
+
+      <recent_actions>
+           - Documented the Two-Tier Concurrency model and expanded Fiber API.
+           - Codified Ownership Transfer and Algebraic Effects in the language reference.
+           - Fixed redundant primitive implementations and consolidated is_array checks.
+           - Verified the system with existing test suites.
+      </recent_actions>
+
+      <current_plan>
+           1. [DONE] Documentation: Sync language_reference.md with implementation reality.
+           2. [DONE] Implement Multiple Dispatch and Type Enforcement.
+           3. [DONE] Implement Lazy Iterators and Realization.
+           4. [TODO] Implement iterate and take for custom infinite sequences.
+           5. [TODO] Support deep path mutation in put!.
+           6. [TODO] Update reader for #fmt and named characters.
+      </current_plan>
+  </state_snapshot>

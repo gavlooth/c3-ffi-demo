@@ -1,0 +1,45 @@
+; OmniLisp Demo - ASAP Memory Management
+; This file demonstrates the stage-polymorphic evaluation
+
+; Basic arithmetic (interpretation)
+(+ 1 2)
+(* 3 4)
+
+; Let bindings
+(let ((x 10)
+      (y 20))
+  (+ x y))
+
+; Nested let
+(let ((a 5))
+  (let ((b (* a 2)))
+    (+ a b)))
+
+; Lifting to code generation
+(lift 42)
+
+; Mixed interpretation and compilation
+(+ 10 (lift 20))
+
+; Conditionals
+(if (= 1 1)
+    100
+    200)
+
+; Lambda expressions
+(let ((square (lambda (x) (* x x))))
+  (square 5))
+
+; List operations
+(cons 1 (cons 2 (cons 3 ())))
+
+; Comparison
+(< 5 10)
+(> 5 10)
+
+; Recursive factorial (using letrec)
+(letrec ((fact (lambda (n)
+                 (if (= n 0)
+                     1
+                     (* n (fact (- n 1)))))))
+  (fact 5))

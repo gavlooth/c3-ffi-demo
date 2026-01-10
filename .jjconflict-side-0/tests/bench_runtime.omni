@@ -1,0 +1,45 @@
+;; bench_runtime.omni - Runtime Performance Benchmark
+;; Measures actual operation execution time (not compilation)
+
+;; Define a simple loop function using recursion
+(define (loop-n n func)
+  (if (<= n 0)
+      0
+      (begin
+        (func)
+        (loop-n (- n 1) func))))
+
+;; Counter variable
+(define counter 0)
+
+;; Benchmark: Integer addition in tight loop
+(define (bench-int-add iterations)
+  (set! counter 0)
+  (loop-n iterations
+    (fn []
+      (set! counter (+ counter 1))))
+  counter)
+
+;; Run the benchmark
+(println "==========================================")
+(println "Runtime Performance Benchmark")
+(println "==========================================")
+(println "")
+
+(println "Test: Integer addition in tight loop")
+(println "Iterations: 1000")
+(println "Running benchmark...")
+
+(define result (bench-int-add 1000))
+
+(println "Result: " result)
+(println "")
+
+(println "Expected: 1000")
+(println "Status: " (if (= result 1000) "PASS" "FAIL"))
+
+(println "")
+(println "==========================================")
+(println "Note: This tests correctness, not speed.")
+(println "For speed, we need native compilation.")
+(println "==========================================")

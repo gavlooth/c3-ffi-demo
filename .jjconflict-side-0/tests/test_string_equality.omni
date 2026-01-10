@@ -1,0 +1,26 @@
+;; Test string equality (T-wire-string-literal-03)
+;; String equality - same content
+(println "Test 1: (= \"hello\" \"hello\") should be true")
+(println (= "hello" "hello"))
+;; String equality - different content
+(println "Test 2: (= \"hello\" \"world\") should be false")
+(println (= "hello" "world"))
+;; String equality - empty strings
+(println "Test 3: (= \"\" \"\") should be true")
+(println (= "" ""))
+;; Numeric equality still works
+(println "Test 4: (= 1 1) should be true")
+(println (= 1 1))
+(println "Test 5: (= 1 2) should be false")
+(println (= 1 2))
+;; Float equality
+(println "Test 6: (= 1.5 1.5) should be true")
+(println (= 1.5 1.5))
+;; Symbol equality
+(println "Test 7: (= (quote foo) (quote foo)) should be true")
+(println (= (quote foo) (quote foo)))
+(println "Test 8: (= (quote foo) (quote bar)) should be false")
+(println (= (quote foo) (quote bar)))
+;; Type predicate for strings
+(println "Test 9: (type? \"hello\" String) should be true")
+(println (type? "hello" String))

@@ -1,0 +1,10 @@
+START WITH: a-z A-Z * ! - _ ? % / = < > 
+
+MIDDLE: all of above + digits (0-9) +
+
+EXCLUDE FROM BOTH:
+. @ # & : ; reserved for syntax
+
+we can use . for module path , no need for : or / or something
+
+ 

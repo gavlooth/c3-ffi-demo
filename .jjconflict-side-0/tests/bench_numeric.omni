@@ -1,0 +1,52 @@
+;; bench_numeric.omni - Simple Numeric Operation Tests
+;; Basic tests to verify numeric operations work
+
+;; Test integer arithmetic
+(define (test-int-ops)
+  (let ((a 10)
+        (b 20))
+    (println "Int Add: " (+ a b))
+    (println "Int Sub: " (- a b))
+    (println "Int Mul: " (* a b))
+    (println "Int Div: " (/ b a))))
+
+;; Test float arithmetic
+(define (test-float-ops)
+  (let ((x 10.5)
+        (y 2.0))
+    (println "Float Add: " (+ x y))
+    (println "Float Sub: " (- x y))
+    (println "Float Mul: " (* x y))
+    (println "Float Div: " (/ x y))))
+
+;; Test comparison operations
+(define (test-comparisons)
+  (let ((a 10)
+        (b 20))
+    (println "10 < 20: " (< a b))
+    (println "10 > 20: " (> a b))
+    (println "10 = 10: " (= a a))
+    (println "20 <= 20: " (<= b b))
+    (println "10 >= 5: " (>= a 5))))
+
+;; Main test runner
+(define (run-tests)
+  (println "==========================================")
+  (println "Numeric Operation Tests")
+  (println "==========================================")
+
+  (test-int-ops)
+  (println "")
+
+  (test-float-ops)
+  (println "")
+
+  (test-comparisons)
+  (println "")
+
+  (println "==========================================")
+  (println "All Tests Complete")
+  (println "=========================================="))
+
+;; Run tests
+(run-tests)

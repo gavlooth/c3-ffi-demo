@@ -1,0 +1,28 @@
+;; Kind System and Type Checking Tests (Updated for Character Calculus)
+
+(println "--- Testing 5. Kind System ---")
+
+(define T1 {Int})
+(println "Base Kind: " T1)
+(println "Is Int a Kind? " (type? T1 {Kind}))
+
+;; Parametric: {Name [Param]}
+(define T2 {Option [Int]})
+(println "Parametric Kind {Option [Int]}: " T2)
+(println "Is Option [Int] a Kind? " (type? T2 {Kind}))
+
+(define T3 {Dict [String Int]})
+(println "Multi-param Kind {Dict [String Int]}: " T3)
+
+(define T4 {Option [{List [Int]}]})
+(println "Nested Kind {Option [{List [Int]}]}: " T4)
+
+(println "\n--- Testing type? validation ---")
+(println "Is 123 an Int? " (type? 123 {Int}))
+(println "Is (range 5) an Iter? " (type? (range 5) {Iter}))
+(println "Is [1 2] an Array? " (type? [1 2] {Array}))
+
+;; Nested type check
+(println "Is Int an Int? (using Kind object): " (type? 123 T1))
+
+(println "\nSUCCESS: Kind system tests complete.")

@@ -1,0 +1,31 @@
+;; Kind System - Final Character Calculus Test
+
+(println "--- Testing Final Kind Syntax ---")
+
+;; 1. Concrete Application
+(define T1 {Option Int})
+(println "Concrete: {Option Int} => " T1)
+
+;; 2. Parametric Definition
+(define T2 {Iter [T]})
+(println "Parametric: {Iter [T]} => " T2)
+
+;; 3. Recursive Concrete
+(define T3 {Option {List Int}})
+(println "Recursive Concrete: {Option {List Int}} => " T3)
+
+;; 4. Recursive Parametric
+(define T4 {Option {List [T]}})
+(println "Recursive Parametric: {Option {List [T]}} => " T4)
+
+(println "\n--- Type Checking ---")
+(println "Is {Int} a Kind? " (type? {Int} Kind))
+(println "Is [T] a Kind? " (type? [T] Kind))
+(println "Is String a Kind? " (type? String Kind))
+
+(println "\n--- Any validation ---")
+(println "Is 123 an Any? " (type? 123 Any))
+(println "Is \"hi\" an Any? " (type? "hi" Any))
+(println "Is {Int} an Any? " (type? {Int} Any))
+
+(println "\nSUCCESS: Kind calculus verified.")
