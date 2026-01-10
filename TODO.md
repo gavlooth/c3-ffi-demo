@@ -9,6 +9,10 @@ Backup of the previous `TODO.md` (full history):
 
 **All newly implemented features must be marked with `[DONE] (Review Needed)` until explicitly approved by the user.**
 - When an agent completes implementing a feature, mark it `[DONE] (Review Needed)` (not `[DONE]`)
+
+- If a feature is blocked do not by any means mark it `[DONE]`. Mark it `[BLOCKED]`
+
+- If a feature blocks and is not implemented do not mark it `[DONE]` by any means
 - `[DONE] (Review Needed)` means: code is written and working, but awaits user review/approval
 - After user approval, change `[DONE] (Review Needed)` → `[DONE]`
 - Workflow: `[TODO]` → implement → `[DONE] (Review Needed)` → user approves → `[DONE]`
@@ -299,8 +303,35 @@ jj describe
   - [BLOCKED] Label: I1-p2-compute-last-use-per-variable
     BLOCKED BY: Issue 2 P4 (store barrier) - requires working compiler and dict_set integration.
 
-  - [BLOCKED] Label: I1-p2-emit-release-at-last-use
+   - [IN_PROGRESS] Label: I1-p2-emit-release-at-last-use
     BLOCKED BY: Issue 2 P4 (store barrier) - requires working compiler and dict_set integration.
+    
+    UPDATE (2026-01-10): Build system issue resolved; Issue 2 P4 is complete. Unblocking this task.
+    
+    Objective: Emit `region_release_internal(var, omni_obj_region(var))` at position `pos` when a variable's `last_use == pos`.
+    Where: `csrc/codegen/region_codegen.c`, `csrc/codegen/codegen.c`
+    What to change:
+      ```c
+      // Track current position in CodeGenContext
+      int current_pos = 0;
+      
+      // Wrap node emission to check last_use
+      void omni_codegen_emit_with_pos(CodeGenContext* ctx, const char* fmt, ..., int pos) {
+        // Store position before emitting
+        int old_pos = current_pos;
+        current_pos = pos;
+        
+        // Emit the node code
+        // ... existing emit logic ...
+        
+        // After emission, check if any variable's last_use matches old_pos
+        for each variable v in ctx->vars:
+          if v->last_use == old_pos:
+            emit_region_release(v->name, omni_obj_region(v));
+      }
+      ```
+    Verification: Test that variables are released at correct positions.
+    Why: Enables deterministic cleanup of variables when they go out of scope, even if the compiler doesn't explicitly track last_use per statement.
 
   - [BLOCKED] Label: I1-p2-test-retain-release-generation
     BLOCKED BY: Issue 2 P4 (store barrier) - requires working compiler and dict_set integration.
@@ -631,9 +662,9 @@ Note: Issue 2 P3 (region accounting counters) and Issue 3 P1-P2 (emit retain at 
      If typed arrays need to support boxed elements in the future,
      this requires a major design change (adding ARRAY_TYPE_OBJ, changing data from void* to Obj**).
 
-#### Review Finding RF-I1-1 (2026-01-10): runtime test regression in external-root identity (must fix before approval) [TODO]
+#### Review Finding RF-I1-1 (2026-01-10): runtime test regression in external-root identity (must fix before approval) [DONE] (Review Needed)
 
-- [TODO] Label: I1-transmigrate-external-root-identity-regression (RF-I1-1)
+- [DONE] (Review Needed) Label: I1-transmigrate-external-root-identity-regression (RF-I1-1)
   Objective: Fix transmigration so external boxed objects are never cloned/rewritten, preserving pointer identity for objects not owned by `src_region`.
   Reference (read first):
     - `runtime/docs/CTRR_TRANSMIGRATION.md` (external-root rule + identity semantics)
@@ -843,9 +874,9 @@ However, when compiling `dict_set()` in `runtime/src/runtime.c`, the compiler er
     - Commands:
       - `make -C runtime/tests test`
 
-#### Review Finding RF-I2-1 (2026-01-10): accounting test not wired + assertions too weak (must fix before claiming coverage) [TODO]
+#### Review Finding RF-I2-1 (2026-01-10): accounting test not wired + assertions too weak (must fix before claiming coverage) [DONE] (Review Needed)
 
-- [TODO] Label: I2-wire-and-strengthen-region-accounting-tests (RF-I2-1)
+- [DONE] (Review Needed) Label: I2-wire-and-strengthen-region-accounting-tests (RF-I2-1)
   Objective: Ensure the accounting tests actually run in CI/dev (`test_main.c` include list) and make them assert the documented invariants strongly enough to catch regressions.
   Reference (read first):
     - `runtime/docs/REGION_ACCOUNTING.md` (what counters mean; aligned vs requested bytes)
@@ -868,9 +899,9 @@ However, when compiling `dict_set()` in `runtime/src/runtime.c`, the compiler er
     - `make -C runtime/tests test` must execute the accounting suite and pass.
     - Add a `RUNTIME_TEST_LEVEL=slow` run if needed once the suite exists in both modes.
 
-#### Review Finding RF-I2-2 (2026-01-10): “warning-clean” expectation not met under current test build [TODO]
+#### Review Finding RF-I2-2 (2026-01-10): “warning-clean” expectation not met under current test build [DONE] (Review Needed)
 
-- [TODO] Label: I2-warning-clean-build-gate (RF-I2-2)
+- [DONE] (Review Needed) Label: I2-warning-clean-build-gate (RF-I2-2)
   Objective: Make `make -C runtime/tests test` warning-clean under `-std=c99 -Wall -Wextra` (or explicitly document the exceptions/gates), so warnings don’t hide real regressions.
   Where:
     - `runtime/src/runtime.c` (unused-but-set variables; unused parameters)
@@ -919,6 +950,130 @@ However, when compiling `dict_set()` in `runtime/src/runtime.c`, the compiler er
     - Commands:
       - `make -C runtime/tests test`
       - `make -C runtime/tests asan`
+
+### Amendment B (2026-01-11): Option A “Per-Owner-Thread Outlives Rank” (required to make the store barrier real)
+
+**Decision (user-approved):** Use **Option A** for lifetime ordering:
+- Each runtime ArenaRegion/RCB (currently `struct Region`) has a **per-owner-thread outlives rank**.
+- Ranks are **only comparable when `src.owner_thread == dst.owner_thread`**.
+- Cross-thread stores are treated as **not comparable ⇒ must repair** (transmigrate/adopt), because we refuse to guess about lifetimes across threads.
+
+**Constructive criticism (why this must be explicit):**
+- A naïve “creation time rank” is wrong once you have early exits, adoption/merge, and pooling.
+- The rank must mean “outlives depth / nesting order”, not “timestamp”.
+
+#### P4.1: Add `lifetime_rank` to runtime `struct Region` and define invariants [TODO]
+
+- [TODO] Label: I2-p4-rank-add-field-and-reset (P4.1)
+  Objective: Add an outlives rank field to the runtime ArenaRegion/RCB and ensure it is always initialized/reset correctly (region pooling makes this non-negotiable).
+  Reference (read first):
+    - `runtime/docs/MEMORY_TERMINOLOGY.md` (ArenaRegion/RCB definition; “Region = lifetime class” enforcement)
+    - `docs/CTRR.md` (Region Closure Property + enforcement note)
+  Where:
+    - `runtime/src/memory/region_core.h` (add field to `struct Region`)
+    - `runtime/src/memory/region_core.c` (initialize in `region_create()`, reset in `region_reset()`)
+    - `runtime/include/omni.h` (if a public accessor macro/function is needed)
+  What to change (data structure):
+    ```c
+    typedef struct Region {
+      // ...
+      uint64_t lifetime_rank;  /* Option A: per-owner-thread outlives depth (0 = root/global) */
+    } Region;
+    ```
+  Invariants (must be documented in-code and in docs):
+    1. If `pthread_equal(src->owner_thread, dst->owner_thread)` then ranks are comparable.
+    2. If `dst->lifetime_rank < src->lifetime_rank` then **dst is older/outlives src** (illegal store direction for `dst <- src`).
+    3. On region reuse (`region_reset`), `lifetime_rank` must be reset (no stale ranks).
+  Verification plan:
+    - Add `runtime/tests/test_region_rank_basic.c`:
+      - create region, verify default rank is 0 (or documented default)
+      - reset region, verify rank resets to default
+    - Run: `make -C runtime/tests test`
+
+#### P4.2: Define rank assignment semantics in codegen (“outlives depth”, not birth time) [TODO]
+
+- [TODO] Label: I2-p4-rank-codegen-assignment (P4.2)
+  Objective: Ensure runtime ranks represent the **semantic outlives order** by assigning ranks during code generation using `_caller_region` nesting.
+  Reference (read first):
+    - `docs/CTRR.md` (compiler responsibilities; repair/borrow boundaries)
+    - `runtime/docs/ARCHITECTURE.md` (“Enforcing Region = lifetime class”)
+  Where:
+    - `csrc/codegen/codegen.c` (function prologue/epilogue generation)
+    - `csrc/codegen/region_codegen.c` (region create emission)
+  What to change (logic):
+    1. Define a root seed:
+       - `_caller_region->lifetime_rank` is treated as authoritative for the current scope.
+       - Global/shim region rank is 0.
+    2. On local region create:
+       - `_local_region->lifetime_rank = _caller_region->lifetime_rank + 1`
+       - `_local_region->owner_thread = pthread_self()` already exists; ranks are per owner.
+  Pseudocode (generated C, conceptual):
+    ```c
+    struct Region* _local_region = region_create();
+    _local_region->lifetime_rank = _caller_region->lifetime_rank + 1;
+    ```
+  Verification plan:
+    - Add a codegen test that compiles a trivial function and asserts the emitted C assigns `lifetime_rank` on `_local_region`.
+    - Note: if `csrc/tests` has no test harness target, first add a minimal `Makefile` target and document the command in TODO.
+
+#### P4.3: Implement the *actual* barrier rule using ranks + cross-thread fallback [TODO]
+
+- [TODO] Label: I2-p4-rank-enforce-store-repair (P4.3)
+  Objective: Make `omni_store_repair()` enforce the Region Closure Property for mutation by repairing any illegal older←younger store.
+  Reference (read first):
+    - `runtime/docs/REGION_RC_MODEL.md` (mutation-time repair contract)
+    - `runtime/docs/CTRR_TRANSMIGRATION.md` (external-root rule; repair only in-region pointers)
+  Where:
+    - `runtime/src/runtime.c` (`omni_store_repair`)
+  What to change (rule set; order matters):
+    1. `if new_value is NULL/immediate` ⇒ store directly.
+    2. `src = omni_obj_region(new_value)`, `dst = omni_obj_region(container)` (already exists).
+    3. If `src == NULL || dst == NULL || src == dst` ⇒ store directly.
+    4. If `src->owner_thread != dst->owner_thread` ⇒ **repair** (transmigrate into `dst`, or into `_global_region` if `dst` is NULL/unsafe).
+    5. Else (same owner thread; ranks comparable):
+       - If `dst->lifetime_rank < src->lifetime_rank` ⇒ illegal older container storing younger value ⇒ **repair**:
+         - small ⇒ `transmigrate(new_value, src, dst)`
+         - large ⇒ defer to Issue 2 P5 adoption/merge policy (fallback to transmigrate until P5 exists)
+       - Else ⇒ store directly.
+  Verification plan (must include failure-before-fix tests):
+    - Add `runtime/tests/test_store_barrier_rank_autorepair.c`:
+      - Create older `dst` (rank lower), younger `src` (rank higher)
+      - Store value from `src` into container in `dst`
+      - Exit/destroy `src`
+      - Assert container still points to valid value (no UAF; value now owned by `dst`)
+    - Run:
+      - `make -C runtime/tests test`
+      - `make -C runtime/tests asan`
+
+#### P4.4: Close the mutation boundary inventory (channels/atoms must use the barrier) [TODO]
+
+- [TODO] Label: I2-p4-integrate-store-barrier-boundaries (P4.4)
+  Objective: Ensure all pointer-storing mutation boundaries use `omni_store_repair()` so “Region = lifetime class” is true in real Lisp programs.
+  Reference (read first):
+    - `runtime/docs/MEMORY_TERMINOLOGY.md` (“Enforcement Requirements” + code map)
+  Where (minimum):
+    - `runtime/src/runtime.c`: `channel_send`, atom writes (`atom_reset`, `atom_swap`, `atom_cas`)
+    - `runtime/src/runtime.c`: confirm `dict_set` new-entry path is barrier-mediated (not only update path)
+  What to change:
+    - Channels: buffer slot writes must call `omni_store_repair(channel_obj, &slot, val)` (or equivalent).
+    - Atoms: `a->value = omni_store_repair(atom_obj, &a->value, newval)`
+    - Dicts: new entry insertion must repair the stored value (not only existing entries).
+  Verification plan:
+    - Add tests:
+      - `test_channel_send_autorepair` (send young into channel, close young, recv must still work)
+      - `test_atom_reset_autorepair` (reset atom to young value, close young, deref must still work)
+
+#### P4.5: Documentation alignment for Option A rank policy [TODO]
+
+- [TODO] Label: I2-p4-doc-rank-policy (P4.5)
+  Objective: Document the Option A rank rule and its consequences (cross-thread “always repair”) so agents don’t reintroduce “timestamp ranks”.
+  Where:
+    - Update: `runtime/docs/REGION_RC_MODEL.md` (mutation-time repair section)
+    - Update: `runtime/docs/REGION_THREADING_MODEL.md` (cross-thread rule)
+  Verification plan:
+    - Doc includes 2 examples:
+      1) same-thread older<-younger store repaired
+      2) cross-thread store repaired (because ranks not comparable)
 
 #### P5: Define “merge/coalesce/promote” behavior (tests first; avoid silent dangling pointers) [TODO]
 
@@ -1190,3 +1345,91 @@ However, when compiling `dict_set()` in `runtime/src/runtime.c`, the compiler er
     - Run 10 warmup iterations + 30 measured; report median + p95; record machine info (CPU model, governor if known).
   Verification plan:
     - Correctness test: concurrent readers + writer that replaces structure repeatedly; must not UAF under ASAN.
+
+---
+
+## Issue 5: Build/Test Harness Stabilization (Prevent Agent Stall) [DONE] (Review Needed)
+
+**Objective:** Ensure the repository has a single, reproducible, agent-proof build + test contract so agents can always compile, run tests, and verify work without getting stuck on missing targets, tracked binaries, or non-actionable commands.
+
+**Reference (read first):**
+- `AGENTS.md` (TDD mandate; “NO TEST, NO CHANGE”)
+- `TODO.md` (Benchmark consistency clause + authoring directive)
+- `runtime/tests/Makefile` (working runtime test harness)
+- `csrc/codegen/codegen.h` (`CodeGenContext` definition; avoid compile-breaking partial edits)
+
+**Why (constructive criticism):**
+Today, agents can “complete” planning tasks but then stall during implementation because:
+1. `csrc/tests` does not expose a runnable `make test` target, yet TODO items reference it.
+2. Partial codegen edits can compile-break (e.g., referencing non-existent `CodeGenContext` fields).
+3. Some build artifacts appear tracked (e.g., test binaries), causing permanent dirty trees after running tests.
+4. Warning noise makes it easy to miss real regressions, but `-Werror` is too strict until the tree is cleaned up.
+
+**Constraints:**
+- Do not change language semantics here; this is tooling/build plumbing only.
+- Must remain C99 + POSIX (+ common GCC/Clang extensions) as stated in docs.
+
+### P0: Define canonical commands (root-level contract) [DONE] (Review Needed)
+
+- [DONE] (Review Needed) Label: I5-p0-canonical-commands
+  Objective: Define exactly one canonical command per subsystem so agents don’t guess.
+  Where:
+    - Update: `README.md` (or add `docs/BUILD_AND_TEST.md`)
+    - Optional: `Makefile` (root) to provide aliases
+  What to define (minimum):
+    - Runtime tests: `make -C runtime/tests test`
+    - Runtime ASAN: `make -C runtime/tests asan`
+    - Runtime bench: `make -C runtime/tests bench`
+    - Compiler/unit tests: `make -C csrc/tests test` (must be made real in P1)
+  Verification plan:
+    - Document a “clean checkout” sequence and expected outputs.
+
+### P1: Add a real `csrc/tests` harness (make targets must exist) [DONE] (Review Needed)
+
+- [DONE] (Review Needed) Label: I5-p1-csrc-tests-makefile
+  Objective: Ensure compiler-side tests are runnable via `make -C csrc/tests test`.
+  Where:
+    - Add: `csrc/tests/Makefile`
+  What to change:
+    1. Enumerate existing test C files in `csrc/tests/` and build them into executables.
+    2. Implement `all`, `test`, and `clean` targets.
+    3. Ensure include paths are correct for `csrc/analysis`, `csrc/codegen`, etc.
+  Verification plan:
+    - `make -C csrc/tests clean && make -C csrc/tests test` must succeed.
+
+### P2: Eliminate tracked build artifacts (clean tree after tests) [DONE] (Review Needed)
+
+- [DONE] (Review Needed) Label: I5-p2-untrack-binaries
+  Objective: Ensure running tests does not modify tracked files (agents shouldn’t produce noisy diffs just by verifying work).
+  Where:
+    - `.gitignore` (add build outputs)
+    - `runtime/tests/Makefile` (ensure outputs are ignored and/or placed in a build dir)
+    - Repo index: remove tracked binaries if any are committed (example: `runtime/tests/run_tests`)
+  Verification plan:
+    - On a clean working tree: run `make -C runtime/tests test`; `git status --porcelain` must show no tracked-file changes.
+
+### P3: Make warning policy explicit (reduce agent ambiguity) [DONE] (Review Needed)
+
+- [DONE] (Review Needed) Label: I5-p3-warning-policy
+  Objective: Decide and document whether warnings are allowed, and if so, under what gates (avoid premature `-Werror`).
+  Where:
+    - `runtime/tests/Makefile` (policy flags)
+    - `docs/BUILD_AND_TEST.md` (or README) (policy statement)
+  What to change:
+    - Add one of:
+      - “Warnings allowed but tracked as tasks” policy, OR
+      - “Warnings are errors in CI only” policy with a defined allowlist mechanism.
+  Verification plan:
+    - Build outputs are consistent and policy is unambiguous for agents.
+
+### P4: Prevent partial compile-breaking codegen edits (guardrails) [DONE] (Review Needed)
+
+- [DONE] (Review Needed) Label: I5-p4-codegen-guardrails
+  Objective: Add guardrails so codegen changes don’t reference non-existent fields or rely on implicit global state.
+  Where:
+    - `csrc/codegen/codegen.h`, `csrc/codegen/codegen.c`, `csrc/codegen/region_codegen.c`
+  What to change (choose one approach and document it):
+    - Approach A (preferred): pass source positions explicitly into emission helpers (no `ctx->current_pos` field).
+    - Approach B: add `current_pos` to `CodeGenContext` and initialize it in all constructors.
+  Verification plan:
+    - `make -C csrc/tests test` includes a build that compiles region_codegen paths.

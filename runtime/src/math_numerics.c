@@ -46,12 +46,12 @@ static long obj_to_long(Obj* obj) {
     return obj_to_int(obj);
 }
 
+#if 0
 /*
  * Helper: Create Obj from double
  */
 static Obj* double_to_obj(double d) {
-    /* Check if it's an integer */
-    if (d == (long)d && d >= IMM_INT_MIN && d <= IMM_INT_MAX) {
+    if (d == (long)d && (long long)d >= IMM_INT_MIN && (long long)d <= IMM_INT_MAX) {
         return mk_int((long)d);
     }
     return mk_float(d);
@@ -63,6 +63,7 @@ static Obj* double_to_obj(double d) {
 static Obj* long_to_obj(long l) {
     return mk_int(l);
 }
+#endif
 
 /* ============== Basic Arithmetic ============== */
 
@@ -209,7 +210,7 @@ Obj* prim_sqrt(Obj* x) { return mk_float(sqrt(obj_to_double(x))); }
 
 Obj* prim_floor(Obj* x) {
     double d = obj_to_double(x);
-    if (d == (long)d && d >= IMM_INT_MIN && d <= IMM_INT_MAX) {
+    if (d == (long)d && (long long)d >= IMM_INT_MIN && (long long)d <= IMM_INT_MAX) {
         return mk_int((long)d);
     }
     return mk_float(floor(d));
@@ -217,7 +218,7 @@ Obj* prim_floor(Obj* x) {
 
 Obj* prim_ceil(Obj* x) {
     double d = obj_to_double(x);
-    if (d == (long)d && d >= IMM_INT_MIN && d <= IMM_INT_MAX) {
+    if (d == (long)d && (long long)d >= IMM_INT_MIN && (long long)d <= IMM_INT_MAX) {
         return mk_int((long)d);
     }
     return mk_float(ceil(d));
@@ -225,7 +226,7 @@ Obj* prim_ceil(Obj* x) {
 
 Obj* prim_round(Obj* x) {
     double d = obj_to_double(x);
-    if (d == (long)d && d >= IMM_INT_MIN && d <= IMM_INT_MAX) {
+    if (d == (long)d && (long long)d >= IMM_INT_MIN && (long long)d <= IMM_INT_MAX) {
         return mk_int((long)d);
     }
     return mk_float(round(d));
@@ -233,7 +234,7 @@ Obj* prim_round(Obj* x) {
 
 Obj* prim_trunc(Obj* x) {
     double d = obj_to_double(x);
-    if (d == (long)d && d >= IMM_INT_MIN && d <= IMM_INT_MAX) {
+    if (d == (long)d && (long long)d >= IMM_INT_MIN && (long long)d <= IMM_INT_MAX) {
         return mk_int((long)d);
     }
     return mk_float(trunc(d));

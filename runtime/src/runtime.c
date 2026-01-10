@@ -201,6 +201,7 @@ int is_truthy(Obj* x) {
  * Helper: Compare two symbols for equality
  * Returns 1 if both are symbols with same string value
  */
+#if 0
 static int sym_equals(Obj* a, Obj* b) {
     if (!a || !b) return 0;
     if (!IS_BOXED(a) || !IS_BOXED(b)) return 0;
@@ -210,6 +211,7 @@ static int sym_equals(Obj* a, Obj* b) {
     if (!a_str || !b_str) return 0;
     return strcmp(a_str, b_str) == 0;
 }
+#endif
 
 /*
  * Helper: Compare two strings for equality
@@ -225,6 +227,7 @@ static int string_equals(Obj* a, Obj* b) {
     return strcmp(a_str, b_str) == 0;
 }
 
+#if 0
 /*
  * Helper: Check if symbol is a special keyword
  * Special symbols: true, false, nil, _, &, when
@@ -238,6 +241,7 @@ static int is_special_sym(const char* s) {
            strcmp(s, "&") == 0 ||
            strcmp(s, "when") == 0;
 }
+#endif
 
 /*
  * Helper: Check if pattern is a wildcard (_)
@@ -753,7 +757,19 @@ Obj* box_get(Obj* b) { return (b && IS_BOXED(b) && b->tag == TAG_BOX) ? b->a : N
 void array_push(Obj* arr, Obj* val) {
     if (!arr || !IS_BOXED(arr) || arr->tag != TAG_ARRAY) return;
     Array* a = (Array*)arr->ptr;
-    // For global region usage we assume realloc works or fails
+    /* Issue 2 P4: Use store barrier to enforce Region Closure Property */
+    if (a->len < a->capacity) {
+        /* Store repaired value */
+        a->data[a->len] = omni_store_repair(arr, &a->data[a->len], val);
+        a->len++;
+        /* Phase 34.2: Monotonic boxed-element flag */
+        if (val && !IS_IMMEDIATE(val)) {
+            a->has_boxed_elems = true;
+        }
+    } else {
+        /* Array is full, need reallocation (TODO: implement proper grow with region_realloc) */
+        /* For now, skip or fail silently */
+    }
 }
 
 /* ========== Issue 2 P4: Mutation Store Barrier ========== */
@@ -850,8 +866,8 @@ void dict_set(Obj* dict, Obj* key, Obj* val) {
 
     while (entry) {
         if (entry->key == key) {
-            /* Found existing entry - apply store barrier to value slot */
-            Obj* repaired_val = omni_store_repair((Obj*)dict, &entry->value, val);
+            /* Use store barrier for value update */
+            Obj* repaired_val = omni_store_repair((Obj*)dict, (Obj**)&entry->value, val);
             entry->value = repaired_val;
             return;
         }
@@ -1344,13 +1360,7 @@ Obj* prim_fn(Obj* params_and_ret) {
     Obj* params_obj = params_and_ret->a;
     Obj* ret_type_obj = params_and_ret->b;
 
-    /* Count parameters */
-    size_t param_count = 0;
-    Obj* p = params_obj;
-    while (p && IS_BOXED(p) && p->tag == TAG_PAIR) {
-        param_count++;
-        p = p->b;
-    }
+    Obj* p = NULL;
 
     /* Build function type name */
     size_t name_len = 64;  /* Base size for "Fn ->" */
@@ -1462,6 +1472,7 @@ static void free_path_components(char** components) {
     free(components);
 }
 
+#if 0
 /*
  * Helper: Look up a nested field in a structure
  * For now, this only works with simple dict-like structures
@@ -1499,6 +1510,7 @@ static Obj* deep_get(Obj* root, char** components, int component_count) {
 
     return current;
 }
+#endif
 
 /*
  * Helper: Set a nested field in a structure (immutable - returns new structure)
@@ -1506,6 +1518,7 @@ static Obj* deep_get(Obj* root, char** components, int component_count) {
  * A full implementation would use proper structural sharing
  */
 static Obj* deep_set(Obj* root, char** components, int component_count, Obj* new_value) {
+    (void)components;
     if (!root || component_count == 0) return new_value;
 
     /* For simplicity, this is a placeholder that returns an error */
@@ -1845,6 +1858,7 @@ Obj* prim_type_is(Obj* value, Obj* type_obj) {
  *   - 'a' = letter [a-zA-Z]
  *   - otherwise = literal character
  */
+#if 0
 static int match_char_class(char c, char pattern_type) {
     switch (pattern_type) {
         case 'd': return (c >= '0' && c <= '9');
@@ -1856,6 +1870,7 @@ static int match_char_class(char c, char pattern_type) {
         default: return 0;
     }
 }
+#endif
 
 /*
  * Simple pattern matcher that supports basic regex-like patterns

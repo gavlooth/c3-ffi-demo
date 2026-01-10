@@ -13,3 +13,19 @@ coverage.out
 # Output files (large temporary files)
 ouput.save
 *.save
+
+
+# Build artifacts
+*.o
+*.a
+runtime/build/
+
+# Test binaries
+runtime/tests/run_tests
+runtime/tests/run_tests_api
+runtime/tests/bench_*
+runtime/tests/*_asan
+runtime/tests/*_tsan
+runtime/tests/*_ubsan
+csrc/tests/test_*
+!csrc/tests/test_*.c

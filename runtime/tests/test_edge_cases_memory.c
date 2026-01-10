@@ -83,6 +83,7 @@ void test_null_is_truthy(void) {
 void test_immediate_inc_ref(void) {
     Obj* imm = mk_int_unboxed(42);
     int old_mark = imm->mark;  /* This may be garbage for immediates */
+    (void)old_mark;
 
     inc_ref(imm);  /* Should be no-op for immediates */
 
@@ -345,7 +346,7 @@ void test_sym_null_string(void) {
 
 void test_sym_very_long(void) {
     char long_str[10000];
-    for (int i = 0; i < sizeof(long_str) - 1; i++) {
+    for (size_t i = 0; i < sizeof(long_str) - 1; i++) {
         long_str[i] = 'a';
     }
     long_str[sizeof(long_str) - 1] = '\0';
@@ -636,6 +637,7 @@ void test_list_circular_length(void) {
 
     /* This should either detect cycle or terminate */
     Obj* len = list_length(cycle);
+    (void)len;
     /* Just verify it doesn't crash */
 
     free_tree(cycle);
@@ -852,6 +854,7 @@ void test_borrow_null(void) {
 void test_borrow_immediate(void) {
     Obj* imm = mk_int_unboxed(42);
     BorrowedRef ref = borrow_ref(imm);
+    (void)ref;
 
     /* Immediates should return special ref or NULL */
     /* The exact behavior depends on implementation */
@@ -962,6 +965,7 @@ void test_channel_send_on_closed(void) {
     channel_close(ch);
 
     int result = channel_send(ch, mk_int(42));
+    (void)result;
     /* Should fail gracefully */
 
     dec_ref(ch);

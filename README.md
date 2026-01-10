@@ -123,3 +123,7 @@ make
 *   [DESIGN.md](./DESIGN.md) - Full technical specification.
 *   [SUMMARY.md](./SUMMARY.md) - Feature implementation overview.
 *   [FFI_PROPOSAL.md](./FFI_PROPOSAL.md) - Foreign Function Interface design.
+
+## Build and Test
+
+See [docs/BUILD_AND_TEST.md](docs/BUILD_AND_TEST.md) for canonical build and test commands.

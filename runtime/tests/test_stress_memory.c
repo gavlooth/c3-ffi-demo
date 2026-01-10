@@ -47,9 +47,11 @@ void test_stress_oom_allocation_pattern(void) {
     for (int i = 1; i < 10000; i += 2) {
         if (objs[i]) {
             dec_ref(objs[i]);
+            allocated--;
         }
     }
-
+    (void)allocated;
+    
     PASS();
 }
 

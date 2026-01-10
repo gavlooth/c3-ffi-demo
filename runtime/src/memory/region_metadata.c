@@ -751,7 +751,7 @@ static void init_core_type_metadata(Region* r) {
         .num_pointer_fields = 0,
         .pointer_offsets = {0},
         .can_inline = true,
-        .inline_threshold = 16,
+        .inline_threshold = 64,
         .clone = clone_int_boxed,      /* CTRR: boxed scalar clone (immediates bypass metadata) */
         .trace = trace_noop,           /* CTRR: no child pointers */
         .destroy = NULL,
@@ -769,7 +769,7 @@ static void init_core_type_metadata(Region* r) {
         .num_pointer_fields = 0,
         .pointer_offsets = {0},
         .can_inline = true,
-        .inline_threshold = 16,
+        .inline_threshold = 64,
         .clone = clone_float_boxed,    /* CTRR: boxed scalar clone */
         .trace = trace_noop,           /* CTRR: no child pointers */
         .destroy = NULL,
@@ -787,7 +787,7 @@ static void init_core_type_metadata(Region* r) {
         .num_pointer_fields = 0,
         .pointer_offsets = {0},
         .can_inline = true,
-        .inline_threshold = 8,
+        .inline_threshold = 64,
         .clone = clone_char_boxed,     /* CTRR: boxed scalar clone */
         .trace = trace_noop,           /* CTRR: no child pointers */
         .destroy = NULL,
@@ -805,7 +805,7 @@ static void init_core_type_metadata(Region* r) {
         .num_pointer_fields = 2,
         .pointer_offsets = {offsetof(struct Obj, a), offsetof(struct Obj, b)},
         .can_inline = true,
-        .inline_threshold = 56,
+        .inline_threshold = 64,
         .clone = clone_pair,          /* CTRR: pair-specific clone */
         .trace = trace_pair,          /* CTRR: pair-specific trace */
         .destroy = NULL,

@@ -58,6 +58,7 @@ static void test_can_splice_arena_only_false_after_inline_alloc(void) {
 
     /* Allocate a symbol - this uses inline buffer (8 bytes for small symbols) */
     Obj* sym = mk_sym_region(r, "test");
+    (void)sym;
 
     /* Verify inline buffer was used */
     ASSERT(r->inline_buf.offset > 0);

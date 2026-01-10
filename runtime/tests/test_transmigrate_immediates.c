@@ -153,6 +153,7 @@ static void test_transmigrate_immediate_with_non_empty_region(void) {
 
     /* Allocate something in the source region to make it non-empty */
     Obj* sym = mk_sym_region(src, "test");
+    (void)sym;
 
     /* Create an immediate integer value */
     Obj* immediate_int = mk_int_unboxed(789);

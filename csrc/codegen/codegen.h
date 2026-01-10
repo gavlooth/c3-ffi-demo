@@ -83,6 +83,9 @@ typedef struct CodeGenContext {
     SpecDB* spec_db;           /* Database of function specializations */
     TypeEnv* type_env;         /* Type environment for tracking types */
     bool enable_specialization;  /* Enable type specialization (default: true) */
+    
+    /* Current source position for debug info / retention insertion */
+    int current_pos;
 } CodeGenContext;
 
 /* ============== Code Generator API ============== */

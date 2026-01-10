@@ -93,23 +93,7 @@ $(TARGET): $(CLI_OBJS) $(LIBRARY)
 
 # Test target
 test: $(TARGET)
-	@echo "Running basic tests..."
-	@echo "Building and running parse_all regression tests..."
-	@$(CC) $(CFLAGS) -I. -I../runtime/include -o tests/test_parse_all tests/test_parse_all.c -L. -lomnilisp $(LDFLAGS)
-	@./tests/test_parse_all
-	@echo "Building and running syntax sugar parser tests..."
-	@$(CC) $(CFLAGS) -I. -I../runtime/include -o tests/test_syntax_sugar tests/test_syntax_sugar.c -L. -lomnilisp $(LDFLAGS)
-	@./tests/test_syntax_sugar
-	@echo "(+ 1 2)" | ./$(TARGET) && echo "PASS: arithmetic"
-	@echo "(if (< 1 2) 10 20)" | ./$(TARGET) && echo "PASS: conditionals"
-	@echo "(if 0 1 2)" | ./$(TARGET) | grep -q "^1$$" && echo "PASS: zero truthy"
-	@echo "(if false 1 2)" | ./$(TARGET) | grep -q "^2$$" && echo "PASS: false falsy"
-	@echo "(if nothing 1 2)" | ./$(TARGET) | grep -q "^2$$" && echo "PASS: nothing falsy"
-	@echo "()" | ./$(TARGET) | grep -q "^()$$" && echo "PASS: empty list literal"
-	@echo "nil" | ./$(TARGET) | grep -q "^()$$" && echo "PASS: nil literal"
-	@echo "(let [x 5] (* x x))" | ./$(TARGET) && echo "PASS: let bindings"
-	@echo "(define (square n) (* n n)) (square 7)" | ./$(TARGET) && echo "PASS: functions"
-	@echo "All basic tests passed!"
+	$(MAKE) -C tests test
 
 # Clean
 clean:

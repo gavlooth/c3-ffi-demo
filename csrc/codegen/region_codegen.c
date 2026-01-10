@@ -8,6 +8,9 @@
 #include <string.h>
 #include <stdio.h>
 
+/* Issue 1 P2: Track current position for last_use check */
+static int omni_codegen_current_pos = 0;
+
 /* ============== Region Lifecycle Code Generation ============== */
 
 void omni_codegen_region_create(CodeGenContext* ctx, RegionInfo* region) {
@@ -22,11 +25,14 @@ void omni_codegen_region_create(CodeGenContext* ctx, RegionInfo* region) {
 
     /* Emit region creation comment */
     omni_codegen_emit_raw(ctx, "/* Region %s: start_pos=%d, end_pos=%d */\n",
-                          region->name ? region->name : "(anon)",
-                          region->start_pos, region->end_pos);
+                           region->name ? region->name : "(anon)",
+                           region->start_pos, region->end_pos);
 
-    /* Emit region_create() call */
-    omni_codegen_emit(ctx, "struct Region* %s = region_create();\n", region_var);
+    /* Emit region_create() call - Issue 1 P2: Track position for last_use check */
+    omni_codegen_emit(ctx, "struct Region* %s = region_create();  /* Line: %d */\n", region_var, ctx->current_pos);
+
+    /* Issue 1 P2: Update current position after emitting region_create */
+    ctx->current_pos++;
 
     /* Emit variable list comment */
     if (region->var_count > 0) {

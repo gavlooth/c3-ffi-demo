@@ -211,13 +211,35 @@ static inline void* region_alloc_typed(Region* r, TypeID type_id, size_t size) {
         if (buf->offset + aligned_size <= buf->capacity) {
             void* ptr = &buf->buffer[buf->offset];
             buf->offset += aligned_size;
+            
+            /* Issue 2 P3: Update accounting for inline allocation */
+            r->bytes_allocated_total += aligned_size;
+            r->inline_buf_used_bytes += aligned_size;
+            if (r->inline_buf_used_bytes > r->bytes_allocated_peak) {
+                r->bytes_allocated_peak = r->inline_buf_used_bytes;
+            }
+            
             return ptr;
         }
         /* Fall through to arena if inline buffer exhausted */
     }
 
     /* SLOW PATH: Arena allocation for large or non-inlineable types */
-    return arena_alloc(&r->arena, size);
+    /* Issue 2 P3: Update accounting for arena allocation and track chunk count */
+    ArenaChunk* before = r->arena.end;
+    void* ptr = arena_alloc(&r->arena, size);
+
+    if (r->arena.end != before) {
+        r->chunk_count++;
+        r->last_arena_end = r->arena.end;
+    }
+
+    r->bytes_allocated_total += size;
+    if (r->bytes_allocated_total > r->bytes_allocated_peak) {
+        r->bytes_allocated_peak = r->bytes_allocated_total;
+    }
+
+    return ptr;
 }
 
 // -- Region Reference (Smart Pointer) --

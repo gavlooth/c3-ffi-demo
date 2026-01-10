@@ -916,13 +916,26 @@ void* transmigrate(void* root, Region* src_region, Region* dest_region) {
             continue;
         }
 
-        /* Phase 34.1: If the object is outside the source region allocation domain,
-         * leave it untouched. This preserves identity for external objects. */
-        if (!bitmap_in_range(bitmap, old_obj)) {
+                /* Phase 34.1: External pointer filtering - prefer owner-region identity.
+         * CTRR rule: transmigrate() should repair pointers *into* closing region.
+         * It must NOT clone boxed objects not owned by src_region, because:
+         * - it's wasted work (performance regression)
+         * - it breaks identity-sensitive semantics (eq) if external objects are duplicated
+         *
+         * We use owner_region as primary check (available when OMNI_OBJ_REGION_IMPLEMENTED)
+         * and fall back to bitmap_in_range() as an optimization.
+         */
+        Region* obj_owner = omni_obj_region(old_obj);
+        if (obj_owner && obj_owner != src_region) {
+            /* External root: preserve identity, do not clone */
             *current->slot = old_obj;
             continue;
         }
-
+        /* Fallback optimization: if no owner metadata, use bitmap range check */
+        if (!obj_owner && !bitmap_in_range(bitmap, old_obj)) {
+            *current->slot = old_obj;
+            continue;
+        }
         // Cycle detection using bitmap (FAST: O(1))
         if (bitmap_test(bitmap, old_obj)) {
             // Phase 35 P0: Try forwarding table first (O(1)), fall back to hash map
