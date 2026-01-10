@@ -56,6 +56,13 @@ typedef enum {
     ESCAPE_GLOBAL,       /* Escapes to global/module scope */
 } EscapeClass;
 
+/* ============== Escape Repair Strategy (Issue 1 P2) ============== */
+
+typedef enum {
+    ESCAPE_REPAIR_TRANSMIGRATE = 0,  /* Copy value graph to destination region */
+    ESCAPE_REPAIR_RETAIN_REGION = 1,  /* Keep source region alive via RC */
+} EscapeRepairStrategy;
+
 typedef struct EscapeInfo {
     char* name;
     EscapeClass escape_class;

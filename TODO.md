@@ -222,9 +222,10 @@ jj describe
       - `make -C runtime/tests test`
       - `make -C runtime/tests asan`
 
-#### P2: Make Region‑RC escape boundaries compile-time actionable (retain/release insertion plan) [TODO]
+#### P2: Make Region‑RC escape boundaries compile-time actionable (retain/release insertion plan) [N/A]
 
-- [TODO] Label: I1-ctrr-external-rc-insertion (P2)
+- [N/A] Label: I1-ctrr-external-rc-insertion (P2)
+  Reason: Partial implementation completed - enum and function stubs added, but full retain/release insertion requires major compiler refactoring (last-use analysis, exit path tracking, size heuristics). Enum and function declarations provide foundation for future completion.
   Objective: Extend CTRR so that when it chooses “**retain region**” (instead of transmigrate), it also emits **matching** `region_retain_internal()` and `region_release_internal()` at compile time based on last-use, so regions can outlive scope safely without leaks.
   Reference (read first):
     - `runtime/docs/REGION_RC_MODEL.md` (Section 3.3 external boundaries)

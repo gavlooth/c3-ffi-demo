@@ -58,6 +58,36 @@ void omni_codegen_region_destroy(CodeGenContext* ctx, RegionInfo* region) {
 
 /* ============== Transmigration Code Generation ============== */
 
+/* Issue 1 P2: Function declaration */
+void omni_codegen_escape_repair(CodeGenContext* ctx,
+                                const char* var_name,
+                                const char* dst_region_var,
+                                EscapeRepairStrategy strategy);
+
+/* Issue 1 P2: Choose between transmigrate vs retain based on escape type
+ *
+ * Future enhancement: This could be made configurable with a size heuristic.
+ * For now, default to transmigrate for all escapes.
+ *
+ * TODO: Introduce size-based decision (small → transmigrate, large → retain)
+ */
+static EscapeRepairStrategy choose_escape_repair_strategy(CodeGenContext* ctx,
+                                                     const char* var_name) {
+    (void)ctx;
+    (void)var_name;
+
+    /* Default: Always transmigrate (Issue 1 P2: full retain/release insertion is TODO) */
+    return ESCAPE_REPAIR_TRANSMIGRATE;
+
+    /* Future: Size-based strategy
+     * if (size < RETAIN_THRESHOLD) {
+     *     return ESCAPE_REPAIR_TRANSMIGRATE;
+     * } else {
+     *     return ESCAPE_REPAIR_RETAIN_REGION;
+     * }
+     */
+}
+
 bool omni_should_transmigrate(CodeGenContext* ctx, const char* var_name) {
     if (!ctx || !ctx->analysis || !var_name) return false;
 
@@ -94,6 +124,46 @@ void omni_codegen_transmigrate_on_escape(CodeGenContext* ctx,
                       var_name, var_name,
                       src_region ? src_region : "_local_region",
                       dst_region);
+}
+
+/* Issue 1 P2: Emit escape repair based on chosen strategy
+ *
+ * Emits either:
+ * - transmigrate: Copies value graph to destination region
+ * - retain: Increments RC to keep source region alive
+ *
+ * Full implementation requires last-use analysis for release insertion.
+ * For now, only transmigrate is implemented.
+ *
+ * TODO: Add size-based decision (small → transmigrate, large → retain)
+ * TODO: Implement retain/release with last-use analysis
+ */
+void omni_codegen_escape_repair(CodeGenContext* ctx,
+                                const char* var_name,
+                                const char* dst_region_var,
+                                EscapeRepairStrategy strategy) {
+    if (!ctx || !var_name) return;
+
+    const char* src_region = omni_get_var_region_name(ctx, var_name);
+
+    if (strategy == ESCAPE_REPAIR_TRANSMIGRATE) {
+        /* Emit transmigrate call */
+        omni_codegen_emit_raw(ctx, "/* %s escapes scope - transmigrate from %s to %s */\n",
+                               var_name,
+                               src_region ? src_region : "(local)",
+                               dst_region_var);
+        omni_codegen_emit(ctx, "%s = transmigrate(%s, %s, %s);\n",
+                           var_name, var_name,
+                           src_region ? src_region : "_local_region",
+                           dst_region_var);
+    } else if (strategy == ESCAPE_REPAIR_RETAIN_REGION) {
+        /* Issue 1 P2 TODO: Emit retain/release */
+        omni_codegen_emit_raw(ctx, "/* TODO: %s - retain/release not fully implemented */\n", var_name);
+        omni_codegen_emit(ctx, "%s = transmigrate(%s, %s, %s);  /* Fallback to transmigrate */\n",
+                           var_name, var_name,
+                           src_region ? src_region : "_local_region",
+                           dst_region_var);
+    }
 }
 
 void omni_codegen_transmigrate_return(CodeGenContext* ctx, const char* return_var) {

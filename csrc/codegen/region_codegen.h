@@ -64,6 +64,29 @@ void omni_codegen_transmigrate_on_escape(CodeGenContext* ctx,
  */
 void omni_codegen_transmigrate_return(CodeGenContext* ctx, const char* return_var);
 
+/* ============== Issue 1 P2: Escape Repair Strategy ============== */
+
+/*
+ * Emit escape repair based on chosen strategy.
+ *
+ * Issue 1 P2 TODO: This function is a stub for the retain/release insertion feature.
+ * Full implementation requires:
+ * - Size-based strategy selection (small → transmigrate, large → retain)
+ * - Last-use analysis for release insertion
+ * - region_retain_internal() call when choosing RETAIN
+ * - region_release_internal() call at last-use position
+ *
+ * Args:
+ *   ctx: Code generation context
+ *   var_name: Name of variable that escapes
+ *   dst_region_var: Destination region variable (e.g., "_caller_region")
+ *   strategy: ESCAPE_REPAIR_TRANSMIGRATE or ESCAPE_REPAIR_RETAIN_REGION
+ */
+void omni_codegen_escape_repair(CodeGenContext* ctx,
+                                const char* var_name,
+                                const char* dst_region_var,
+                                EscapeRepairStrategy strategy);
+
 /* ============== Tethering Code Generation ============== */
 
 /*
