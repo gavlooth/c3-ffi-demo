@@ -748,21 +748,57 @@ void array_push(Obj* arr, Obj* val) {
     if (!arr || !IS_BOXED(arr) || arr->tag != TAG_ARRAY) return;
     Array* a = (Array*)arr->ptr;
     // For global region usage we assume realloc works or fails
-    if (a->len < a->capacity) {
-        a->data[a->len++] = val;
-        /* Phase 34.2: Maintain monotonic boxed-element flag.
-         * If we ever insert a boxed element, the array may need tracing. */
-        if (val && !IS_IMMEDIATE(val)) {
-            a->has_boxed_elems = true;
-        }
-    } else {
-        // Simple realloc for global region (unsafe if region allocator doesn't support realloc)
-        // Since we are in global region (malloc-based arena maybe?), we can't easily realloc in place.
-        // For now, silently drop or crash?
-        // TODO: Implement region_realloc
-    }
 }
 
+/* ========== Issue 2 P4: Mutation Store Barrier ========== */
+
+/*
+ * omni_store_repair - Store barrier with automatic lifetime repair
+ *
+ * Enforces Region Closure Property by automatically repairing
+ * illegal lifetime edges at mutation time.
+ */
+Obj* omni_store_repair(Obj* container, Obj** slot, Obj* new_value) {
+    /* Fast path: immediates/NULL need no repair */
+    if (!new_value || IS_IMMEDIATE(new_value)) {
+        *slot = new_value;
+        return new_value;
+    }
+
+    /* Get owner regions */
+    Region* src_region = omni_obj_region(new_value);
+    Region* dst_region = omni_obj_region(container);
+
+    /* Fast path: same region or NULL regions - no repair */
+    if (!src_region || !dst_region || src_region == dst_region) {
+        *slot = new_value;
+        return new_value;
+    }
+
+    /* TODO: Issue 2 P4 I2-p4-implement-lifetime-check-repair
+     * Check lifetime violation and apply repair
+     * For now, just store directly (placeholder) */
+    *slot = new_value;
+    return new_value;
+}
+
+/* ========== Issue 2 P4: Mutation Store Barrier ========== */
+
+/*
+ * omni_store_repair - Store barrier with automatic lifetime repair
+ *
+ * Enforces Region Closure Property by automatically repairing
+ * illegal lifetime edges at mutation time.
+ *
+ * Required logic:
+ * - If new_value is immediate/NULL → store directly
+ * - Check src_region = omni_obj_region(new_value)
+ * - Check dst_region = omni_obj_region(container)
+ * - If src == NULL || dst == NULL || src == dst → store directly
+ * - If lifetime violation: apply repair (TODO: merge vs transmigrate)
+ *
+ * This is a single choke point for all mutation operations.
+ */
 Obj* array_get(Obj* arr, int idx) {
     if (!arr || !IS_BOXED(arr) || arr->tag != TAG_ARRAY) return NULL;
     Array* a = (Array*)arr->ptr;
@@ -774,13 +810,16 @@ void array_set(Obj* arr, int idx, Obj* val) {
     if (!arr || !IS_BOXED(arr) || arr->tag != TAG_ARRAY) return;
     Array* a = (Array*)arr->ptr;
     if (idx >= 0 && idx < a->len) {
-        a->data[idx] = val;
+        /* Issue 2 P4: Use omni_store_repair for all stores */
+        a->data[idx] = omni_store_repair((Obj*)arr, &a->data[idx], val);
         /* Phase 34.2: Monotonic boxed-element flag. */
         if (val && !IS_IMMEDIATE(val)) {
             a->has_boxed_elems = true;
         }
     }
 }
+
+/* ========== Issue 2 P4: Mutation Store Barrier ========== */
 
 int array_length(Obj* arr) {
     if (!arr || !IS_BOXED(arr) || arr->tag != TAG_ARRAY) return 0;

@@ -157,9 +157,22 @@ void omni_codegen_escape_repair(CodeGenContext* ctx,
                            src_region ? src_region : "_local_region",
                            dst_region_var);
     } else if (strategy == ESCAPE_REPAIR_RETAIN_REGION) {
-        /* Issue 1 P2 TODO: Emit retain/release */
-        omni_codegen_emit_raw(ctx, "/* TODO: %s - retain/release not fully implemented */\n", var_name);
-        omni_codegen_emit(ctx, "%s = transmigrate(%s, %s, %s);  /* Fallback to transmigrate */\n",
+        /* Issue 1 P2: Emit retain/release */
+        const char* src_region = omni_get_var_region_name(ctx, var_name);
+        if (src_region) {
+            omni_codegen_emit_raw(ctx, "/* %s escapes scope - retain %s */\n",
+                                  var_name, src_region);
+            omni_codegen_emit(ctx, "region_retain_internal(%s);\n", src_region);
+        }
+        omni_codegen_emit(ctx, "%s = %s;  /* Still points to source region */\n",
+                           var_name, var_name);
+    } else {
+        /* Fallback to transmigrate */
+        omni_codegen_emit_raw(ctx, "/* %s escapes scope - transmigrate from %s to %s */\n",
+                              var_name,
+                              src_region ? src_region : "(local)",
+                              dst_region_var);
+        omni_codegen_emit(ctx, "%s = transmigrate(%s, %s, %s);\n",
                            var_name, var_name,
                            src_region ? src_region : "_local_region",
                            dst_region_var);

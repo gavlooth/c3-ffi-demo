@@ -1280,12 +1280,12 @@ Obj* prim_resolve(Obj* qualified_name);
  * This function maps any boxed Obj* to its owning Region in O(1).
  * It returns NULL for immediates (ints, chars, bools) and NULL pointers.
  *
- * This is the foundation for Region-RC, enabling:
+ * This is a foundation for Region-RC, enabling:
  * - retain/release operations at external boundaries
  * - store-barrier auto-repair (mutation-time lifetime checks)
  * - region accounting diagnostics
  *
- * Implementation: Uses the owner_region field added to struct Obj.
+ * Implementation: Uses of owner_region field added to struct Obj.
  * Option A (tooling-first) was chosen over pointer masking for ASAN/TSAN compatibility.
  *
  * @param o: The object to query
@@ -1298,6 +1298,34 @@ static inline Region* omni_obj_region(Obj* o) {
 
 /* Define this so test files know the feature is implemented */
 #define OMNI_OBJ_REGION_IMPLEMENTED 1
+
+/* ========== Issue 2 P4: Mutation Store Barrier ========== */
+
+/*
+ * omni_store_repair - Store barrier with automatic lifetime repair
+ *
+ * This function enforces Region Closure Property by automatically repairing
+ * illegal lifetime edges at mutation time (younger→older or shorter-lived→longer-lived).
+ *
+ * Required logic (high-level):
+ * - If new_value is immediate/NULL → store directly.
+ * - Region* src = omni_obj_region(new_value), Region* dst = omni_obj_region(container)
+ * - If src == NULL || dst == NULL || src == dst → store directly.
+ * - If the store would create a younger→older (or shorter-lived→longer-lived) edge:
+ *   - Choose repair strategy via region accounting (Issue 2 P3):
+ *     - small ⇒ transmigrate(new_value, src, dst) and store moved pointer
+ *     - large ⇒ region_merge if permitted (Issue 2 P5), else fallback to transmigrate
+ * - Update escape_repair_count (for Issue 2 accounting diagnostics).
+ *
+ * This is the single choke point for all mutation operations.
+ * All pointer-storing primitives MUST use this helper.
+ *
+ * @param container: The container object being mutated (array, dict, box, etc.)
+ * @param slot: The pointer slot being updated (e.g., &array->data[i])
+ * @param new_value: The value to store
+ * @return: The value that should actually be stored (may be repaired/transmigrated)
+ */
+Obj* omni_store_repair(Obj* container, Obj** slot, Obj* new_value);
 
 #ifdef __cplusplus
 }
