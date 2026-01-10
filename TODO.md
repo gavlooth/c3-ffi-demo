@@ -7976,3 +7976,150 @@ The transmutation overhead now comes primarily from:
     - Run `make -C runtime/tests bench-dbg` then `make -C runtime/tests bench-rel`.
     - Confirm both print their mode and flags.
     - Confirm Phase 39 can compare “before/after” using the same mode.
+
+---
+
+## Phase 40: CTRR Transmigration — Forwarding Table as “Visited + Remap” (Collapse Bitmap + Remap Checks) [TODO]
+
+**Objective:** Reduce per-edge bookkeeping overhead in transmigration (especially for list-heavy graphs) by collapsing “visited?” + “remap lookup” into a single dense forwarding-table check when forwarding is active, while preserving CTRR correctness (unique identity `remap(src)`, cycle/sharing preservation, and external-root non-rewrite).
+
+**Big Idea (what changes):**
+- Today the hot path typically does (per edge):
+  1. in-region check (`bitmap_in_range(...)`)
+  2. visited check (`bitmap_test(...)`)
+  3. remap lookup (`fwd_get(...)` then maybe `remap_get(...)`)
+- When the dense forwarding table is active, `forward[idx] != NULL` already implies **visited** and also directly provides the **remapped destination**.
+- Phase 40 makes forwarding-table presence the hot-path “visited + remap” oracle:
+  - If `forward[idx] != NULL` → rewrite pointer immediately to that value.
+  - If `forward[idx] == NULL` → schedule child for cloning/processing (push worklist).
+  - Bitmap remains for **domain/in-region checks** and as a correctness fallback when forwarding is disabled/unavailable.
+
+**Reference (read first):**
+- `runtime/docs/CTRR_TRANSMIGRATION.md` (correctness contract: cycles/sharing + external-root rule)
+- `runtime/docs/CTRR_REMAP_FORWARDING_TABLE.md` (forwarding table semantics + thresholds)
+- `docs/CTRR.md` (Region Closure Property; “everything can escape”)
+- `TODO.md` (Head-of-file “Transmigration Directive” correctness invariant)
+
+**Constraints (non-negotiable):**
+- No stop-the-world GC; no heap-wide scanning collectors.
+- No language-visible sharing primitive (`(share v)` or similar is forbidden).
+- No alternate transmigrate implementation / shape-specific bypass walker.
+- Must stay inside the single metadata-driven transmigration machinery (clone/remap/trace + worklist).
+
+**Baseline / ROI (measured under Phase 39 protocol, 2026-01-10):**
+- Release (`make -C runtime/tests bench-rel`):
+  - Raw C 10k list: ~89,698 ns/op
+  - Omni 10k list: ~408,887 ns/op
+  - Gap remains large; hypothesis is per-edge bookkeeping dominates after dispatch/worklist fixes.
+- Phase 40 success target:
+  - ≥ 15–25% reduction in Omni 10k list ns/op in **bench-rel** (and no regressions in correctness tests).
+
+---
+
+### P0: Add Counters to Prove We Actually Eliminated Bitmap/Remap Work (Instrumentation-First) [TODO]
+
+- [TODO] Label: T40-forwarding-as-visited-metrics (P0)
+  Objective: Add minimal counters to confirm the forwarding table is acting as the visited/remap oracle and to quantify removed work.
+  Reference: `runtime/docs/CTRR_REMAP_FORWARDING_TABLE.md`
+  Where:
+    - `runtime/src/memory/transmigrate.c` (hot path counters)
+    - `runtime/include/omni.h` (debug getter/print API if needed)
+    - `runtime/tests/bench_transmigrate_vs_c.c` (print counters in bench output when enabled)
+  Why:
+    Performance work is too easy to “think we did” but not actually remove from the hot path.
+  What to measure (suggested):
+    - `g_forward_hits` / `g_forward_misses` (per edge, when forwarding active)
+    - `g_bitmap_test_calls` (count calls to `bitmap_test` when forwarding active; target should go to ~0)
+    - `g_remap_get_calls` (count remap_get fallback; target should go to ~0 when forwarding active)
+  Verification plan:
+    - Run `make -C runtime/tests test-fwd` (forced forwarding mode) with metrics enabled.
+    - Confirm counts show forwarding is used and bitmap/remap fallback is not exercised in hot path.
+
+---
+
+### P1: Implement “Forwarding Table = Visited + Remap” Fast Check (No Semantic Changes) [TODO]
+
+- [TODO] Label: T40-forwarding-as-visited-fastcheck (P1)
+  Objective: When forwarding is active, replace `bitmap_test + fwd_get/remap_get` with a single `forward[idx]` check for in-region children.
+  Reference: `runtime/docs/CTRR_TRANSMIGRATION.md` (must preserve cycles/sharing; external-root non-rewrite), `runtime/docs/CTRR_REMAP_FORWARDING_TABLE.md`
+  Where:
+    - `runtime/src/memory/transmigrate.c` (visitor path + inline TAG_PAIR path)
+  Why:
+    After Phase 38/39, lists are still ~4× slower; remaining cost is often per-edge bookkeeping (multiple checks + lookups). Forwarding table can collapse these into one check when active.
+  Correctness invariant (must remain true):
+    - For every in-region object `src`, `remap(src)` is stable/unique and equals the value stored in forwarding/remap.
+    - External pointers are treated as roots and are never rewritten.
+  Implementation sketch (pseudocode):
+    ```c
+    // common: still do in-region/domain check first
+    if (!bitmap_in_range(bitmap, child)) {
+      // external root: leave untouched
+      return;
+    }
+
+    if (forward) {
+      size_t idx = fwd_index(bitmap, child);
+      void *mapped = forward[idx];
+      if (mapped) {
+        *slot = (Obj*)mapped;           // visited: rewrite immediately
+      } else {
+        worklist_push(&wl, arena, child, slot);  // unvisited: schedule
+      }
+      return;
+    }
+
+    // fallback path (forwarding disabled/unavailable):
+    if (bitmap_test(bitmap, child)) {
+      *slot = remap_lookup(child);      // existing fwd_get/remap_get logic
+    } else {
+      worklist_push(&wl, arena, child, slot);
+    }
+    ```
+  Key “don’t break Phase 37/39” rule:
+    - Work scheduling must use the Phase 37 inline worklist API (no per-edge `arena_alloc(sizeof(WorkItem))` in hot path).
+  Verification plan:
+    - `make -C runtime/tests test` (full correctness)
+    - `make -C runtime/tests test-fwd` (forced forwarding; ensures the new path is exercised)
+    - `make -C runtime/tests bench-rel` (measure 1k/10k list sentinels)
+
+---
+
+### P2: Domain + External-Root Safety Tests (Forwarding Must Not Misclassify) [TODO]
+
+- [TODO] Label: T40-forwarding-domain-safety-tests (P2)
+  Objective: Add tests that specifically detect “forwarding table domain” mistakes that would silently break the external-root rule or miss in-region objects (arena + inline_buf).
+  Reference: `runtime/docs/CTRR_TRANSMIGRATION.md` (external-root rule), Phase 31 inline_buf splice/bitmap coverage tasks
+  Where:
+    - `runtime/tests/` (new test file or extension of existing transmigrate tests)
+  Why:
+    The forwarding-table index domain must exactly match the set of in-region objects. A domain mismatch can cause:
+      - treating in-region pointers as external roots (unsound escape repair)
+      - out-of-bounds indexing (memory corruption)
+  What to test (minimum):
+    1. **Inline-buf coverage:** allocate objects in `inline_buf` (if supported) and ensure transmigration with forced forwarding rewrites them correctly.
+    2. **External pointer identity:** ensure pointers outside the source region are not rewritten under forced forwarding mode.
+    3. **Cycle + sharing:** ensure cycle/sharing tests still pass under forced forwarding mode (forwarding-as-visited must not create duplicates).
+  Verification plan:
+    - `make -C runtime/tests test-fwd`
+
+---
+
+### P3: Benchmark Protocol Usage (Enforce Apples-to-Apples Reporting) [TODO]
+
+- [TODO] Label: T40-bench-reporting (P3)
+  Objective: Record “before/after” results using the Phase 39 benchmark protocol and report the 1k/10k list sentinels for both debug and release modes.
+  Reference: `runtime/tests/Makefile` (bench-dbg/bench-rel), `runtime/tests/bench_transmigrate_vs_c.c` (header printing)
+  Where:
+    - `TODO.md` (fill in measured numbers and date once implemented)
+  Why:
+    Without standardized flags and rebuild steps, “wins” can be measurement artifacts.
+  Protocol:
+    - Run both:
+      - `make -C runtime/tests bench-dbg`
+      - `make -C runtime/tests bench-rel`
+    - Record:
+      - Omni 1k/10k list ns/op
+      - Raw C 1k/10k list ns/op
+      - Omni 10k array ns/op (to catch regressions on non-list graphs)
+  Done means:
+    - Phase 40 updates its own “Measured Results” section with date + both modes.
