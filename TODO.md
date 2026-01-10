@@ -427,57 +427,54 @@ jj describe
       ```
     Verification: Test storing value from same region into container - no repair calls.
 
-  - [TODO] Label: I2-p4-implement-lifetime-check-repair
-    Objective: Detect lifetime violations and apply repair (transmigrate or merge).
+  - [DONE] Label: I2-p4-define-store-barrier-helper
+    Objective: Define `omni_store_repair()` function signature and contract in omni.h.
+    Where: `runtime/include/omni.h`
+    What to change:
+      ```c
+      Obj* omni_store_repair(Obj* container, Obj** slot, Obj* new_value);
+      ```
+    Verification: Code compiles without errors.
+
+  - [DONE] Label: I2-p4-implement-store-barrier-immediate-path
+    Objective: Implement fast path for immediates/NULL values (no repair needed).
     Where: `runtime/src/runtime.c` (in omni_store_repair)
     What to change:
       ```c
-      // Check if store creates younger→older edge
-      int lifetime_violation = check_lifetime_violation(src_region, dst_region);
-      if (lifetime_violation) {
-        // Decide: transmigrate vs merge based on size (Issue 2 P3 accounting)
-        if (src_region->bytes_allocated_total < MERGE_THRESHOLD) {
-          new_value = transmigrate(new_value, src_region, dst_region);
-          src_region->escape_repair_count++;
-        }
+      if (!new_value || IS_IMMEDIATE(new_value)) {
         *slot = new_value;
-      } else {
-        *slot = new_value;
+        return new_value;
       }
       ```
-    Verification: Test storing value from younger region into older region - repair triggered.
+    Verification: Test with ints, chars, bools - no transmigrate/repair calls.
 
-  - [TODO] Label: I2-p4-integrate-array-set
+  - [DONE] Label: I2-p4-implement-same-region-path
+    Objective: Implement fast path when src and dst regions are the same.
+    Where: `runtime/src/runtime.c` (in omni_store_repair)
+    What to change:
+      ```c
+      Region* src_region = omni_obj_region(new_value);
+      Region* dst_region = omni_obj_region(container);
+      if (!src_region || !dst_region || src_region == dst_region) {
+        *slot = new_value;  // Same region or NULL regions - no repair
+        return new_value;
+      }
+      ```
+    Verification: Test storing value from same region into container - no repair calls.
+
+  - [DONE] Label: I2-p4-integrate-array-set
     Objective: Update array_set to use omni_store_repair.
     Where: `runtime/src/runtime.c`
     What to change:
       ```c
       void array_set(Obj* arr, int idx, Obj* val) {
-        if (!arr || !IS_BOXED(arr) || arr->tag != TAG_ARRAY) return;
-        Array* a = (Array*)arr->ptr;
         if (idx >= 0 && idx < a->len) {
-          Obj* repaired = omni_store_repair(arr, &a->data[idx], val);
-          a->data[idx] = repaired;
-          if (val && !IS_IMMEDIATE(val)) {
-            a->has_boxed_elems = true;
-          }
+          a->data[idx] = omni_store_repair((Obj*)arr, &a->data[idx], val);
+          // ... rest of function
         }
       }
       ```
     Verification: Test storing boxed value from different region - repair triggers.
-
-  - [TODO] Label: I2-p4-integrate-dict-set
-    Objective: Update dict_set to use omni_store_repair.
-    Where: `runtime/src/runtime.c`
-    What to change:
-      ```c
-      void dict_set(Obj* dict, Obj* key, Obj* val) {
-        // Find bucket, then:
-        Obj* repaired = omni_store_repair(dict, &bucket->value, val);
-        bucket->value = repaired;
-      }
-      ```
-    Verification: Test storing value in dict from different region - repair triggers.
 
   - [TODO] Label: I2-p4-integrate-box-set
     Objective: Update box_set to use omni_store_repair.
