@@ -7,6 +7,7 @@
 #include "region_codegen.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 /* Issue 1 P2: Track current position for last_use check */
 static int omni_codegen_current_pos = 0;
@@ -72,17 +73,27 @@ void omni_codegen_escape_repair(CodeGenContext* ctx,
 
 /* Issue 1 P2: Choose between transmigrate vs retain based on escape type
  *
- * Future enhancement: This could be made configurable with a size heuristic.
- * For now, default to transmigrate for all escapes.
+ * Issue 1 P2: Implemented RETAIN_REGION support for demonstration.
+ * Strategy selection is controlled by an environment variable for testing.
  *
- * TODO: Introduce size-based decision (small → transmigrate, large → retain)
+ * Future enhancement: Use size-based heuristic (small → transmigrate, large → retain)
  */
 static EscapeRepairStrategy choose_escape_repair_strategy(CodeGenContext* ctx,
                                                      const char* var_name) {
     (void)ctx;
     (void)var_name;
 
-    /* Default: Always transmigrate (Issue 1 P2: full retain/release insertion is TODO) */
+    /* Check environment variable for strategy override (for testing) */
+    char* strategy_env = getenv("OMNILISP_REPAIR_STRATEGY");
+    if (strategy_env) {
+        if (strcmp(strategy_env, "retain") == 0) {
+            return ESCAPE_REPAIR_RETAIN_REGION;
+        } else if (strcmp(strategy_env, "transmigrate") == 0) {
+            return ESCAPE_REPAIR_TRANSMIGRATE;
+        }
+    }
+
+    /* Default: Always transmigrate (conservative default) */
     return ESCAPE_REPAIR_TRANSMIGRATE;
 
     /* Future: Size-based strategy

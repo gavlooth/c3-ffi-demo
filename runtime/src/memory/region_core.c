@@ -1,6 +1,7 @@
 #include "region_core.h"
 #include <stdio.h>
 #include <string.h>
+#include "../../include/omni_atomic.h"  /* Issue 4 P3: Centralized atomic operations */
 
 #define MAX_THREAD_LOCAL_TETHERS 16
 #define REGION_POOL_SIZE 32  // Pool size for reusable regions
@@ -101,7 +102,8 @@ Region* region_create(void) {
     r->lifetime_rank = 0;
 
     // Assign region ID (OPTIMIZATION: T-opt-region-metadata-pointer-masking)
-    r->region_id = __atomic_fetch_add(&g_next_region_id, 1, __ATOMIC_SEQ_CST);
+    /* Issue 4 P3: Use atomic wrapper for consistent memory ordering */
+    r->region_id = omni_atomic_fetch_add_u16(&g_next_region_id, 1);
 
     // Initialize Control Block
     r->external_rc = 0;
@@ -125,8 +127,9 @@ void region_destroy_if_dead(Region* r) {
     // 3. No active tethers (tether_count == 0)
 
     // We use atomic loads for thread safety check
-    int rc = __atomic_load_n(&r->external_rc, __ATOMIC_ACQUIRE);
-    int tc = __atomic_load_n(&r->tether_count, __ATOMIC_ACQUIRE);
+    /* Issue 4 P3: Use atomic wrappers for consistent memory ordering */
+    int rc = (int)omni_atomic_load_u32((volatile uint32_t*)&r->external_rc);
+    int tc = (int)omni_atomic_load_u32((volatile uint32_t*)&r->tether_count);
 
     if (!r->scope_alive && rc == 0 && tc == 0) {
         // OPTIMIZATION: Try to return to pool instead of freeing

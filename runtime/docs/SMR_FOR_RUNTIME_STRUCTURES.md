@@ -576,7 +576,436 @@ SMR is complete only when:
 
 ---
 
-## 11) References
+## 11) Phase 1 Implementation Plan: Intern Table QSBR
+
+### 11.1 Target Selection: Intern Table
+
+**Chosen Target:** Intern Table (symbol interning)
+**Location:** `runtime/src/intern/intern_table.c`
+**Rationale:** Highest read ratio (99%), highest impact (Phase 1 priority from Section 8)
+
+### 11.2 Implementation Plan
+
+#### 11.2.1 QSBR Infrastructure
+
+**Files to Add:**
+- `runtime/src/smr/qsbr.h` - QSBR API header
+- `runtime/src/smr/qsbr.c` - QSBR implementation
+
+**QSBR API:**
+```c
+// Global QSBR state
+typedef struct {
+    uint64_t global_epoch;      // Current global epoch (monotonic)
+    pthread_mutex_t lock;        // Protects global_epoch
+    int num_threads;            // Number of registered threads
+    QSBR_Thread* threads[];    // Per-thread state (dynamic array)
+} QSBR_Global;
+
+// Per-thread QSBR state
+typedef struct {
+    uint64_t local_epoch;      // Thread's last reported epoch
+    bool is_registered;         // Has thread called qsbr_register()?
+} QSBR_Thread;
+
+// QSBR lifecycle
+void qsbr_init(void);                           // Initialize global QSBR state
+void qsbr_register_thread(void);                  // Register calling thread
+void qsbr_unregister_thread(void);                // Unregister calling thread
+
+// Quiescent reporting
+void qsbr_quiescent(void);                      // Thread reports quiescent point
+
+// Epoch management (used by Intern Table)
+void qsbr_advance_epoch(void);                   // Advance global epoch
+void qsbr_wait_for_epoch(uint64_t epoch);     // Wait until all threads reach epoch
+
+// Memory reclamation (used by Intern Table)
+void qsbr_defer_free(void* ptr, uint64_t epoch);  // Schedule free for epoch
+void qsbr_reclaim_epoch(uint64_t epoch);               // Reclaim all frees for epoch
+```
+
+**Memory Reclamation API:**
+```c
+// Free list for deferred deallocations
+typedef struct FreeList {
+    void* items;               // Linked list of items to free
+    uint64_t epoch;           // Epoch when items can be freed
+    struct FreeList* next;     // Next epoch's free list
+} FreeList;
+
+// Intern Table-specific QSBR API
+void intern_table_qsbr_init(void);
+void intern_table_qsbr_defer_free(InternEntry* entry, uint64_t epoch);
+void intern_table_qsbr_reclaim(void);
+```
+
+#### 11.2.2 Intern Table Modifications
+
+**Current Implementation:** `runtime/src/intern/intern_table.c`
+
+**Modifications Required:**
+
+1. **Add QSBR field to InternTable:**
+   ```c
+   typedef struct {
+       // ... existing fields ...
+       uint64_t current_epoch;    // Epoch of this table version
+   } InternTable;
+   ```
+
+2. **Modify `intern_table_get` (read path):**
+   - Change from `pthread_mutex_lock()` to lock-free read
+   - Read table pointer directly (atomic load)
+   - Search in hash map (read-only)
+
+   ```c
+   Symbol* intern_table_get(InternTable* table, const char* str) {
+       // Issue 4 P3: Use atomic wrapper
+       InternTable* current = (InternTable*)omni_atomic_load_size_t(
+           (volatile size_t*)&g_intern_table_ptr);
+       return intern_table_search(current, str);
+   }
+   ```
+
+3. **Modify `intern_table_add` (write path):**
+   - Copy entire table (copy-on-write)
+   - Add new entry to copy
+   - Publish new table (atomic pointer swap)
+   - Defer free of old table to QSBR
+
+   ```c
+   void intern_table_add(const char* str, Symbol* sym) {
+       // Copy current table
+       InternTable* old_table = get_current_intern_table();
+       InternTable* new_table = copy_intern_table(old_table);
+
+       // Add new entry
+       intern_table_insert(new_table, str, sym);
+
+       // Advance epoch
+       uint64_t new_epoch = qsbr_advance_epoch();
+
+       // Publish new table (atomic swap)
+       publish_intern_table(new_table);
+
+       // Defer free of old table
+       intern_table_qsbr_defer_free(old_table, new_epoch);
+   }
+   ```
+
+4. **Add quiescent point reporting:**
+   - Call `qsbr_quiescent()` after each bytecode step
+   - Call `qsbr_quiescent()` in tether operations
+
+**Files to Modify:**
+- `runtime/src/intern/intern_table.c` - Add QSBR support
+- `runtime/src/bytecode/interpreter.c` - Add quiescent calls at bytecode step end
+- `runtime/include/omni_atomic.h` - Already done (Issue 4 P3)
+
+**New Files:**
+- `runtime/src/smr/qsbr.h` - QSBR header
+- `runtime/src/smr/qsbr.c` - QSBR implementation
+- `runtime/tests/bench_smr_intern.c` - Microbenchmark (see Section 11.3)
+
+### 11.3 Benchmark: Intern Table QSBR
+
+**File:** `runtime/tests/bench_smr_intern.c`
+
+**Objective:** Measure performance improvement of QSBR vs. mutex-based Intern Table.
+
+**Benchmark Protocol:**
+```bash
+# Clean build
+make -C runtime/tests clean
+
+# Build with optimizations
+make -C runtime/tests bench CC=gcc CFLAGS='-O3 -std=c99 -pthread'
+
+# Run benchmark
+./runtime/tests/bench_smr_intern
+```
+
+**Implementation:**
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <pthread.h>
+#include <time.h>
+#include <unistd.h>
+
+#include "../include/omni_atomic.h"
+
+// Benchmark configuration
+#define NUM_SYMBOLS 10000
+#define LOOKUPS_PER_THREAD 1000000
+#define NUM_WARMUP_ITERATIONS 10
+#define NUM_MEASURED_ITERATIONS 30
+
+// Benchmark modes
+typedef enum {
+    MODE_MUTEX,     // Baseline: pthread_mutex-protected
+    MODE_QSBR       // Test: QSBR lock-free
+} BenchmarkMode;
+
+// Benchmark result
+typedef struct {
+    double median_us;
+    double p95_us;
+    double ops_per_sec;
+} BenchmarkResult;
+
+// Thread arguments
+typedef struct {
+    int thread_id;
+    int mode;
+    uint64_t num_lookups;
+    uint64_t start_ns;
+    uint64_t end_ns;
+} ThreadArg;
+
+// Get current time in nanoseconds
+static uint64_t get_time_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ULL + ts.tv_nsec;
+}
+
+// Thread function
+static void* benchmark_thread(void* arg) {
+    ThreadArg* ta = (ThreadArg*)arg;
+    ta->start_ns = get_time_ns();
+
+    // Perform lookups
+    for (uint64_t i = 0; i < ta->num_lookups; i++) {
+        // Look up symbol "symbol_5000" (hot cache)
+        // (Implementation depends on InternTable API)
+        // intern_table_get(...);
+    }
+
+    ta->end_ns = get_time_ns();
+    return NULL;
+}
+
+// Run benchmark with given mode
+static BenchmarkResult run_benchmark(int mode, int num_threads) {
+    uint64_t times[NUM_MEASURED_ITERATIONS];
+    pthread_t threads[num_threads];
+    ThreadArg args[num_threads];
+
+    // Warmup
+    for (int i = 0; i < NUM_WARMUP_ITERATIONS; i++) {
+        // Create threads
+        for (int t = 0; t < num_threads; t++) {
+            args[t].thread_id = t;
+            args[t].mode = mode;
+            args[t].num_lookups = LOOKUPS_PER_THREAD / num_threads;
+            pthread_create(&threads[t], NULL, benchmark_thread, &args[t]);
+        }
+
+        // Join threads
+        for (int t = 0; t < num_threads; t++) {
+            pthread_join(threads[t], NULL);
+        }
+    }
+
+    // Measured iterations
+    for (int i = 0; i < NUM_MEASURED_ITERATIONS; i++) {
+        // Create threads
+        for (int t = 0; t < num_threads; t++) {
+            args[t].thread_id = t;
+            args[t].mode = mode;
+            args[t].num_lookups = LOOKUPS_PER_THREAD / num_threads;
+            pthread_create(&threads[t], NULL, benchmark_thread, &args[t]);
+        }
+
+        // Join threads and measure time
+        uint64_t start_time = get_time_ns();
+        for (int t = 0; t < num_threads; t++) {
+            pthread_join(threads[t], NULL);
+        }
+        uint64_t end_time = get_time_ns();
+
+        times[i] = (end_time - start_time) / 1000.0;  // microseconds
+    }
+
+    // Calculate median
+    qsort(times, NUM_MEASURED_ITERATIONS, sizeof(uint64_t),
+          (int (*)(const void*, const void*))compare_uint64);
+    double median = times[NUM_MEASURED_ITERATIONS / 2];
+
+    // Calculate P95
+    int p95_index = (int)(NUM_MEASURED_ITERATIONS * 0.95);
+    double p95 = times[p95_index];
+
+    // Calculate ops/sec (using median)
+    double total_lookups = LOOKUPS_PER_THREAD * num_threads;
+    double total_time_sec = median / 1000000.0;
+    double ops_per_sec = total_lookups / total_time_sec;
+
+    BenchmarkResult result = {
+        .median_us = median,
+        .p95_us = p95,
+        .ops_per_sec = ops_per_sec
+    };
+
+    return result;
+}
+
+// Print machine info
+static void print_machine_info(void) {
+    printf("Machine Info:\n");
+    printf("  CPU: ");
+    fflush(stdout);
+    system("cat /proc/cpuinfo | grep 'model name' | head -1 | cut -d: -f2");
+    printf("  Cores: ");
+    fflush(stdout);
+    system("nproc");
+    printf("\n");
+}
+
+// Main
+int main(void) {
+    printf("Intern Table QSBR Microbenchmark\n");
+    printf("================================\n\n");
+
+    print_machine_info();
+
+    printf("Benchmark Configuration:\n");
+    printf("  Num symbols: %d\n", NUM_SYMBOLS);
+    printf("  Lookups per thread: %d\n", LOOKUPS_PER_THREAD);
+    printf("  Warmup iterations: %d\n", NUM_WARMUP_ITERATIONS);
+    printf("  Measured iterations: %d\n", NUM_MEASURED_ITERATIONS);
+    printf("\n");
+
+    printf("Results:\n");
+    printf("========\n\n");
+
+    int thread_counts[] = {1, 2, 4, 8};
+    int num_thread_configs = sizeof(thread_counts) / sizeof(thread_counts[0]);
+
+    // Baseline (mutex)
+    printf("Mode: Baseline (pthread_mutex)\n");
+    printf("--------------------------------\n");
+    printf("Threads | Median (μs) | P95 (μs) | Ops/sec\n");
+    printf("--------|-------------|----------|---------\n");
+    for (int i = 0; i < num_thread_configs; i++) {
+        int num_threads = thread_counts[i];
+        BenchmarkResult result = run_benchmark(MODE_MUTEX, num_threads);
+        printf("%8d | %11.2f | %8.2f | %9.0f\n",
+               num_threads, result.median_us, result.p95_us, result.ops_per_sec);
+    }
+    printf("\n");
+
+    // QSBR
+    printf("Mode: QSBR (lock-free)\n");
+    printf("---------------------------\n");
+    printf("Threads | Median (μs) | P95 (μs) | Ops/sec | Speedup vs Mutex\n");
+    printf("--------|-------------|----------|---------|------------------\n");
+    for (int i = 0; i < num_thread_configs; i++) {
+        int num_threads = thread_counts[i];
+        BenchmarkResult result = run_benchmark(MODE_QSBR, num_threads);
+        printf("%8d | %11.2f | %8.2f | %9.0f | %16.2fx\n",
+               num_threads, result.median_us, result.p95_us, result.ops_per_sec);
+    }
+    printf("\n");
+
+    return 0;
+}
+```
+
+### 11.4 Correctness Tests
+
+**File:** `runtime/tests/test_smr_intern_correctness.c`
+
+**Objective:** Verify QSBR Intern Table doesn't cause use-after-free (UAF) under concurrent access.
+
+**Test Scenario:**
+```c
+// Thread 1: Reader (rapid lookups)
+void* reader_thread(void* arg) {
+    for (int i = 0; i < 10000000; i++) {
+        Symbol* s = intern_table_get("foo");
+        // Read symbol (just to ensure it's valid)
+        volatile char c = s->name[0];
+    }
+    return NULL;
+}
+
+// Thread 2: Writer (rapid adds + removes)
+void* writer_thread(void* arg) {
+    for (int i = 0; i < 1000; i++) {
+        // Add new symbol
+        intern_table_add("bar_new", create_symbol("bar_new"));
+
+        // Remove symbol (this triggers QSBR reclamation)
+        intern_table_remove("bar_old");
+    }
+    return NULL;
+}
+
+// Main: Run with ASAN to detect UAF
+int main(void) {
+    pthread_t reader, writer;
+
+    pthread_create(&reader, NULL, reader_thread, NULL);
+    pthread_create(&writer, NULL, writer_thread, NULL);
+
+    pthread_join(reader, NULL);
+    pthread_join(writer, NULL);
+
+    printf("PASS: No use-after-free detected\n");
+    return 0;
+}
+```
+
+**Build with ASAN:**
+```bash
+gcc -fsanitize=address -g -O1 test_smr_intern_correctness.c -o test_smr_intern_correctness -pthread
+./test_smr_intern_correctness
+```
+
+**Expected Outcome:** No ASAN reports (no UAF detected).
+
+### 11.5 Integration Steps
+
+**Step 1: Implement QSBR Infrastructure** (2-3 days)
+- Add `runtime/src/smr/qsbr.h`, `runtime/src/smr/qsbr.c`
+- Implement `qsbr_init()`, `qsbr_register_thread()`, `qsbr_quiescent()`
+- Add unit tests for QSBR
+
+**Step 2: Modify Intern Table** (2-3 days)
+- Add QSBR epoch field to `InternTable`
+- Modify `intern_table_get` to lock-free read
+- Modify `intern_table_add` to copy-on-write + atomic publish
+- Add QSBR defer-free for old tables
+
+**Step 3: Add Quiescent Points** (1 day)
+- Add `qsbr_quiescent()` call in bytecode interpreter loop
+- Add `qsbr_quiescent()` call in tether operations
+- Test quiescent reporting
+
+**Step 4: Implement Benchmark** (1 day)
+- Add `runtime/tests/bench_smr_intern.c`
+- Implement baseline (mutex) and test (QSBR) modes
+- Add to `runtime/tests/Makefile`
+
+**Step 5: Run Benchmarks + Validate** (1-2 days)
+- Run with protocol from Section 11.3
+- Compare results against expected (Section 7.1)
+- Document results in `docs/BENCHMARK_RESULTS.md`
+
+**Step 6: Correctness Testing** (1 day)
+- Add `test_smr_intern_correctness.c`
+- Run with ASAN to detect UAF
+- Fix any bugs found
+
+**Total Estimated Time:** 8-11 days
+
+---
+
+## 12) References
 
 - liburcu (Userspace RCU): https://liburcu.org/
 - QSBR overview: https://lwn.net/Articles/573424/

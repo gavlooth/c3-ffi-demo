@@ -34,7 +34,13 @@ test: all test-cli
 	@echo "Running unit tests..."
 	@for t in $(TEST_BINS); do \
 		echo "Running $$t..."; \
-		./$$t || exit 1; \
+		tmp=".$$t.out.$$PPID"; \
+		./$$t > $$tmp 2>&1; \
+		rc=$$?; \
+		cat $$tmp; \
+		if [ $$rc -ne 0 ]; then rm -f $$tmp; exit $$rc; fi; \
+		if grep -q "FAIL" $$tmp; then rm -f $$tmp; exit 1; fi; \
+		rm -f $$tmp; \
 	done
 	@echo "All unit tests passed."
 

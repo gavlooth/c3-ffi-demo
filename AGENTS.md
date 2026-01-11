@@ -5,6 +5,7 @@
 - **Thinking Mode:** Keep `preserved_thinking: true` to remember architectural decisions between debugging steps.
 - **Break down tasks into steps using the sequential thinking tool.
 - Do not provide a response until you have verified the logic against potential edge cases.
+- do not simple use `[DONE]`, but rather `[DONE] (Review Needed)` 
 
 # OmniLisp C Scratch - CTRR Memory Model
 

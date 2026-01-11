@@ -480,8 +480,13 @@ size_t adaptive_threshold(Region* src) {
 ### 6.1 Unit Tests per Phase
 
 **Phase 1:**
-- Test `region_exit()` emitted at last-use
-- Test no use-after-free after early region exit
+- Current milestone (implemented): generated `main()` exits + recreates the
+  scratch `_local_region` between top-level expressions to bound retention.
+  - Test: `csrc/tests/test_nonlexical_region_end_straightline.c` asserts the
+    marker comment `ISSUE 3 P2: Non-lexical main() region end` appears in
+    emitted C.
+- Future milestone (not yet implemented): emit `region_exit()` at true last-use
+  points inside function bodies (requires position-accurate codegen).
 
 **Phase 2:**
 - Test stack allocation for non-escaping values
@@ -522,6 +527,17 @@ Compare before/after to quantify benefit.
 
 ### Phase 1: Non-Lexical Region Ends
 
+Reality check / constructive criticism:
+The compiler currently routes most allocations through `_local_region` helpers
+(`mk_int()`, `mk_cell()`, primitives). That makes "exit `_local_region` early"
+unsound unless codegen also proves it will not allocate into the exited region.
+
+Current "done means" (milestone, implemented):
+1. Generated `main()` exits + destroys `_local_region` between top-level
+   expressions, then creates a fresh `_local_region`.
+2. Verified by a compiler-side codegen test (see Phase 1 unit tests above).
+
+Full "done means" (future):
 1. Liveness analysis tracks last-use per region
 2. `region_exit()` emitted at last-use (before scope exit)
 3. All tests pass (no use-after-free)

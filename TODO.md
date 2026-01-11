@@ -193,7 +193,7 @@ jj describe
 
 ### P0: Write the Region‑RC model spec (external pointers, liveness, invariants) [DONE] (Review Needed)
 
-- [DONE] Label: I1-region-rc-model-doc (P0)
+- [DONE] (Review Needed) Label: I1-region-rc-model-doc (P0)
   Objective: Create a single authoritative doc defining Region‑RC and "external pointer" semantics in OmniLisp terms.
   Where:
     - Add: `runtime/docs/REGION_RC_MODEL.md` ✅
@@ -215,7 +215,7 @@ jj describe
       - "external-root non-rewrite rule" (transmigration)
       - "mutation barrier inventory complete" (review_todo Issue 2)
 
-- [DONE] Label: I1-external-ref-boundary-inventory (P0)
+- [DONE] (Review Needed) Label: I1-external-ref-boundary-inventory (P0)
   Objective: Enumerate all runtime/compile-time "escape boundaries" that can create external references to a region.
   Where:
     - Add section: `runtime/docs/REGION_RC_MODEL.md` ("External reference boundaries") ✅
@@ -287,10 +287,11 @@ jj describe
       - `make -C runtime/tests test`
       - `make -C runtime/tests asan`
 
-#### P2: Make Region‑RC escape boundaries compile-time actionable (retain/release insertion plan) [BLOCKED]
+#### P2: Make Region‑RC escape boundaries compile-time actionable (retain/release insertion plan) [TODO]
 
-- [BLOCKED] Label: I1-ctrr-external-rc-insertion (P2)
-  BLOCKED BY: Issue 2 P4 (store barrier) - fundamental build system issues preventing completion.
+- [TODO] Label: I1-ctrr-external-rc-insertion (P2)
+  Unblocked (2026-01-10): Issue 2 P4 store barrier work is complete, so this
+  can proceed once retain/release insertion is implemented and tested.
 
   **GRANULAR SUBTASKS**
 
@@ -336,7 +337,7 @@ jj describe
   - [N/A] Label: I1-p2-test-retain-release-generation-dup
     Reason: Duplicate stale entry; see `I1-p2-test-retain-release-generation`.
 
-  - [DONE] Label: I1-p2-add-last-use-to-varinfo
+  - [DONE] (Review Needed) Label: I1-p2-add-last-use-to-varinfo
     Objective: Extend VarUsage struct to track last-use position per variable.
     Where: `csrc/analysis/analysis.h`
     What to change:
@@ -355,7 +356,7 @@ jj describe
     Verification: Test that `last_use` is computed correctly for variables in simple function.
     Reason: VarUsage already has last_use field; tracking which Region owns variables is separate and tracked via ESCAPE_CLASS.
 
-  - [DONE] Label: I1-p2-compute-last-use-per-variable
+  - [DONE] (Review Needed) Label: I1-p2-compute-last-use-per-variable
     Reason: VarUsage struct already tracks last_use per variable; computing per-region last-use is covered by Issue 3 P2 subtask I3-p2-compute-region-last-use which will use the same infrastructure.
 
   - [N/A] Label: I2-p4-define-store-barrier-helper-dup
@@ -427,7 +428,7 @@ jj describe
       ```
     Verification: Code compiles without errors.
 
-  - [DONE] Label: I2-p4-implement-store-barrier-immediate-path
+  - [DONE] (Review Needed) Label: I2-p4-implement-store-barrier-immediate-path
     Objective: Implement fast path for immediates/NULL values (no repair needed).
     Where: `runtime/src/runtime.c`
     What to change:
@@ -445,7 +446,7 @@ jj describe
       ```
     Verification: Test with ints, chars, bools - no transmigrate/repair calls.
 
-  - [DONE] Label: I2-p4-implement-same-region-path
+  - [DONE] (Review Needed) Label: I2-p4-implement-same-region-path
     Objective: Implement fast path when src and dst regions are the same.
     Objective: Implement fast path when src and dst regions are the same.
     Where: `runtime/src/runtime.c` (in omni_store_repair)
@@ -470,7 +471,7 @@ jj describe
   - [N/A] Label: I2-p4-implement-same-region-path-dup
     Reason: Duplicate entry; see `I2-p4-implement-same-region-path`.
 
-  - [DONE] Label: I2-p4-integrate-array-set
+  - [DONE] (Review Needed) Label: I2-p4-integrate-array-set
     Objective: Update array_set to use omni_store_repair.
     Where: `runtime/src/runtime.c`
     What to change:
@@ -772,7 +773,7 @@ However, when compiling `dict_set()` in `runtime/src/runtime.c`, the compiler er
 
 ### P0: Region accounting doc + required counters [DONE] (Review Needed)
 
-- [DONE] Label: I2-region-accounting-doc (P0)
+- [DONE] (Review Needed) Label: I2-region-accounting-doc (P0)
   Objective: Specify which counters are required per region (bytes, chunks, inline usage, peak) and how they power the size heuristic for store auto-repair.
   Where:
     - Add: `runtime/docs/REGION_ACCOUNTING.md` ✅
@@ -787,7 +788,7 @@ However, when compiling `dict_set()` in `runtime/src/runtime.c`, the compiler er
 
 ### P1: Retention diagnostics plan (shortest-lived pool enforcement without language changes) [DONE] (Review Needed)
 
-- [DONE] Label: I2-retention-diagnostics-plan (P1)
+- [DONE] (Review Needed) Label: I2-retention-diagnostics-plan (P1)
   Objective: Define the diagnostics that identify "allocating into too-long-lived region" retention smells, and how they should be reported.
   Where:
     - Add section: `runtime/docs/REGION_ACCOUNTING.md` ("Retention cliffs") ✅
@@ -940,9 +941,9 @@ However, when compiling `dict_set()` in `runtime/src/runtime.c`, the compiler er
 - A naïve “creation time rank” is wrong once you have early exits, adoption/merge, and pooling.
 - The rank must mean “outlives depth / nesting order”, not “timestamp”.
 
-#### P4.1: Add `lifetime_rank` to runtime `struct Region` and define invariants [DONE]
+#### P4.1: Add `lifetime_rank` to runtime `struct Region` and define invariants [DONE] (Review Needed)
 
-- [DONE] Label: I2-p4-rank-add-field-and-reset (P4.1)
+- [DONE] (Review Needed) Label: I2-p4-rank-add-field-and-reset (P4.1)
   Objective: Add an outlives rank field to the runtime ArenaRegion/RCB and ensure it is always initialized/reset correctly (region pooling makes this non-negotiable).
   Reference (read first):
     - `runtime/docs/MEMORY_TERMINOLOGY.md` (ArenaRegion/RCB definition; “Region = lifetime class” enforcement)
@@ -1054,7 +1055,7 @@ However, when compiling `dict_set()` in `runtime/src/runtime.c`, the compiler er
 
   **GRANULAR SUBTASKS**
 
-  - [DONE] Label: I2-p4-atom-reset-store-barrier
+  - [DONE] (Review Needed) Label: I2-p4-atom-reset-store-barrier
     Objective: Update atom_reset to use omni_store_repair.
     Where: `runtime/src/runtime.c`
     What was changed:
@@ -1064,7 +1065,7 @@ However, when compiling `dict_set()` in `runtime/src/runtime.c`, the compiler er
       ```
     Verification: All 366 runtime tests pass.
 
-  - [DONE] Label: I2-p4-atom-swap-store-barrier
+  - [DONE] (Review Needed) Label: I2-p4-atom-swap-store-barrier
     Objective: Update atom_swap to use omni_store_repair.
     Where: `runtime/src/runtime.c`
     What was changed:
@@ -1075,7 +1076,7 @@ However, when compiling `dict_set()` in `runtime/src/runtime.c`, the compiler er
       ```
     Verification: All 366 runtime tests pass.
 
-  - [DONE] Label: I2-p4-atom-cas-store-barrier
+  - [DONE] (Review Needed) Label: I2-p4-atom-cas-store-barrier
     Objective: Update atom_cas to use omni_store_repair.
     Where: `runtime/src/runtime.c`
     What was changed:
@@ -1103,7 +1104,7 @@ However, when compiling `dict_set()` in `runtime/src/runtime.c`, the compiler er
       ```
     Verification: All 366 runtime tests pass (2026-01-11).
 
-  - [DONE] Label: I2-p4-dict-new-entry-store-barrier
+  - [DONE] (Review Needed) Label: I2-p4-dict-new-entry-store-barrier
     STATUS: Already done - dict_set uses hashmap_put_region with _global_region for new entries.
     Reason: New entries are allocated via hashmap_put_region which uses the global region, ensuring no lifetime violations.
 
@@ -1257,7 +1258,7 @@ However, when compiling `dict_set()` in `runtime/src/runtime.c`, the compiler er
 
 ### P0: CTRR inference roadmap doc [DONE] (Review Needed)
 
-- [DONE] Label: I3-ctrr-roadmap-doc (P0)
+- [DONE] (Review Needed) Label: I3-ctrr-roadmap-doc (P0)
   Objective: Write a roadmap doc that maps research ideas into concrete CTRR phases OmniLisp could implement.
   Where:
     - Add: `docs/CTRR_REGION_INFERENCE_ROADMAP.md` ✅
@@ -1338,7 +1339,7 @@ However, when compiling `dict_set()` in `runtime/src/runtime.c`, the compiler er
 
 ### P0: SMR target inventory + decision matrix [DONE] (Review Needed)
 
-- [DONE] Label: I4-smr-target-inventory (P0)
+- [DONE] (Review Needed) Label: I4-smr-target-inventory (P0)
   Objective: Identify which internal runtime structures would benefit from SMR and create a decision matrix (QSBR vs lock vs hazard-pointer family).
   Where:
     - Add: `runtime/docs/SMR_FOR_RUNTIME_STRUCTURES.md` ✅
@@ -1352,7 +1353,7 @@ However, when compiling `dict_set()` in `runtime/src/runtime.c`, the compiler er
 
 ### P1: QSBR mapping to OmniLisp "quiescent points" [DONE] (Review Needed)
 
-- [DONE] Label: I4-qsbr-quiescent-points (P1)
+- [DONE] (Review Needed) Label: I4-qsbr-quiescent-points (P1)
   Objective: Define where quiescent states would be reported in OmniLisp (end of bytecode step, end of tether window, safe points), and how that interacts with region ownership.
   Where:
     - `runtime/docs/SMR_FOR_RUNTIME_STRUCTURES.md` (QSBR design) ✅
@@ -1362,7 +1363,7 @@ However, when compiling `dict_set()` in `runtime/src/runtime.c`, the compiler er
 
 ### P2: Alternatives review (hazard pointers / Hyaline / publish-on-ping) [DONE] (Review Needed)
 
-- [DONE] Label: I4-alternatives-review (P2)
+- [DONE] (Review Needed) Label: I4-alternatives-review (P2)
   Objective: Document alternatives to QSBR and when they should be chosen (only if QSBR is unsuitable due to stalled threads or missing quiescent points).
   Reference:
     - Publish on Ping (2025): https://arxiv.org/abs/2501.04250
