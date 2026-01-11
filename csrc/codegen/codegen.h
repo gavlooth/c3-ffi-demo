@@ -83,9 +83,12 @@ typedef struct CodeGenContext {
     SpecDB* spec_db;           /* Database of function specializations */
     TypeEnv* type_env;         /* Type environment for tracking types */
     bool enable_specialization;  /* Enable type specialization (default: true) */
-    
+
     /* Current source position for debug info / retention insertion */
     int current_pos;
+
+    /* Issue 3 P2: Non-lexical region end */
+    int* region_exited;        /* Track which regions have been exited */
 } CodeGenContext;
 
 /* ============== Code Generator API ============== */
@@ -170,6 +173,9 @@ void omni_codegen_add_lambda_def(CodeGenContext* ctx, const char* def);
 
 /* Emit free_obj calls for variables at given position */
 void omni_codegen_emit_frees(CodeGenContext* ctx, int position);
+
+/* Issue 3 P2: Emit region_exit calls at last-use positions (non-lexical ends) */
+void omni_codegen_emit_region_exits(CodeGenContext* ctx, int position);
 
 /* ============== Phase 24: Region-Level Metadata Codegen ============== */
 

@@ -43,6 +43,9 @@ typedef struct VarUsage {
     /* OPTIMIZATION (T-opt-region-metadata-compiler): Type ID for compile-time type resolution */
     int type_id;         /* TypeID enum value (e.g., TYPE_ID_INT, TYPE_ID_PAIR) */
 
+    /* Issue 3 P2: Non-lexical region end - Track which region owns this variable */
+    int region_id;        /* Region ID (e.g., 0 for _local_region, 1 for nested regions) */
+
     struct VarUsage* next;
 } VarUsage;
 
@@ -871,6 +874,20 @@ CFGFreePoint* omni_compute_cfg_free_points(CFG* cfg, AnalysisContext* ctx);
 
 /* Free CFG free points list */
 void omni_cfg_free_points_free(CFGFreePoint* points);
+
+/* ============== Issue 3 P2: Non-Lexical Region End ============== */
+
+typedef struct RegionExitPoint {
+    int region_id;               /* Region ID to exit */
+    int position;               /* Position where region should exit */
+    struct RegionExitPoint* next;
+} RegionExitPoint;
+
+/* Compute region exit points from liveness analysis */
+RegionExitPoint* omni_compute_region_exit_points(AnalysisContext* ctx);
+
+/* Free region exit point list */
+void omni_region_exit_points_free(RegionExitPoint* points);
 
 /* ============== ASAP Free Injection ============== */
 

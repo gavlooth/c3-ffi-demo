@@ -528,9 +528,198 @@ Future compiler passes will choose between transmigrate vs. retain based on:
 
 ---
 
-## 6) Tethering: Bounded Borrows
+## 6) Mutation-Time Repair with Option A Rank Policy
 
-### 6.1 What is Tethering?
+### 6.1 Option A: Per-Owner-Thread Outlives Rank
+
+**Decision (user-approved, 2026-01-11):** Use **Option A** for lifetime ordering in mutation auto-repair.
+
+**Core Rule:**
+> Each runtime ArenaRegion/RCB (currently `struct Region`) has a **per-owner-thread outlives rank**.
+> Ranks are **only comparable when `src.owner_thread == dst.owner_thread`**.
+> Cross-thread stores are treated as **not comparable ⇒ must repair** (transmigrate/adopt).
+
+### 6.2 Implementation Details
+
+**Data Structure:**
+```c
+typedef struct Region {
+    // ... other fields ...
+    uint64_t lifetime_rank;  /* Per-owner-thread outlives depth (0 = root/global) */
+    pthread_t owner_thread;   /* Thread that created/owns this region */
+} Region;
+```
+
+**Accessor Functions:**
+```c
+void omni_region_set_lifetime_rank(Region* r, uint64_t rank);
+uint64_t omni_region_get_lifetime_rank(Region* r);
+```
+
+### 6.3 Rank Semantics
+
+**What `lifetime_rank` Means:**
+- **Semantic outlives order**, NOT birth time/timestamp
+- Depth of region nesting in the call stack (0 = global/root, 1 = first nested region, ...)
+- Assigned during code generation using `_caller_region` nesting depth
+
+**Generated Code Pattern:**
+```c
+// In function prologue:
+struct Region* _local_region = region_create();
+omni_region_set_lifetime_rank(_local_region, omni_region_get_lifetime_rank(_caller_region) + 1);
+```
+
+### 6.4 Rank Comparison Rules
+
+**Rule 1: Ranks are comparable only within same thread**
+
+```
+if (!pthread_equal(src->owner_thread, dst->owner_thread)) {
+    // Cross-thread: ranks not comparable
+    // Always repair (transmigrate into dst or adopt)
+}
+```
+
+**Rule 2: Same-thread rank comparison**
+
+```
+if (dst->lifetime_rank < src->lifetime_rank) {
+    // dst is OLDER (outlives src)
+    // src is YOUNGER (shorter-lived)
+    // Illegal store direction: older<-younger violates Region Closure
+    // Must repair (transmigrate or merge)
+}
+```
+
+**Rule 3: Safe store directions**
+
+```
+if (dst->lifetime_rank >= src->lifetime_rank) {
+    // dst is YOUNGER or SAME age as src
+    // Safe store direction: younger<-older or same<-same
+    // No repair needed (or optional optimization)
+}
+```
+
+### 6.5 Why "Outlives Depth" Not "Timestamp"?
+
+**Problem with timestamp ranks:**
+- Early region exits (non-lexical region end) make timestamps misleading
+- Region reuse/Pooling (when regions are reclaimed and reused) breaks timestamp ordering
+- A region with later creation time could be re-entered with a shorter lifetime
+
+**Outlives depth (Option A) is correct because:**
+- Matches **semantic nesting** of regions in the call stack
+- Survives early exits (rank reflects current depth, not creation time)
+- Survives region pooling (rank resets when region is reused)
+- Enables **non-lexical region end** optimization (Issue 3 P2)
+
+### 6.6 Cross-Thread Store Behavior
+
+**Why always repair for cross-thread?**
+
+We refuse to guess about lifetimes across threads because:
+- Thread A cannot predict when Thread B will exit its regions
+- Locking regions across threads adds complexity without clear benefit
+- Transmigration into dst region is safer and has predictable semantics
+
+**Implementation:**
+
+```c
+// In omni_store_repair()
+if (!pthread_equal(src_region->owner_thread, dst_region->owner_thread)) {
+    // Cross-thread store: always repair
+    // Transmigrate from src to dst (or to global if dst is closing)
+    Region* safe_dst = (dst_region && dst_region->scope_alive) ? dst_region : _global_region;
+    Obj* repaired = transmigrate(new_value, src_region, safe_dst);
+    *slot = repaired;
+    dst_region->escape_repair_count++;
+    return repaired;
+}
+```
+
+### 6.7 Invariants for Option A
+
+**Invariant 1: Rank is per-owner-thread**
+- Ranks are only meaningful for regions owned by the same thread
+- Cross-thread stores always repair
+
+**Invariant 2: Rank = outlives depth**
+- `lifetime_rank = 0` means root/global (outlives everything)
+- `lifetime_rank = N` means "outlives regions with rank < N, does NOT outlive regions with rank > N"
+
+**Invariant 3: Region reuse resets rank**
+- When a region is reclaimed and reused (pooling), `lifetime_rank` must be reset
+- Stale ranks from previous lifetime must not leak
+
+**Invariant 4: Code generation assigns ranks by nesting**
+- Compiler emits `omni_region_set_lifetime_rank(_local_region, parent_rank + 1)` at each region creation
+- Main function has rank 0 (global)
+
+### 6.8 Examples
+
+**Example 1: Same-thread older<-younger store (repaired)**
+
+```lisp
+;; Caller (older region, rank=1)
+(let ((older (region-create))
+      (container (dict)))
+  (region-exit older))
+  (f older container))
+
+;; Callee (younger region, rank=2)
+(define (f older-region container)
+  (let ((region (region-create))  ; Rank=2 (older is rank=1)
+        (x (pair 1 2)))
+    (region-exit region)
+    (dict-set! container "key" x)))  ; Store rank=2 into rank=1 → REPAIR
+
+;; omni_store_repair behavior:
+// src_region->lifetime_rank = 2
+// dst_region->lifetime_rank = 1
+// dst < src: ILLEGAL STORE → TRANSMIGRATE x into older-region
+```
+
+**Example 2: Same-thread younger<-older store (no repair)**
+
+```lisp
+;; Callee (younger region, rank=2)
+(define (f younger-region)
+  (let ((region (region-create))
+        (x (pair 1 2)))
+    (region-exit region)
+    (dict-set! local-dict "key" x)))  ; Store rank=2 into rank=2 → SAFE
+
+;; omni_store_repair behavior:
+// src_region->lifetime_rank = 2
+// dst_region->lifetime_rank = 2
+// dst >= src: SAFE STORE → NO REPAIR
+```
+
+**Example 3: Cross-thread store (always repaired)**
+
+```lisp
+;; Thread A
+(let ((region (region-create))
+      (x (pair 1 2)))
+  (region-exit region)
+  (channel-send ch x))  ; Send to Thread B
+
+;; Thread B (different owner_thread for region)
+(let ((y (channel-recv ch)))
+  (dict-set! local-dict "key" y))  ; Cross-thread store → REPAIR
+
+;; omni_store_repair behavior:
+// src_region->owner_thread != dst_region->owner_thread
+// Cross-thread: RANKS NOT COMPARABLE → ALWAYS TRANSMIGRATE
+```
+
+---
+
+## 7) Tethering: Bounded Borrows
+
+### 7.1 What is Tethering?
 
 Tethering is a **temporary liveness pin** that keeps a region alive during a borrow window:
 
@@ -560,7 +749,7 @@ region_tether_end(R);    // tether_count(R)--
 // Region R reclaims after tether_end (if external_rc == 0)
 ```
 
-### 6.2 Tethering RC Semantics
+### 7.2 Tethering RC Semantics
 
 Tethering uses a **separate counter** (`tether_count`) from `external_rc`:
 
@@ -581,7 +770,7 @@ Region reclaimable:
 - `external_rc` is **cross-thread** and unbounded (global references)
 - Tethering is for **temporary borrows**, RC is for **sharing**
 
-### 6.3 Tethering vs. RC vs. Transmigration
+### 7.3 Tethering vs. RC vs. Transmigration
 
 | Mechanism | Scope | RC Counter | Duration | Use Case |
 |-----------|--------|-------------|-----------|-----------|
@@ -589,7 +778,7 @@ Region reclaimable:
 | **Region-RC (external_rc)** | Escape | `external_rc` | Unbounded | Share region across threads/globals/closures |
 | **Tethering (tether_count)** | Borrow | `tether_count` | Bounded (call) | Temporarily pass reference without copying or sharing |
 
-### 6.4 Tethering Safety
+### 7.4 Tethering Safety
 
 Tethering MUST enforce:
 
@@ -607,11 +796,11 @@ Tethering MUST enforce:
 
 ---
 
-## 7) Conformance Checklist
+## 8) Conformance Checklist
 
 To verify that OmniLisp correctly implements Region-RC, the following checklist must be satisfied:
 
-### 7.1 Region Lifecycle
+### 8.1 Region Lifecycle
 
 - [ ] `region_create()` initializes `scope_alive = true`, `external_rc = 0`, `tether_count = 0`
 - [ ] `region_exit()` sets `scope_alive = false`, does NOT reclaim if `external_rc > 0` or `tether_count > 0`
@@ -619,7 +808,7 @@ To verify that OmniLisp correctly implements Region-RC, the following checklist 
 - [ ] `region_release()` asserts `external_rc > 0`, then decrements, reclaims if zero and `scope_alive == false`
 - [ ] `region_destroy()` asserts `scope_alive == false`, `external_rc == 0`, `tether_count == 0`
 
-### 7.2 External Reference Boundaries
+### 8.2 External Reference Boundaries
 
 - [ ] **Return to caller:** `region_retain()` emitted before return of escaping value
 - [ ] **Closure capture:** `region_retain()` emitted when closure captures variable from closing region
@@ -627,32 +816,32 @@ To verify that OmniLisp correctly implements Region-RC, the following checklist 
 - [ ] **Cross-thread channel:** `region_retain()` emitted on send, `region_release()` emitted on recv
 - [ ] **Mutation into older:** Auto-repair (transmigrate or retain) inserted for younger→older stores
 
-### 7.3 Transmigration Integration
+### 8.3 Transmigration Integration
 
 - [ ] Transmigration does NOT use RC (ownership transfer or copy)
 - [ ] Compiler chooses transmigrate vs. retain based on size/heuristic (not random)
 - [ ] Region Closure Property verified after transmigration (debug build: `assert_no_ptrs_into_region`)
 
-### 7.4 Mutation Auto-Repair
+### 8.4 Mutation Auto-Repair
 
 - [ ] All mutation boundaries (dict-set, array-set, box-set, tuple-set) have auto-repair
 - [ ] Auto-repair decision (transmigrate vs. retain) uses size/liveness heuristic
 - [ ] Younger→older stores are **never** silently copied without repair
 
-### 7.5 Tethering
+### 8.5 Tethering
 
 - [ ] `tether_start()` increments `tether_count`, `tether_end()` decrements
 - [ ] `region_exit()` blocks or fails if `tether_count > 0` (must be explicit in error message)
 - [ ] `tether_count` is thread-local (no atomics)
 - [ ] Cross-thread sharing uses `external_rc`, not `tether_count`
 
-### 7.6 Debug Verification
+### 8.6 Debug Verification
 
 - [ ] Debug build asserts `external_rc >= 0` (negative RC is fatal error)
 - [ ] Debug build checks for pointers into dead regions after `region_exit` / `region_destroy`
 - [ ] Debug build logs all RC operations (retain/release) for manual inspection
 
-### 7.7 Testing
+### 8.7 Testing
 
 - [ ] Unit tests for `region_retain` / `region_release` invariants
 - [ ] Unit tests for external reference boundaries (return, capture, global, channel)
@@ -663,7 +852,7 @@ To verify that OmniLisp correctly implements Region-RC, the following checklist 
 
 ---
 
-## 8) "Done Means" for Region-RC Implementation
+## 9) "Done Means" for Region-RC Implementation
 
 Region-RC is considered complete/verified only when:
 
@@ -679,7 +868,7 @@ Region-RC is considered complete/verified only when:
 
 ---
 
-## 9) Relationship to RC Dialect Literature
+## 10) Relationship to RC Dialect Literature
 
 The RC dialect (https://www.barnowl.org/research/rc/index.html) defines **"external pointers"** similarly to OmniLisp's definition:
 
@@ -701,9 +890,9 @@ The RC dialect (https://www.barnowl.org/research/rc/index.html) defines **"exter
 
 ---
 
-## 10) Open Questions / Future Work
+## 11) Open Questions / Future Work
 
-### 10.1 Auto-Repair Heuristics (TODO)
+### 11.1 Auto-Repair Heuristics (TODO)
 
 What is the optimal threshold for choosing transmigrate vs. retain?
 
@@ -713,7 +902,7 @@ What is the optimal threshold for choosing transmigrate vs. retain?
   - Allocation frequency
   - Cache locality considerations
 
-### 10.2 Retention Cliff Detection (TODO)
+### 11.2 Retention Cliff Detection (TODO)
 
 How to detect and warn about "retention cliffs" (younger regions kept alive too long by older regions)?
 
@@ -726,7 +915,7 @@ How to detect and warn about "retention cliffs" (younger regions kept alive too 
   - Track region graph: "older region holds reference to younger region"
   - Warn if older region significantly outlives younger
 
-### 10.3 Ownership Transfer Semantics (TODO)
+### 11.3 Ownership Transfer Semantics (TODO)
 
 Can we implement true ownership transfer for cross-thread channel send?
 
@@ -735,7 +924,7 @@ Can we implement true ownership transfer for cross-thread channel send?
 
 ---
 
-## 11) References
+## 12) References
 
 - `docs/CTRR.md` - CTRR contract and Region Closure Property
 - `runtime/docs/CTRR_TRANSMIGRATION.md` - Transmigration implementation contract

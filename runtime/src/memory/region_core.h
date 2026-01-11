@@ -12,6 +12,9 @@
 #define REGION_INLINE_BUF_SIZE 512
 #define REGION_INLINE_MAX_ALLOC 64
 
+/* Issue 2 P5: Merge threshold for store barrier auto-repair */
+#define REGION_MERGE_THRESHOLD_BYTES 4096  // 4KB default threshold for choosing merge vs transmigrate
+
 typedef struct {
     char buffer[REGION_INLINE_BUF_SIZE];  // Inline storage for small objects
     size_t offset;                        // Current bump pointer offset
@@ -89,6 +92,12 @@ void region_mark_external_ref(Region* r);
 Region* region_get_or_create(void);
 char* region_strdup(Region* r, const char* s);
 
+/* Issue 2 P5: Merge threshold accessor */
+size_t get_merge_threshold(void);
+
+/* Issue 2 P5: Safe merge function */
+int region_merge_safe(Region* src, Region* dst);
+
 // Tethering
 void region_tether_start(Region* r);
 void region_tether_end(Region* r);
@@ -149,7 +158,45 @@ static inline void* region_alloc(Region* r, size_t size) {
     return ptr;
 }
 
+// Splice (Issue 2 P5: Merge Support)
+// Splice (Issue 2 P5: Merge Support)
 void region_splice(Region* dest, Region* src, void* start_ptr, void* end_ptr);
+
+/*
+ * region_merge_permitted - Check if region merge is safe
+ *
+ * Issue 2 P5: Determine if src region can be merged into dst.
+ * Merge is only safe when:
+ *   1. Both regions owned by same thread (cross-thread requires transmigrate)
+ *   2. Source region has no inline buffer allocations (or only arena allocations)
+ *
+ * @param src: Source region to merge from
+ * @param dst: Destination region to merge into
+ * @return: true if merge is permitted, false otherwise
+ *
+ * Rationale: Inline buffer allocations are in Region struct itself,
+ * not in arena chunks. region_splice() only transfers arena chunks,
+ * so merging a region with inline allocations would create dangling pointers.
+ */
+bool region_merge_permitted(const Region* src, const Region* dst);
+
+/*
+ * region_merge_permitted - Check if region merge is safe
+ *
+ * Issue 2 P5: Determine if src region can be merged into dst.
+ * Merge is only safe when:
+ *   1. Both regions owned by same thread (cross-thread requires transmigrate)
+ *   2. Source region has no inline buffer allocations (or only arena allocations)
+ *
+ * @param src: Source region to merge from
+ * @param dst: Destination region to merge into
+ * @return: true if merge is permitted, false otherwise
+ *
+ * Rationale: Inline buffer allocations are in the Region struct itself,
+ * not in arena chunks. region_splice() only transfers arena chunks,
+ * so merging a region with inline allocations would create dangling pointers.
+ */
+bool region_merge_permitted(const Region* src, const Region* dst);
 
 /*
  * region_can_splice_arena_only - Check if splice fast-path is sound

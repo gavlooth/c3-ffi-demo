@@ -1297,6 +1297,36 @@ static inline Region* omni_obj_region(Obj* o) {
 /* Define this so test files know the feature is implemented */
 #define OMNI_OBJ_REGION_IMPLEMENTED 1
 
+/* ========== Issue 2 P4.1: Region Lifetime Rank Accessors ========== */
+
+/*
+ * omni_region_set_lifetime_rank - Set the lifetime rank of a region
+ *
+ * The lifetime_rank represents the outlives depth (nesting order) of a region.
+ * - Rank 0 = root/global region (no parent)
+ * - Rank N = child region with N levels of nesting
+ *
+ * Ranks are only comparable when owner_thread matches (cross-thread ranks
+ * are not comparable, so stores must always repair).
+ *
+ * This function should be called by generated code after region_create()
+ * to establish the correct rank hierarchy.
+ *
+ * @param r: The region to update
+ * @param rank: The new lifetime rank value
+ */
+void omni_region_set_lifetime_rank(struct Region* r, uint64_t rank);
+
+/*
+ * omni_region_get_lifetime_rank - Get the lifetime rank of a region
+ *
+ * Returns the outlives depth for the given region.
+ *
+ * @param r: The region to query
+ * @return: The lifetime rank, or 0 if r is NULL
+ */
+uint64_t omni_region_get_lifetime_rank(struct Region* r);
+
 /* ========== Issue 2 P4: Mutation Store Barrier ========== */
 
 /*

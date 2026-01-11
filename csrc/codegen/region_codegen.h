@@ -140,6 +140,14 @@ void omni_codegen_alloc_in_region(CodeGenContext* ctx,
 bool omni_should_transmigrate(CodeGenContext* ctx, const char* var_name);
 
 /*
+ * Emit region_release_internal calls at last-use positions.
+ * Called after emitting each statement/expression to check for last-use matches.
+ *
+ * Issue 1 P2: This implements the release half of Region-RC retain/release.
+ */
+void omni_codegen_emit_region_releases_at_pos(CodeGenContext* ctx, int position);
+
+/*
  * Get the region name for a given variable.
  * Returns the region that contains this variable, or NULL.
  */

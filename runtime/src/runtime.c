@@ -519,6 +519,34 @@ Obj* make_channel(int capacity) {
     return o;
 }
 
+/* Helper for testing: create channel in a specific region */
+Obj* make_channel_region(Region* region, int capacity) {
+    if (!region) return NULL;
+    Obj* o = alloc_obj_region(region, TAG_CHANNEL);
+    if (!o) return NULL;
+
+    Channel* ch = region_alloc(region, sizeof(Channel));
+    if (!ch) return NULL;
+
+    ch->capacity = capacity > 0 ? capacity : 0;
+    if (ch->capacity > 0) {
+        ch->buffer = region_alloc(region, sizeof(Obj*) * ch->capacity);
+    } else {
+        ch->buffer = NULL;
+    }
+
+    ch->head = 0;
+    ch->tail = 0;
+    ch->count = 0;
+    ch->closed = false;
+    pthread_mutex_init(&ch->lock, NULL);
+    pthread_cond_init(&ch->send_cond, NULL);
+    pthread_cond_init(&ch->recv_cond, NULL);
+
+    o->ptr = ch;
+    return o;
+}
+
 int channel_send(Obj* ch_obj, Obj* val) {
     if (!ch_obj || !IS_BOXED(ch_obj) || ch_obj->tag != TAG_CHANNEL) return -1;
     Channel* ch = (Channel*)ch_obj->ptr;
@@ -535,11 +563,17 @@ int channel_send(Obj* ch_obj, Obj* val) {
     }
     
     if (ch->capacity > 0) {
-        ch->buffer[ch->tail] = val;
+        /* Issue 2 P4: Use store barrier to enforce Region Closure Property */
+        ch->buffer[ch->tail] = omni_store_repair(ch_obj, &ch->buffer[ch->tail], val);
         ch->tail = (ch->tail + 1) % ch->capacity;
         ch->count++;
     } else {
         // Unbuffered: one slot "handshake"
+        // NOTE: Store barrier not used for unbuffered channels because the value
+        // is passed directly from sender to receiver via pointer indirection.
+        // The sender blocks until the receiver takes the value, so the value
+        // is not "stored" in the channel. The receiver is responsible for
+        // ensuring proper lifetime handling of the received value.
         ch->buffer = (Obj**)&val; // Temporarily use buffer pointer to store val
         ch->count = 1;
     }
@@ -630,7 +664,9 @@ Obj* atom_reset(Obj* atom_obj, Obj* newval) {
     Atom* a = (Atom*)atom_obj->ptr;
     pthread_rwlock_wrlock(&a->lock);
     Obj* old = a->value;
-    a->value = newval;
+    /* Issue 2 P4: Use store barrier to enforce Region Closure Property */
+    Obj* repaired = omni_store_repair(atom_obj, &a->value, newval);
+    a->value = repaired;
     pthread_rwlock_unlock(&a->lock);
     return old;
 }
@@ -640,10 +676,13 @@ Obj* atom_swap(Obj* atom_obj, Obj* fn) {
     Atom* a = (Atom*)atom_obj->ptr;
     pthread_rwlock_wrlock(&a->lock);
     Obj* old = a->value;
-    a->value = call_closure(fn, &old, 1);
-    Obj* new_val = a->value;
+    /* Compute new value by calling closure with old value */
+    Obj* computed = call_closure(fn, &old, 1);
+    /* Issue 2 P4: Use store barrier to enforce Region Closure Property */
+    Obj* repaired = omni_store_repair(atom_obj, &a->value, computed);
+    a->value = repaired;
     pthread_rwlock_unlock(&a->lock);
-    return new_val;
+    return a->value;
 }
 
 Obj* atom_cas(Obj* atom_obj, Obj* expected, Obj* newval) {
@@ -651,7 +690,9 @@ Obj* atom_cas(Obj* atom_obj, Obj* expected, Obj* newval) {
     Atom* a = (Atom*)atom_obj->ptr;
     pthread_rwlock_wrlock(&a->lock);
     if (a->value == expected) {
-        a->value = newval;
+        /* Issue 2 P4: Use store barrier to enforce Region Closure Property */
+        Obj* repaired = omni_store_repair(atom_obj, &a->value, newval);
+        a->value = repaired;
         pthread_rwlock_unlock(&a->lock);
         return mk_bool(1);
     }
@@ -797,9 +838,64 @@ Obj* omni_store_repair(Obj* container, Obj** slot, Obj* new_value) {
         return new_value;
     }
 
-    /* TODO: Issue 2 P4 I2-p4-implement-lifetime-check-repair
-     * Check lifetime violation and apply repair
-     * For now, just store directly (placeholder) */
+    /* Issue 2 P4.3: Enforce Region Closure Property using lifetime ranks */
+
+    /* Step 4: Cross-thread check - ranks are not comparable across threads */
+    if (!pthread_equal(src_region->owner_thread, dst_region->owner_thread)) {
+        /* Cross-thread store: always repair (transmigrate into dst) */
+        /* Fallback: use global region if dst is unsafe */
+        Region* safe_dst = (dst_region && dst_region->scope_alive) ? dst_region : _global_region;
+        if (!safe_dst) {
+            _ensure_global_region();
+            safe_dst = _global_region;
+        }
+
+        /* Transmigrate value from src to safe_dst */
+        Obj* repaired = transmigrate(new_value, src_region, safe_dst);
+        if (repaired) {
+            *slot = repaired;
+            return repaired;
+        }
+        /* Fallback: store original if transmigrate fails */
+        *slot = new_value;
+        return new_value;
+    }
+
+    /* Step 5: Same-thread ranks are comparable - check lifetime ordering */
+    /* If dst->lifetime_rank < src->lifetime_rank: illegal older<-younger store */
+    if (dst_region->lifetime_rank < src_region->lifetime_rank) {
+        /* Lifetime violation! Repair using merge or transmigrate */
+
+        /* Issue 2 P5: Try merge first for large regions */
+        /* If src region is large (above threshold), merge is more efficient */
+        /* because transmigrating a large graph is expensive */
+        if (src_region->bytes_allocated_total >= get_merge_threshold()) {
+            int merge_result = region_merge_safe(src_region, dst_region);
+            if (merge_result == 0) {
+                /* Merge successful: value now in dst_region via arena transfer */
+                /* No copy needed, just update slot reference */
+                dst_region->escape_repair_count++;
+                *slot = new_value;
+                return new_value;
+            }
+            /* Merge failed (-1 or -2), fallback to transmigrate below */
+        }
+
+        /* Fallback: Transmigrate value from src to dst (copy the graph) */
+        /* This handles small regions (below threshold) or failed merge attempts */
+        Obj* repaired = transmigrate(new_value, src_region, dst_region);
+        if (repaired) {
+            /* Update accounting: dst received an escaped value */
+            dst_region->escape_repair_count++;
+            *slot = repaired;
+            return repaired;
+        }
+        /* Fallback: store original if transmigrate fails */
+        *slot = new_value;
+        return new_value;
+    }
+
+    /* No lifetime violation: dst is younger or same age as src */
     *slot = new_value;
     return new_value;
 }

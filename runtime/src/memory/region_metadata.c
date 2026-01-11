@@ -98,10 +98,15 @@ static struct Obj* clone_pair(struct Obj* old_obj, struct Region* dest, void* tm
 
     /* Copy scalar fields (tag, etc.) */
     new_obj->tag = old_obj->tag;
+    new_obj->mark = 0;
+    new_obj->generation = 0;
+    new_obj->tethered = 0;
+    new_obj->owner_region = dest;  /* Issue 2 P4.3: Set owning region for transmigrated objects */
 
     /* Copy a and b as OLD pointers (will be rewritten by generic loop) */
     new_obj->a = old_obj->a;
     new_obj->b = old_obj->b;
+    new_obj->is_pair = 1;  /* Preserve is_pair flag */
 
     return new_obj;
 }
@@ -125,6 +130,10 @@ static Obj* clone_box(Obj* old_obj, Region* dest, void* tmp_ctx) {
     if (!new_obj) return NULL;
 
     new_obj->tag = old_obj->tag;
+    new_obj->mark = 0;
+    new_obj->generation = 0;
+    new_obj->tethered = 0;
+    new_obj->owner_region = dest;  /* Issue 2 P4.3: Set owning region for transmigrated objects */
     new_obj->a = old_obj->a;  /* Copy as old pointer */
 
     return new_obj;

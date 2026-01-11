@@ -91,6 +91,9 @@ void omni_codegen_free(CodeGenContext* ctx) {
         type_env_free(ctx->type_env);
     }
 
+    /* Issue 3 P2: Clean up non-lexical region end tracking */
+    free(ctx->region_exited);
+
     free(ctx->output_buffer);
     free(ctx);
 }
@@ -1588,6 +1591,8 @@ static void codegen_lambda(CodeGenContext* ctx, OmniValue* expr) {
     /* Region-RC: Create local region at function entry */
     p += sprintf(p, "    /* Region-RC: Create local region for allocations */\n");
     p += sprintf(p, "    struct Region* _local_region = region_create();\n");
+    /* Issue 2 P4.2: Assign lifetime_rank based on caller region (outlives depth) */
+    p += sprintf(p, "    omni_region_set_lifetime_rank(_local_region, omni_region_get_lifetime_rank(_caller_region) + 1);\n");
     p += sprintf(p, "    \n");
 
     /* Region-RC: Emit tethering for parameters from outer regions
@@ -1645,6 +1650,12 @@ static void codegen_lambda(CodeGenContext* ctx, OmniValue* expr) {
         p += sprintf(p, "    /* Region-RC: Transmigrate result to caller region */\n");
         p += sprintf(p, "    Obj* _transmigrated = transmigrate(_result, _local_region, _caller_region);\n");
         p += sprintf(p, "    \n");
+
+        /* Issue 3 P2: Non-lexical region end (straight-line only) */
+        /* Note: Region could exit earlier if all variables are dead */
+        /* Full implementation requires position tracking during codegen */
+        p += sprintf(p, "    /* ISSUE 3 P2: Non-lexical region end - region could exit here if all vars dead */\n");
+
         p += sprintf(p, "    /* Region-RC: Exit local region (mark scope as inactive) */\n");
         p += sprintf(p, "    region_exit(_local_region);\n");
         p += sprintf(p, "    region_destroy_if_dead(_local_region);\n");
@@ -1812,6 +1823,8 @@ static void codegen_define(CodeGenContext* ctx, OmniValue* expr) {
 
                 /* Region-RC prologue */
                 omni_codegen_emit(ctx, "struct Region* _local_region = region_create();\n");
+                /* Issue 2 P4.2: Assign lifetime_rank based on caller region (outlives depth) */
+                omni_codegen_emit(ctx, "omni_region_set_lifetime_rank(_local_region, omni_region_get_lifetime_rank(_caller_region) + 1);\n");
                 omni_codegen_emit(ctx, "region_tether_start(_caller_region);\n\n");
 
                 /* Body - last element */
@@ -2007,6 +2020,8 @@ static void codegen_define(CodeGenContext* ctx, OmniValue* expr) {
 
             /* Region-RC prologue */
             omni_codegen_emit(ctx, "struct Region* _local_region = region_create();\n");
+            /* Issue 2 P4.2: Assign lifetime_rank based on caller region (outlives depth) */
+            omni_codegen_emit(ctx, "omni_region_set_lifetime_rank(_local_region, omni_region_get_lifetime_rank(_caller_region) + 1);\n");
             omni_codegen_emit(ctx, "region_tether_start(_caller_region);\n\n");
 
             /* Body */
@@ -2266,6 +2281,8 @@ static void codegen_define(CodeGenContext* ctx, OmniValue* expr) {
         omni_codegen_emit_raw(ctx, ") {\n");
         omni_codegen_indent(ctx);
         omni_codegen_emit(ctx, "struct Region* _local_region = region_create();\n");
+        /* Issue 2 P4.2: Assign lifetime_rank based on caller region (outlives depth) */
+        omni_codegen_emit(ctx, "omni_region_set_lifetime_rank(_local_region, omni_region_get_lifetime_rank(_caller_region) + 1);\n");
         omni_codegen_emit(ctx, "region_tether_start(_caller_region);\n");
         OmniValue* last = NULL;
         OmniValue* b = rest;
@@ -2913,6 +2930,8 @@ void omni_codegen_main(CodeGenContext* ctx, OmniValue** exprs, size_t count) {
     /* Region-RC: Create global region for main's scope */
     omni_codegen_emit(ctx, "/* Region-RC: Create global region for main() */\n");
     omni_codegen_emit(ctx, "struct Region* _local_region = region_create();\n");
+    /* Issue 2 P4.2: main() has no caller, so rank stays at default 0 (root/global) */
+    omni_codegen_emit(ctx, "/* _local_region->lifetime_rank = 0; (already set by region_create) */\n");
     omni_codegen_emit(ctx, "\n");
 
     /* Initialize runtime type objects */
@@ -2920,6 +2939,37 @@ void omni_codegen_main(CodeGenContext* ctx, OmniValue** exprs, size_t count) {
     omni_codegen_emit(ctx, "omni_init_type_objects();\n");
     omni_codegen_emit(ctx, "\n");
 
+    /*
+     * Issue 3 P2 (Non-lexical region end, straight-line):
+     *
+     * Constructive criticism / reality check:
+     * This code generator currently routes most allocations through
+     * `_local_region` (e.g. `mk_int()` / `mk_cell()` wrappers).
+     * That means we cannot safely emit `region_exit(_local_region)` "early"
+     * and then keep compiling more top-level expressions that allocate into
+     * `_local_region`.
+     *
+     * The minimal safe form (and the one we can test deterministically) is:
+     * - After each top-level expression is evaluated, printed, and freed,
+     *   exit+destroy the region and then create a fresh region for the next
+     *   expression. This bounds retention without requiring intra-expression
+     *   position tracking or new allocation regions.
+     *
+     * This is still CTRR/CTRR-adjacent behavior: reclamation points are
+     * compiler-inserted, deterministic, and do not scan the heap.
+     */
+    size_t exec_total = 0;
+    for (size_t i = 0; i < count; i++) {
+        OmniValue* expr = exprs[i];
+
+        if (omni_is_cell(expr) && omni_is_sym(omni_car(expr)) &&
+            strcmp(omni_car(expr)->str_val, "define") == 0) {
+            continue;
+        }
+        exec_total++;
+    }
+
+    size_t exec_index = 0;
     for (size_t i = 0; i < count; i++) {
         OmniValue* expr = exprs[i];
 
@@ -2941,6 +2991,18 @@ void omni_codegen_main(CodeGenContext* ctx, OmniValue** exprs, size_t count) {
         omni_codegen_emit(ctx, "free_obj(_result);\n");
         omni_codegen_dedent(ctx);
         omni_codegen_emit(ctx, "}\n");
+
+        exec_index++;
+        if (exec_index < exec_total) {
+            omni_codegen_emit(ctx,
+                "/* ISSUE 3 P2: Non-lexical main() region end */\n");
+            omni_codegen_emit(ctx, "region_exit(_local_region);\n");
+            omni_codegen_emit(ctx, "region_destroy_if_dead(_local_region);\n");
+            omni_codegen_emit(ctx,
+                "_local_region = region_create();\n");
+            omni_codegen_emit(ctx,
+                "/* _local_region->lifetime_rank = 0; (already set by region_create) */\n");
+        }
     }
 
     /* Region-RC: Cleanup global region before exit */
@@ -3104,6 +3166,9 @@ void omni_codegen_emit_tethers(CodeGenContext* ctx, int position) {
 void omni_codegen_emit_frees(CodeGenContext* ctx, int position) {
     if (!ctx->analysis) return;
 
+    /* Issue 1 P2: Emit region releases at last-use positions */
+    omni_codegen_emit_region_releases_at_pos(ctx, position);
+
     size_t count;
     char** vars = omni_get_frees_at(ctx->analysis, position, &count);
 
@@ -3117,6 +3182,52 @@ void omni_codegen_emit_frees(CodeGenContext* ctx, int position) {
     free(vars);
 }
 
+/* ============== Issue 3 P2: Non-Lexical Region End ============== */
+
+/**
+ * omni_codegen_emit_region_exits - Emit region_exit() calls at last-use positions
+ *
+ * Issue 3 P2: Non-lexical region end for straight-line code.
+ *
+ * For straight-line code, we compute when all variables in the main region
+ * become dead. However, since current codegen doesn't track positions during
+ * emission, we add a comment showing where the region could have exited
+ * earlier (at last-use position instead of function end).
+ *
+ * Future phases will extend this to actually emit region_exit() early by
+ * tracking position during codegen and inserting exit calls at the right point.
+ */
+void omni_codegen_emit_region_exits(CodeGenContext* ctx, int position) {
+    if (!ctx->analysis || !ctx->analysis->var_usages) {
+        return;  /* No analysis data */
+    }
+
+    /* Compute last-use position of main region (_local_region) */
+    int main_region_last_use = -1;
+    for (VarUsage* u = ctx->analysis->var_usages; u; u = u->next) {
+        /* Only consider variables allocated in main region (region_id = 0) */
+        if (u->region_id == 0 && u->last_use > main_region_last_use) {
+            main_region_last_use = u->last_use;
+        }
+    }
+
+    /* For P2 (straight-line only), we emit a comment showing where region could exit */
+    /* Actual early exit emission requires position tracking during codegen */
+    if (main_region_last_use >= 0 && position >= main_region_last_use) {
+        if (!ctx->region_exited) {
+            /* Mark that we've processed region exit */
+            ctx->region_exited = calloc(1, sizeof(int));
+            ctx->region_exited[0] = 1;
+            
+            /* Note: This comment is emitted at the point where all variables are dead */
+            omni_codegen_emit(ctx, 
+                "/* ISSUE 3 P2: All region variables dead at pos %d ", 
+                main_region_last_use);
+            omni_codegen_emit(ctx, "- region could exit here (non-lexical end) */\n");
+        }
+    }
+}
+
 /* ============== CFG-Based Code Generation ============== */
 
 /*
@@ -3128,10 +3239,15 @@ void omni_codegen_emit_cfg_tethers(CodeGenContext* ctx, CFGNode* node) {
     /* Emit tethers at node start */
     omni_codegen_emit_tethers(ctx, node->position_start);
     
+    /* Issue 1 P2: Emit region releases at last-use positions */
+    omni_codegen_emit_region_releases_at_pos(ctx, node->position_start);
+
     /* If node has a different end position, emit those too 
      * (though usually tethers are at boundaries) */
     if (node->position_end != node->position_start) {
         omni_codegen_emit_tethers(ctx, node->position_end);
+        /* Issue 1 P2: Also emit region releases at end position */
+        omni_codegen_emit_region_releases_at_pos(ctx, node->position_end);
     }
 }
 

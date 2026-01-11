@@ -226,6 +226,8 @@ static VarUsage* find_or_create_var_usage(AnalysisContext* ctx, const char* name
     u->is_param = false;
     /* OPTIMIZATION (T-opt-region-metadata-compiler): Initialize type_id */
     u->type_id = TYPE_ID_GENERIC;  /* Default to generic until type inference */
+    /* Issue 3 P2: Track which region owns this variable */
+    u->region_id = (ctx->current_region) ? ctx->current_region->region_id : 0;
     u->next = ctx->var_usages;
     ctx->var_usages = u;
     return u;
@@ -2470,6 +2472,76 @@ void omni_compute_liveness(CFG* cfg, AnalysisContext* ctx) {
                 }
             }
         }
+    }
+}
+
+/* ============== Issue 3 P2: Non-Lexical Region End ============== */
+
+/**
+ * omni_compute_region_exit_points - Compute when each region should exit
+ *
+ * For each region, find the position where all its variables are dead.
+ * This is the maximum last_use position among all variables in the region.
+ *
+ * Returns a linked list of RegionExitPoint structures (caller must free).
+ */
+RegionExitPoint* omni_compute_region_exit_points(AnalysisContext* ctx) {
+    if (!ctx || !ctx->var_usages) {
+        return NULL;
+    }
+
+    /* First, initialize all region last-use positions to 0 */
+    int* region_last_use = NULL;
+    size_t region_count = 0;
+    int max_region_id = 0;
+
+    /* Scan all variables to find max region ID */
+    for (VarUsage* u = ctx->var_usages; u; u = u->next) {
+        if (u->region_id > max_region_id) {
+            max_region_id = u->region_id;
+        }
+    }
+
+    if (max_region_id < 0) {
+        return NULL;  /* No regions found */
+    }
+
+    region_count = (size_t)(max_region_id + 1);
+    region_last_use = calloc(region_count, sizeof(int));
+
+    /* Compute last-use for each region */
+    for (VarUsage* u = ctx->var_usages; u; u = u->next) {
+        if (u->region_id >= 0 && u->last_use >= 0) {
+            if (u->last_use > region_last_use[u->region_id]) {
+                region_last_use[u->region_id] = u->last_use;
+            }
+        }
+    }
+
+    /* Build exit point list (skip region 0 - that's the function's main region) */
+    RegionExitPoint* points = NULL;
+    for (size_t i = 1; i < region_count; i++) {
+        if (region_last_use[i] > 0) {
+            RegionExitPoint* rp = malloc(sizeof(RegionExitPoint));
+            rp->region_id = (int)i;
+            rp->position = region_last_use[i];
+            rp->next = points;
+            points = rp;
+        }
+    }
+
+    free(region_last_use);
+    return points;
+}
+
+/**
+ * omni_region_exit_points_free - Free region exit point list
+ */
+void omni_region_exit_points_free(RegionExitPoint* points) {
+    while (points) {
+        RegionExitPoint* next = points->next;
+        free(points);
+        points = next;
     }
 }
 

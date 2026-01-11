@@ -1,6 +1,9 @@
-# GLM-4.7 Instructions
-- Always use <thinking> blocks for deep architectural analysis.
-- Prioritize "Ultrathink" logic: decompose every task into 5 steps before writing code.
+ # C Project Rules
+- **Tooling:** Use the `c-lang-tools` MCP for all symbol lookups.
+- **Memory Safety:** Always check for `NULL` after `malloc`. 
+- **Style:** Follow the Linux Kernel style guide (Tabs, 80-char limit).
+- **Thinking Mode:** Keep `preserved_thinking: true` to remember architectural decisions between debugging steps.
+- **Break down tasks into steps using the sequential thinking tool.
 - Do not provide a response until you have verified the logic against potential edge cases.
 
 # OmniLisp C Scratch - CTRR Memory Model

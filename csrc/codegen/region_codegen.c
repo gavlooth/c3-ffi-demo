@@ -291,3 +291,53 @@ const char* omni_get_var_region_name(CodeGenContext* ctx, const char* var_name) 
 
     return "_local_region";  /* Default */
 }
+
+/* ============== Issue 1 P2: Emit Region Release at Last Use ============== */
+
+/*
+ * omni_codegen_emit_region_releases_at_pos - Emit region_release_internal at last-use positions
+ *
+ * Issue 1 P2: When a variable reaches its last use, emit region_release_internal()
+ * to decrement the region's external reference count (for Region-RC).
+ *
+ * This is called after emitting each statement/expression to check if any variables
+ * reached their last-use position at this code location.
+ *
+ * Generated code pattern:
+ *   region_release_internal(omni_obj_region(var_name));
+ *
+ * Args:
+ *   ctx: Code generation context
+ *   position: Current codegen position (corresponds to last_use values in analysis)
+ */
+void omni_codegen_emit_region_releases_at_pos(CodeGenContext* ctx, int position) {
+    if (!ctx || !ctx->analysis || !ctx->analysis->var_usages) {
+        return;  /* No analysis data available */
+    }
+
+    /* Iterate through all variables and emit release for those at last_use */
+    for (VarUsage* u = ctx->analysis->var_usages; u; u = u->next) {
+        /* Skip if not a last-use position match */
+        if (u->last_use != position) {
+            continue;
+        }
+
+        /* Skip if variable was escaped (returned, captured, stored globally) */
+        /* Escaped variables are retained externally, don't release them here */
+        if (u->flags & (VAR_USAGE_ESCAPED | VAR_USAGE_RETURNED | VAR_USAGE_CAPTURED)) {
+            continue;
+        }
+
+        /* Get region name for this variable */
+        const char* region_name = omni_get_var_region_name(ctx, u->name);
+        if (!region_name) {
+            continue;  /* No region assigned */
+        }
+
+        /* Emit region_release_internal() call */
+        omni_codegen_emit_raw(ctx, 
+            "/* %s: last use at pos %d - release region reference */\n",
+            u->name, position);
+        omni_codegen_emit(ctx, "region_release_internal(%s);\n", region_name);
+    }
+}

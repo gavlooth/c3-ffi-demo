@@ -1,5 +1,7 @@
 CC = gcc
-CFLAGS = -std=c99 -Wall -Wextra -g -I.. -I../../runtime/include -I../../third_party -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE
+CFLAGS = -std=c99 -Wall -Wextra -g -I.. -I../../runtime/include \
+	-I../../third_party \
+	-D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE
 LDFLAGS = -L.. -lomnilisp -lpthread -lm
 
 # All test source files
@@ -7,7 +9,18 @@ SRCS = $(wildcard test_*.c)
 # Executables (strip .c extension)
 TEST_BINS = $(SRCS:.c=)
 
-.PHONY: all test clean test-cli
+.PHONY: all test clean test-cli FORCE
+
+# Keep the compiler-side tests honest:
+#
+# These tests link against `../libomnilisp.a`, but the test harness does not
+# track the library's underlying source dependencies. Without this rule, it
+# is easy to change `csrc/codegen/*.c` (or other library sources) and still
+# run stale tests against an old archive.
+#
+# We force `make -C .. libomnilisp.a` whenever the archive is needed.
+../libomnilisp.a: FORCE
+	$(MAKE) -C .. libomnilisp.a
 
 all: $(TEST_BINS)
 

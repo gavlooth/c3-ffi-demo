@@ -156,7 +156,120 @@ void region_tether_end(Region* r) {
 
 ---
 
-## 4) Cross-Thread Sharing (Region-RC)
+## 4) Cross-Thread Mutation Rule (Option A Rank Policy)
+
+### 4.1 Cross-Thread Stores Always Repair
+
+**Rule:**
+> Cross-thread stores are **always repaired** (transmigrated/adopted) because ranks are not comparable across threads.
+
+**Implementation:**
+
+```c
+// In omni_store_repair()
+if (!pthread_equal(src_region->owner_thread, dst_region->owner_thread)) {
+    // Cross-thread store: ranks not comparable → MUST REPAIR
+    Region* safe_dst = (dst_region && dst_region->scope_alive) ? dst_region : _global_region;
+    Obj* repaired = transmigrate(new_value, src_region, safe_dst);
+    *slot = repaired;
+    dst_region->escape_repair_count++;
+    return repaired;
+}
+```
+
+### 4.2 Why Ranks Are Not Comparable Across Threads
+
+**Problem:** A naïve "creation time rank" is wrong once you have:
+- Early exits (non-lexical region end)
+- Adoption/merge (regions can be reparented)
+- Region pooling (reused regions have confusing timestamps)
+
+**Solution (Option A):**
+- Ranks represent **per-owner-thread outlives depth**
+- Depth is only meaningful within the same thread's call stack
+- Cross-thread lifetime ordering is unknown
+
+**Example of Unpredictable Cross-Thread Ordering:**
+
+```c
+// Thread A:
+Region* A1 = region_create();  // A1.rank = 1
+region_exit(A1);               // A1 scope_alive = false
+
+// Thread B:
+Region* B1 = region_create();  // B1.rank = 1 (comparable only to B's other regions)
+// Thread B cannot know if A1 will outlive B1 or vice versa
+```
+
+### 4.3 Cross-Thread Store Behavior
+
+**When Cross-Thread Store Occurs:**
+1. Detect `src->owner_thread != dst->owner_thread`
+2. Always repair via transmigrate (no heuristic decision)
+3. Use `dst_region` if safe (scope_alive), else use global region
+4. Increment `dst_region->escape_repair_count`
+
+**Why Transmigrate (Not Retain)?**
+- Retain requires cross-thread RC coordination (complex)
+- Transmigrate is deterministic: value now lives in dst region
+- No risk of "retention cliff" across threads
+
+**Example:**
+
+```lisp
+;; Thread A (region R1 owned by Thread A)
+(let ((region (region-create))
+      (x (pair 1 2)))
+  (region-exit region)
+  (channel-send ch x))
+
+;; Thread B (region R2 owned by Thread B)
+(let ((region (region-create))
+      (container (dict))
+      (y (channel-recv ch)))
+  (dict-set! container "key" y))  ; Cross-thread store!
+
+;; omni_store_repair behavior:
+// y lives in R1 (owned by Thread A)
+// container lives in R2 (owned by Thread B)
+// owner_thread(R1) != owner_thread(R2) → CROSS-THREAD
+// Transmigrate y from R1 to R2
+```
+
+### 4.4 Alternatives Considered and Rejected
+
+**Alternative 1: Global timestamp ranks**
+- Rejected: Would require atomic increments for all region creation
+- Rejected: Early exits make timestamps misleading
+- Rejected: Pooling breaks timestamp ordering
+
+**Alternative 2: Try to infer cross-thread lifetime**
+- Rejected: Too complex, requires tracking all region exit times across threads
+- Rejected: Heuristics can be wrong (use-after-free risk)
+- Rejected: Adds unpredictable latency
+
+**Alternative 3: Cross-thread RC for stores (retain src_region)**
+- Rejected: Requires cross-thread RC coordination
+- Rejected: Risk of retention cliff across threads
+- Rejected: Complex ownership transfer semantics
+
+### 4.5 Invariants for Cross-Thread Rule
+
+**Invariant 1: Ranks are per-owner-thread**
+- Ranks from different threads are never compared
+- Cross-thread stores always trigger repair
+
+**Invariant 2: Transmigrate is default cross-thread repair**
+- Value is moved from src region to dst region
+- No RC bookkeeping needed for cross-thread case
+
+**Invariant 3: dst_region may be closing**
+- If `dst_region->scope_alive == false`, transmigrate to global instead
+- Prevents storing into a region that will be reclaimed
+
+---
+
+## 5) Cross-Thread Sharing (Region-RC)
 
 ### 4.1 What is Region-RC Sharing?
 
@@ -200,7 +313,7 @@ region_release(R);  // external_rc(R)--
 // If external_rc == 0, Thread A can reclaim R
 ```
 
-### 4.2 Region-RC Rules
+### 5.2 Region-RC Rules
 
 **Rule 1: Cross-Thread Requires RC**
 > Any cross-thread access **must** use `region_retain()` / `region_release()`.
@@ -211,7 +324,7 @@ region_release(R);  // external_rc(R)--
 **Rule 3: Owner Still Calls Exit**
 > The creating thread still calls `region_exit()`, but reclamation is deferred until `external_rc == 0`.
 
-### 4.3 Region-RC Implementation
+### 5.3 Region-RC Implementation
 
 ```c
 // In Region struct
@@ -240,16 +353,16 @@ void region_release(Region* r) {
 
 ---
 
-## 5) Quiescent Points (SMR Integration)
+## 6) Quiescent Points (SMR Integration)
 
-### 5.1 What is a Quiescent Point?
+### 6.1 What is a Quiescent Point?
 
 A **quiescent point** is when a thread is:
 - Not holding any references to SMR-protected structures
 - Not in a critical section
 - Safe to advance epoch / reclaim memory
 
-### 5.2 Quiescent Points in OmniLisp
+### 6.2 Quiescent Points in OmniLisp
 
 | Location | Quiescent? | Rationale |
 |-----------|-------------|-----------|
@@ -262,7 +375,7 @@ A **quiescent point** is when a thread is:
 | **After `region_retain()`** | **YES** | Just acquired RC, no references yet |
 | **Before `region_release()`** | **NO** | About to release RC, still has reference |
 
-### 5.3 Quiescent Point Implementation
+### 6.3 Quiescent Point Implementation
 
 ```c
 // Per-thread QSBR state
@@ -301,7 +414,7 @@ void region_tether_end(Region* r) {
 }
 ```
 
-### 5.4 Quiescent Point Contract
+### 6.4 Quiescent Point Contract
 
 **Rule:**
 > A thread may only report quiescent if `tether_depth == 0` (no active borrows).
@@ -311,9 +424,9 @@ void region_tether_end(Region* r) {
 
 ---
 
-## 6) Interaction with SMR
+## 7) Interaction with SMR
 
-### 6.1 SMR vs. Region Ownership
+### 7.1 SMR vs. Region Ownership
 
 SMR is used for **internal runtime structures**, NOT for regions:
 
@@ -324,7 +437,7 @@ SMR is used for **internal runtime structures**, NOT for regions:
 | **Global Module Map** | QSBR or Lock | Module imports |
 | **Region** | Ownership + RC + Tethering | Heap allocation |
 
-### 6.2 Region Ownership of SMR Structures
+### 7.2 Region Ownership of SMR Structures
 
 Some SMR structures are **owned by regions**:
 
@@ -343,7 +456,7 @@ Some SMR structures are **owned by regions**:
 2. **Quiescent points respect region:** Don't report quiescent while tethered to R
 3. **SMR reclamation respects tethering:** Don't reclaim table if R is tethered
 
-### 6.3 SMR Quiescent and Region Tethering
+### 7.3 SMR Quiescent and Region Tethering
 
 **Scenario:**
 - Thread A is tethered to Region R (which owns Intern Table)
@@ -372,9 +485,9 @@ qsbr_quiescent();
 
 ---
 
-## 7) Concurrency Scenarios
+## 8) Concurrency Scenarios
 
-### 7.1 Scenario 1: Single-Threaded Borrow
+### 8.1 Scenario 1: Single-Threaded Borrow
 
 ```lisp
 ;; Thread A
@@ -393,7 +506,7 @@ qsbr_quiescent();
 - **Access:** Thread A (same thread)
 - **Mechanism:** Tethering (thread-local, no atomics)
 
-### 7.2 Scenario 2: Cross-Thread Share
+### 8.2 Scenario 2: Cross-Thread Share
 
 ```lisp
 ;; Thread A
@@ -412,7 +525,7 @@ qsbr_quiescent();
 - **Access:** Both Thread A and Thread B
 - **Mechanism:** Region-RC (cross-thread, atomic RC)
 
-### 7.3 Scenario 3: Tether + SMR Quiescent
+### 8.3 Scenario 3: Tether + SMR Quiescent
 
 ```lisp
 ;; Thread A
@@ -435,9 +548,9 @@ qsbr_quiescent();
 
 ---
 
-## 8) Testing Strategy
+## 9) Testing Strategy
 
-### 8.1 Unit Tests
+### 9.1 Unit Tests
 
 **Test: Single-threaded ownership**
 ```lisp
@@ -477,7 +590,7 @@ qsbr_quiescent();
     (assert (qsbr-is-quiescent)))))
 ```
 
-### 8.2 Concurrency Stress Tests
+### 9.2 Concurrency Stress Tests
 
 **Test: Many threads sharing one region**
 ```lisp
@@ -511,7 +624,7 @@ qsbr_quiescent();
 
 ---
 
-## 9) "Done Means" for Threading Model
+## 10) "Done Means" for Threading Model
 
 The threading model is complete only when:
 
@@ -524,9 +637,9 @@ The threading model is complete only when:
 
 ---
 
-## 10) Future Work
+## 11) Future Work
 
-### 10.1 Explicit Ownership Transfer
+### 11.1 Explicit Ownership Transfer
 
 Future work: Add `transfer_region_ownership()` API:
 
@@ -543,7 +656,7 @@ region_exit(R);  // Can now call exit
 
 **Use case:** Migrating regions between thread pools (e.g., worker threads)
 
-### 10.2 Lock-Free Region Allocation
+### 11.2 Lock-Free Region Allocation
 
 Future work: Make `region_alloc()` lock-free for single-threaded case:
 
@@ -563,7 +676,7 @@ void* region_alloc(Region* r, size_t size) {
 
 ---
 
-## 11) References
+## 12) References
 
 - `runtime/docs/REGION_RC_MODEL.md` - Region-RC semantics and external pointers
 - `runtime/docs/SMR_FOR_RUNTIME_STRUCTURES.md` - SMR for internal runtime structures

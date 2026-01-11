@@ -59,6 +59,9 @@ static int run_slow_tests_enabled(void) {
 #include "test_region_of_obj.c"
 #include "test_region_accounting.c"
 #include "test_region_rank_basic.c"
+#include "test_store_barrier_rank_autorepair.c"
+#include "test_channel_send_autorepair.c"
+#include "test_store_barrier_merge.c"
 
 int main(int argc, char** argv) {
     (void)argc;
@@ -133,6 +136,15 @@ int main(int argc, char** argv) {
 
     /* Issue 2 P4.1: Region Rank Basic Tests */
     run_region_rank_basic_tests();
+
+    /* Issue 2 P4.3: Store Barrier Rank Autorepair Tests */
+    run_store_barrier_rank_autorepair_tests();
+
+    /* Issue 2 P4.4: Channel Send Autorepair Tests */
+    run_channel_send_autorepair_tests();
+
+    /* Issue 2 P5: Merge Support Tests */
+    run_store_barrier_merge_tests();
 
     TEST_EXIT();
 }

@@ -202,6 +202,33 @@ void region_release_internal(Region* r) {
     }
 }
 
+/* ========== Issue 2 P4.1: Region Lifetime Rank Accessors ========== */
+
+/*
+ * omni_region_set_lifetime_rank - Set the lifetime rank of a region
+ *
+ * The lifetime_rank represents the outlives depth (nesting order) of a region.
+ * - Rank 0 = root/global region (no parent)
+ * - Rank N = child region with N levels of nesting
+ *
+ * This function is called by generated code after region_create()
+ * to establish the correct rank hierarchy.
+ */
+void omni_region_set_lifetime_rank(Region* r, uint64_t rank) {
+    if (r) {
+        r->lifetime_rank = rank;
+    }
+}
+
+/*
+ * omni_region_get_lifetime_rank - Get the lifetime rank of a region
+ *
+ * Returns the outlives depth for the given region.
+ */
+uint64_t omni_region_get_lifetime_rank(Region* r) {
+    return r ? r->lifetime_rank : 0;
+}
+
 /*
  * region_is_thread_local - Check if a region is only accessed by the creating thread
  *
@@ -376,4 +403,98 @@ char* region_strdup(Region* r, const char* s) {
         memcpy(copy, s, len);
     }
     return copy;
+}
+/* ========== Issue 2 P5: Merge Support ========== */
+
+/*
+ * region_merge_permitted - Check if region merge is safe
+ *
+ * Issue 2 P5: Determine if src region can be merged into dst.
+ * Merge is only safe when:
+ *   1. Both regions owned by same thread (cross-thread requires transmigrate)
+ *   2. Source region has no inline buffer allocations (or only arena allocations)
+ *
+ * @param src: Source region to merge from
+ * @param dst: Destination region to merge into
+ * @return: true if merge is permitted, false otherwise
+ *
+ * Rationale: Inline buffer allocations are in Region struct itself,
+ * not in arena chunks. region_splice() only transfers arena chunks,
+ * so merging a region with inline allocations would create dangling pointers.
+ */
+bool region_merge_permitted(const Region* src, const Region* dst) {
+    // NULL regions cannot be merged
+    if (!src || !dst) return false;
+
+    // Threading gate: Cross-thread merges are not allowed
+    // Ranks are only comparable when owner_thread matches
+    if (!pthread_equal(src->owner_thread, dst->owner_thread)) {
+        return false;
+    }
+
+    // Inline buffer gate: Source must have no inline allocations
+    // region_splice() only transfers arena chunks, not inline buffer data
+    // If src has inline allocations, they would be lost, creating dangling pointers
+    if (!region_can_splice_arena_only(src)) {
+        return false;
+    }
+
+    // All checks passed: merge is permitted
+    return true;
+}
+
+/*
+ * get_merge_threshold - Get the merge threshold for auto-repair
+ *
+ * Issue 2 P5: Returns the size threshold for choosing between
+ * merge and transmigrate when repairing lifetime violations.
+ *
+ * @return: Merge threshold in bytes (default: REGION_MERGE_THRESHOLD_BYTES)
+ *
+ * Note: This is currently a constant, but making it a function
+ * allows future runtime tuning without changing code.
+ */
+size_t get_merge_threshold(void) {
+    return REGION_MERGE_THRESHOLD_BYTES;
+}
+
+/*
+ * region_merge_safe - Safely merge src region into dst
+ *
+ * Issue 2 P5: Perform a safe merge using region_splice().
+ * This function checks merge preconditions before splicing arena chunks.
+ *
+ * @param src: Source region to merge from
+ * @param dst: Destination region to merge into
+ * @return: 0 on success, -1 if merge not permitted, -2 if threading mismatch
+ *
+ * Safe merge behavior:
+ *   1. Check merge is permitted (same thread, src has no inline allocs)
+ *   2. Transfer all arena chunks from src to dst via region_splice()
+ *   3. After merge, values in src are now in dst's arena
+ *
+ * Note: This does not mark src as "drained" because the Region
+ * struct doesn't have that field. After merge, src may still allocate
+ * new data in its (now-empty) arena - this is safe but unusual.
+ */
+int region_merge_safe(Region* src, Region* dst) {
+    // Check merge preconditions
+    if (!region_merge_permitted(src, dst)) {
+        return -1;  // Merge not permitted (inline allocs or NULL regions)
+    }
+
+    // Threading gate is already checked in region_merge_permitted(),
+    // but we check again for explicit error codes
+    if (!pthread_equal(src->owner_thread, dst->owner_thread)) {
+        return -2;  // Merge forbidden, different threads
+    }
+
+    // Safe merge: splice all arena chunks from src into dst
+    // This transfers ownership of all arena-allocated data from src to dst
+    // Inline buffer data (if any) would be in Region struct itself,
+    // but region_merge_permitted() ensures src has no inline allocations
+    region_splice(dst, src, NULL, NULL);
+
+    // Merge successful
+    return 0;
 }
