@@ -962,9 +962,9 @@ However, when compiling `dict_set()` in `runtime/src/runtime.c`, the compiler er
 - A naïve “creation time rank” is wrong once you have early exits, adoption/merge, and pooling.
 - The rank must mean “outlives depth / nesting order”, not “timestamp”.
 
-#### P4.1: Add `lifetime_rank` to runtime `struct Region` and define invariants [TODO]
+#### P4.1: Add `lifetime_rank` to runtime `struct Region` and define invariants [DONE]
 
-- [TODO] Label: I2-p4-rank-add-field-and-reset (P4.1)
+- [DONE] Label: I2-p4-rank-add-field-and-reset (P4.1)
   Objective: Add an outlives rank field to the runtime ArenaRegion/RCB and ensure it is always initialized/reset correctly (region pooling makes this non-negotiable).
   Reference (read first):
     - `runtime/docs/MEMORY_TERMINOLOGY.md` (ArenaRegion/RCB definition; “Region = lifetime class” enforcement)

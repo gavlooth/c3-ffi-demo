@@ -63,6 +63,9 @@ struct Region {
     size_t escape_repair_count;      /* How often auto-repair triggered */
     size_t chunk_count;             /* Number of arena chunks allocated */
     ArenaChunk* last_arena_end;     /* Internal: detect chunk growth without touching third_party */
+
+    /* Issue 2 P4.1: Per-owner-thread outlives rank for store barrier enforcement */
+    uint64_t lifetime_rank;           /* Outlives depth (0 = root/global), used for lifetime ordering */
 };
 
 #include "region_metadata.h"  /* Region-level type metadata (must come after Region typedef) */

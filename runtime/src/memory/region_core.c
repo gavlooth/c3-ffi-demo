@@ -50,6 +50,9 @@ static inline void region_reset(Region* r) {
     r->escape_repair_count = 0;
     r->chunk_count = 0;
     r->last_arena_end = NULL;
+
+    /* Issue 2 P4.1: Reset lifetime_rank to 0 (required for region pooling) */
+    r->lifetime_rank = 0;
 }
 
 Region* region_create(void) {
@@ -93,6 +96,10 @@ Region* region_create(void) {
     r->escape_repair_count = 0;
     r->chunk_count = 0;
     r->last_arena_end = NULL;
+
+    /* Issue 2 P4.1: Initialize lifetime_rank to 0 (root/global default) */
+    r->lifetime_rank = 0;
+
     // Assign region ID (OPTIMIZATION: T-opt-region-metadata-pointer-masking)
     r->region_id = __atomic_fetch_add(&g_next_region_id, 1, __ATOMIC_SEQ_CST);
 

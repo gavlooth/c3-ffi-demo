@@ -58,6 +58,7 @@ static int run_slow_tests_enabled(void) {
 #include "test_transmigrate_forwarding_table.c"
 #include "test_region_of_obj.c"
 #include "test_region_accounting.c"
+#include "test_region_rank_basic.c"
 
 int main(int argc, char** argv) {
     (void)argc;
@@ -129,6 +130,9 @@ int main(int argc, char** argv) {
 
     /* Issue 2 P3: Region Accounting Tests */
     run_region_accounting_tests();
+
+    /* Issue 2 P4.1: Region Rank Basic Tests */
+    run_region_rank_basic_tests();
 
     TEST_EXIT();
 }
