@@ -794,10 +794,24 @@ Obj* omni_store_repair(Obj* container, Obj** slot, Obj* new_value) {
         return new_value;
     }
 
-    /* Step 5: Same-thread ranks are comparable - check lifetime ordering */
-    /* If dst->lifetime_rank < src->lifetime_rank: illegal older<-younger store */
-    if (dst_region->lifetime_rank < src_region->lifetime_rank) {
-        /* Lifetime violation! Repair using merge or transmigrate */
+    /*
+     * Step 5: Same-thread ranks are comparable - check lifetime ordering.
+     *
+     * IMPORTANT correctness rule (constructive criticism):
+     * A rank is only a *depth* in the outlives tree. If two distinct regions
+     * have the same `lifetime_rank`, they are siblings (or otherwise
+     * incomparable) under rank alone. In that case, the destination does NOT
+     * provably outlive the source, so a store could create a dangling pointer.
+     *
+     * Therefore, we must conservatively repair when:
+     *   dst_rank <= src_rank   (dst is older OR not provably younger)
+     *
+     * The only safe "no-repair" same-thread cases are:
+     * - src == dst
+     * - dst_rank > src_rank (dst is younger and will die first)
+     */
+    if (dst_region->lifetime_rank <= src_region->lifetime_rank) {
+        /* Lifetime violation or incomparability! Repair using merge or transmigrate. */
 
         /* Issue 2 P5: Try merge first for large regions */
         /* If src region is large (above threshold), merge is more efficient */

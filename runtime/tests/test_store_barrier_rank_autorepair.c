@@ -109,14 +109,24 @@ void run_store_barrier_rank_autorepair_tests(void) {
         ASSERT(omni_obj_region(container) == r2);
 
         /* Store should NOT trigger repair (same rank, different regions) */
-        /* Actually, different regions with same rank should still repair
-         * because they're not the same region */
+        /*
+         * Constructive criticism / correctness note:
+         *
+         * Two distinct regions with the same `lifetime_rank` are NOT ordered by
+         * "outlives" based on rank alone. If we allow cross-region stores in
+         * this case, the container may outlive the value (sibling regions),
+         * violating the Region Closure Property.
+         *
+         * Therefore, the barrier must conservatively repair same-rank stores
+         * across different regions.
+         */
         Obj* new_value = mk_cell_region(r1, mk_int_region(r1, 3), mk_int_region(r1, 4));
         box_set(container, new_value);
 
         /* Value should be accessible */
         Obj* result = box_get(container);
         ASSERT_NOT_NULL(result);
+        ASSERT(omni_obj_region(result) == r2);
 
         /* Cleanup */
         region_exit(r1);

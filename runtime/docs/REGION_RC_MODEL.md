@@ -592,13 +592,25 @@ if (dst->lifetime_rank < src->lifetime_rank) {
 }
 ```
 
-**Rule 3: Safe store directions**
+**Rule 3: Same-rank regions are NOT ordered**
 
 ```
-if (dst->lifetime_rank >= src->lifetime_rank) {
-    // dst is YOUNGER or SAME age as src
-    // Safe store direction: younger<-older or same<-same
-    // No repair needed (or optional optimization)
+if (dst->lifetime_rank == src->lifetime_rank && dst != src) {
+    // Two distinct regions at the same outlives depth (siblings/incomparable).
+    // Not provably safe: container may outlive value.
+    // Must conservatively repair.
+}
+```
+
+**Rule 4: Safe store directions**
+
+```
+if (dst == src) {
+    // Same region: safe (no lifetime edge across regions).
+}
+if (dst->lifetime_rank > src->lifetime_rank) {
+    // dst is provably YOUNGER (dies first).
+    // Safe store direction: younger<-older.
 }
 ```
 
@@ -689,12 +701,12 @@ if (!pthread_equal(src_region->owner_thread, dst_region->owner_thread)) {
   (let ((region (region-create))
         (x (pair 1 2)))
     (region-exit region)
-    (dict-set! local-dict "key" x)))  ; Store rank=2 into rank=2 → SAFE
+    (dict-set! local-dict "key" x)))  ; Store within same region → SAFE
 
 ;; omni_store_repair behavior:
 // src_region->lifetime_rank = 2
 // dst_region->lifetime_rank = 2
-// dst >= src: SAFE STORE → NO REPAIR
+// SAFE only if src_region == dst_region (same allocation region).
 ```
 
 **Example 3: Cross-thread store (always repaired)**
