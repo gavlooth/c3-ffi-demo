@@ -1059,7 +1059,7 @@ However, when compiling `dict_set()` in `runtime/src/runtime.c`, the compiler er
 	    - All 366 tests pass: `make -C runtime/tests test`
 	    - ASAN gate: `make -C runtime/tests asan` (see blocking issue note at top)
 
-	- [TODO] Label: I2-p4-outlives-ancestry-metadata (P4.3b)
+	- [DONE (PARTIAL)] (Review Needed) Label: I2-p4-outlives-ancestry-metadata (P4.3b)
 	  Objective: Add an explicit per-thread “outlives tree” relation for regions
 	  (parent pointer / ancestry), and use it in the store barrier so we stop
 	  relying on rank alone as a proxy for ordering.
