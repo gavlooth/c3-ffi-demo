@@ -37,6 +37,24 @@ void omni_codegen_region_create(CodeGenContext* ctx, RegionInfo* region);
  */
 void omni_codegen_region_destroy(CodeGenContext* ctx, RegionInfo* region);
 
+/* ============== Escape Repair Strategy Selection ============== */
+
+/*
+ * Choose escape repair strategy based on analysis or environment.
+ *
+ * Currently controlled by OMNILISP_REPAIR_STRATEGY environment variable:
+ * - "retain": Use RETAIN_REGION strategy
+ * - "transmigrate": Use TRANSMIGRATE strategy (default)
+ *
+ * Args:
+ *   ctx: Code generation context
+ *   var_name: Name of variable that escapes (for future size-based analysis)
+ *
+ * Returns: Selected strategy (TRANSMIGRATE or RETAIN_REGION)
+ */
+EscapeRepairStrategy omni_choose_escape_repair_strategy(CodeGenContext* ctx,
+                                                   const char* var_name);
+
 /* ============== Transmigration Code Generation ============== */
 
 /*

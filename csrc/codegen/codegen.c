@@ -1593,6 +1593,8 @@ static void codegen_lambda(CodeGenContext* ctx, OmniValue* expr) {
     p += sprintf(p, "    struct Region* _local_region = region_create();\n");
     /* Issue 2 P4.2: Assign lifetime_rank based on caller region (outlives depth) */
     p += sprintf(p, "    omni_region_set_lifetime_rank(_local_region, omni_region_get_lifetime_rank(_caller_region) + 1);\n");
+    /* Issue 2 P4.3b: Assign parent linkage (outlives ancestry) */
+    p += sprintf(p, "    omni_region_set_parent(_local_region, _caller_region);\n");
     p += sprintf(p, "    \n");
 
     /* Region-RC: Emit tethering for parameters from outer regions
@@ -1662,10 +1664,9 @@ static void codegen_lambda(CodeGenContext* ctx, OmniValue* expr) {
 	        }
 
 	        /* Issue 1 P2: Emit escape repair (transmigrate or retain based on strategy) */
-	        /* TODO: Read OMNILISP_REPAIR_STRATEGY environment variable to choose between
-	         *       ESCAPE_REPAIR_TRANSMIGRATE and ESCAPE_REPAIR_RETAIN_REGION.
-	         *       For now, default to TRANSMIGRATE (conservative, maintains current behavior). */
-	        omni_codegen_escape_repair(tmp, "_result", "_caller_region", ESCAPE_REPAIR_TRANSMIGRATE);
+	        /* Select strategy based on environment variable or analysis */
+	        EscapeRepairStrategy lambda_strategy = omni_choose_escape_repair_strategy(ctx, "_result");
+	        omni_codegen_escape_repair(tmp, "_result", "_caller_region", lambda_strategy);
 
         /* Get the escape repair code */
         char* repair_code = omni_codegen_get_output(tmp);
@@ -1851,6 +1852,8 @@ static void codegen_define(CodeGenContext* ctx, OmniValue* expr) {
                 omni_codegen_emit(ctx, "struct Region* _local_region = region_create();\n");
                 /* Issue 2 P4.2: Assign lifetime_rank based on caller region (outlives depth) */
                 omni_codegen_emit(ctx, "omni_region_set_lifetime_rank(_local_region, omni_region_get_lifetime_rank(_caller_region) + 1);\n");
+                /* Issue 2 P4.3b: Assign parent linkage (outlives ancestry) */
+                omni_codegen_emit(ctx, "omni_region_set_parent(_local_region, _caller_region);\n");
                 omni_codegen_emit(ctx, "region_tether_start(_caller_region);\n\n");
 
                 /* Body - last element */
@@ -1866,7 +1869,9 @@ static void codegen_define(CodeGenContext* ctx, OmniValue* expr) {
                     codegen_expr(ctx, last_expr);
                     omni_codegen_emit_raw(ctx, ";\n");
                     /* Issue 1 P2: Emit escape repair at return boundary */
-                    omni_codegen_escape_repair(ctx, "_result", "_caller_region", ESCAPE_REPAIR_TRANSMIGRATE);
+                    /* Select strategy based on environment variable or analysis */
+                    EscapeRepairStrategy strategy = omni_choose_escape_repair_strategy(ctx, "_result");
+                    omni_codegen_escape_repair(ctx, "_result", "_caller_region", strategy);
                     omni_codegen_emit(ctx, "region_exit(_local_region);\n");
                     omni_codegen_emit(ctx, "region_destroy_if_dead(_local_region);\n");
                     omni_codegen_emit(ctx, "region_tether_end(_caller_region);\n");
@@ -2049,6 +2054,8 @@ static void codegen_define(CodeGenContext* ctx, OmniValue* expr) {
             omni_codegen_emit(ctx, "struct Region* _local_region = region_create();\n");
             /* Issue 2 P4.2: Assign lifetime_rank based on caller region (outlives depth) */
             omni_codegen_emit(ctx, "omni_region_set_lifetime_rank(_local_region, omni_region_get_lifetime_rank(_caller_region) + 1);\n");
+            /* Issue 2 P4.3b: Assign parent linkage (outlives ancestry) */
+            omni_codegen_emit(ctx, "omni_region_set_parent(_local_region, _caller_region);\n");
             omni_codegen_emit(ctx, "region_tether_start(_caller_region);\n\n");
 
             /* Body */
@@ -2068,7 +2075,9 @@ static void codegen_define(CodeGenContext* ctx, OmniValue* expr) {
                 codegen_expr(ctx, last_expr);
                 omni_codegen_emit_raw(ctx, ";\n");
                 /* Issue 1 P2: Emit escape repair at return boundary */
-                omni_codegen_escape_repair(ctx, "_result", "_caller_region", ESCAPE_REPAIR_TRANSMIGRATE);
+                /* Select strategy based on environment variable or analysis */
+                EscapeRepairStrategy strategy = omni_choose_escape_repair_strategy(ctx, "_result");
+                omni_codegen_escape_repair(ctx, "_result", "_caller_region", strategy);
                 omni_codegen_emit(ctx, "region_exit(_local_region);\n");
                 omni_codegen_emit(ctx, "region_destroy_if_dead(_local_region);\n");
                 omni_codegen_emit(ctx, "region_tether_end(_caller_region);\n");
@@ -2311,6 +2320,8 @@ static void codegen_define(CodeGenContext* ctx, OmniValue* expr) {
         omni_codegen_emit(ctx, "struct Region* _local_region = region_create();\n");
         /* Issue 2 P4.2: Assign lifetime_rank based on caller region (outlives depth) */
         omni_codegen_emit(ctx, "omni_region_set_lifetime_rank(_local_region, omni_region_get_lifetime_rank(_caller_region) + 1);\n");
+        /* Issue 2 P4.3b: Assign parent linkage (outlives ancestry) */
+        omni_codegen_emit(ctx, "omni_region_set_parent(_local_region, _caller_region);\n");
         omni_codegen_emit(ctx, "region_tether_start(_caller_region);\n");
         OmniValue* last = NULL;
         OmniValue* b = rest;
@@ -2321,7 +2332,9 @@ static void codegen_define(CodeGenContext* ctx, OmniValue* expr) {
         if (last) {
             omni_codegen_emit(ctx, "Obj* _res = "); codegen_expr(ctx, last); omni_codegen_emit_raw(ctx, ";\n");
             /* Issue 1 P2: Emit escape repair at return boundary */
-            omni_codegen_escape_repair(ctx, "_res", "_caller_region", ESCAPE_REPAIR_TRANSMIGRATE);
+            /* Select strategy based on environment variable or analysis */
+            EscapeRepairStrategy lambda_strategy = omni_choose_escape_repair_strategy(ctx, "_res");
+            omni_codegen_escape_repair(ctx, "_res", "_caller_region", lambda_strategy);
             omni_codegen_emit(ctx, "region_exit(_local_region); region_destroy_if_dead(_local_region); region_tether_end(_caller_region);\n");
             omni_codegen_emit(ctx, "return _res;  /* Repaired by omni_codegen_escape_repair() */\n");
         } else {

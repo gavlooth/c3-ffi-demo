@@ -1327,6 +1327,44 @@ void omni_region_set_lifetime_rank(struct Region* r, uint64_t rank);
  */
 uint64_t omni_region_get_lifetime_rank(struct Region* r);
 
+/* ========== Issue 2 P4.3b: Region Parent/Ancestry Accessors ========== */
+
+/*
+ * omni_region_set_parent - Set the parent region for a region
+ *
+ * Issue 2 P4.3b: Establishes parent-child relationship
+ * in the single-thread outlives tree.
+ *
+ * @param r: The region to set parent for
+ * @param parent: The parent region (NULL for root/global)
+ *
+ * This is called by generated code after region_create() when
+ * a new region is created within an existing region scope.
+ */
+void omni_region_set_parent(struct Region* r, struct Region* parent);
+
+/*
+ * omni_region_outlives - Check if region 'a' outlives region 'b'
+ *
+ * Issue 2 P4.3b: Use ancestry relation to determine ordering.
+ * A region outlives another if it is an ancestor (or equal).
+ *
+ * Ranks alone are insufficient for this because same-rank regions
+ * may be siblings (incomparable) and cannot prove ordering.
+ *
+ * @param a: Potential outliving region (ancestor candidate)
+ * @param b: Potential outlived region (descendant candidate)
+ * @return: true if a outlives b (a is ancestor of b or a == b)
+ *
+ * Usage in store barrier:
+ *   if (omni_region_outlives(dst, src)) {
+ *       // No repair needed: dst is older/outlives src
+ *   } else {
+ *       // Repair needed: dst is younger or ordering unknown
+ *   }
+ */
+bool omni_region_outlives(struct Region* a, struct Region* b);
+
 /* ========== Issue 2 P4: Mutation Store Barrier ========== */
 
 /*

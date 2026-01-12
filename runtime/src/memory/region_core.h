@@ -69,6 +69,9 @@ struct Region {
 
     /* Issue 2 P4.1: Per-owner-thread outlives rank for store barrier enforcement */
     uint64_t lifetime_rank;           /* Outlives depth (0 = root/global), used for lifetime ordering */
+
+    /* Issue 2 P4.3b: Parent pointer for outlives ancestry tracking */
+    struct Region* parent;            /* Parent region in single-thread outlives tree */
 };
 
 #include "region_metadata.h"  /* Region-level type metadata (must come after Region typedef) */

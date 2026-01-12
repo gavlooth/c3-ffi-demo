@@ -54,6 +54,9 @@ static inline void region_reset(Region* r) {
 
     /* Issue 2 P4.1: Reset lifetime_rank to 0 (required for region pooling) */
     r->lifetime_rank = 0;
+
+    /* Issue 2 P4.3b: Reset parent to NULL (required for region pooling) */
+    r->parent = NULL;
 }
 
 Region* region_create(void) {
@@ -100,6 +103,9 @@ Region* region_create(void) {
 
     /* Issue 2 P4.1: Initialize lifetime_rank to 0 (root/global default) */
     r->lifetime_rank = 0;
+
+    /* Issue 2 P4.3b: Initialize parent to NULL (new regions have no parent initially) */
+    r->parent = NULL;
 
     // Assign region ID (OPTIMIZATION: T-opt-region-metadata-pointer-masking)
     /* Issue 4 P3: Use atomic wrapper for consistent memory ordering */
@@ -230,6 +236,77 @@ void omni_region_set_lifetime_rank(Region* r, uint64_t rank) {
  */
 uint64_t omni_region_get_lifetime_rank(Region* r) {
     return r ? r->lifetime_rank : 0;
+}
+
+/* ========== Issue 2 P4.3b: Region Parent/Ancestry Accessors ========== */
+
+/*
+ * omni_region_set_parent - Set the parent region for a region
+ *
+ * Issue 2 P4.3b: Establishes the parent-child relationship
+ * in the single-thread outlives tree.
+ *
+ * @param r: The region to set parent for
+ * @param parent: The parent region (NULL for root/global)
+ *
+ * This is called by generated code after region_create() when
+ * a new region is created within an existing region scope.
+ */
+void omni_region_set_parent(Region* r, Region* parent) {
+    if (r) {
+        r->parent = parent;
+    }
+}
+
+/*
+ * region_is_ancestor - Check if a region is an ancestor of another
+ *
+ * Issue 2 P4.3b: Helper function to walk up the parent chain.
+ *
+ * @param anc: Potential ancestor region to check
+ * @param r: Descendant region to walk from
+ * @return: true if anc is ancestor of r (or anc == r), false otherwise
+ *
+ * Note: This function does NOT use ranks because same-rank regions
+ * may be siblings (incomparable). We must follow parent links
+ * to establish true ancestry.
+ */
+static inline bool region_is_ancestor(Region* anc, Region* r) {
+    if (!anc || !r) return false;
+    if (anc == r) return true;  // A region outlives itself
+
+    // Walk up from r towards the root via parent links
+    for (Region* cur = r->parent; cur; cur = cur->parent) {
+        if (cur == anc) {
+            return true;  // Found anc in ancestor chain
+        }
+    }
+
+    return false;  // Reached root without finding anc
+}
+
+/*
+ * omni_region_outlives - Check if region 'a' outlives region 'b'
+ *
+ * Issue 2 P4.3b: Use ancestry relation to determine ordering.
+ * A region outlives another if it is an ancestor (or equal).
+ *
+ * Ranks alone are insufficient for this because same-rank regions
+ * are siblings/incomparable and cannot prove ordering.
+ *
+ * @param a: Potential outliving region (ancestor candidate)
+ * @param b: Potential outlived region (descendant candidate)
+ * @return: true if a outlives b (a is ancestor of b or a == b)
+ *
+ * Usage in store barrier:
+ *   if (omni_region_outlives(dst, src)) {
+ *       // No repair needed: dst is older/outlives src
+ *   } else {
+ *       // Repair needed: dst is younger or ordering unknown
+ *   }
+ */
+bool omni_region_outlives(Region* a, Region* b) {
+    return region_is_ancestor(a, b);
 }
 
 /*

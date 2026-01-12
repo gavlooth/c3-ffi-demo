@@ -17,6 +17,14 @@ ASAN_FLAGS = -fsanitize=address -fno-omit-frame-pointer
 TSAN_FLAGS = -fsanitize=thread
 UBSAN_FLAGS = -fsanitize=undefined
 
+# Toolchain note (constructive criticism):
+# Some environments provide `clang` without the matching compiler-rt ASAN
+# runtime installed (clang then tries to link `libclang_rt.asan*.a` from its
+# resource dir and fails). Default ASAN builds to gcc, which typically ships
+# a working libasan runtime. Override if you have a working clang toolchain:
+#   make -C runtime/tests asan ASAN_CC=clang
+ASAN_CC ?= gcc
+
 .PHONY: all clean test fast slow api bench asan tsan ubsan asan-slow tsan-slow ubsan-slow stats test-fwd runtime-lib
 
 # Build runtime library (always consult runtime/Makefile for staleness).
@@ -75,11 +83,11 @@ bench: $(BENCH_BIN)
 
 # AddressSanitizer build
 asan: $(TESTS) runtime-lib
-	$(CC) $(CFLAGS) $(ASAN_FLAGS) -o $(TEST_BIN)_asan $(TESTS) $(LDFLAGS)
+	$(ASAN_CC) $(CFLAGS) $(ASAN_FLAGS) -o $(TEST_BIN)_asan $(TESTS) $(LDFLAGS)
 	./$(TEST_BIN)_asan
 
 asan-slow: $(TESTS) runtime-lib
-	$(CC) $(CFLAGS) $(ASAN_FLAGS) -o $(TEST_BIN)_asan $(TESTS) $(LDFLAGS)
+	$(ASAN_CC) $(CFLAGS) $(ASAN_FLAGS) -o $(TEST_BIN)_asan $(TESTS) $(LDFLAGS)
 	RUNTIME_TEST_LEVEL=slow ./$(TEST_BIN)_asan
 
 # ThreadSanitizer build

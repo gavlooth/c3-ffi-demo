@@ -78,7 +78,7 @@ void omni_codegen_escape_repair(CodeGenContext* ctx,
  *
  * Future enhancement: Use size-based heuristic (small → transmigrate, large → retain)
  */
-static EscapeRepairStrategy choose_escape_repair_strategy(CodeGenContext* ctx,
+EscapeRepairStrategy omni_choose_escape_repair_strategy(CodeGenContext* ctx,
                                                      const char* var_name) {
     (void)ctx;
     (void)var_name;
