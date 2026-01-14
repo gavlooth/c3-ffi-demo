@@ -5,10 +5,16 @@
  * This allows functions that would normally cause stack overflow to
  * execute safely by using an iterative loop with explicit thunks.
  *
+ * ARCHITECTURE NOTE (2026-01-14):
+ * This module now uses the CEK machine from continuation.c for trampolining.
+ * The old "bounce" mechanism using mark field hacks is deprecated.
+ * Instead, thunks are represented as FRAME_APP_DONE frames.
+ *
  * API:
- *   - bounce: Create a thunk for delayed computation
+ *   - bounce: Create a thunk for delayed computation (deprecated)
  *   - trampoline: Execute thunks until final result
  *   - is_bounce: Check if value is a thunk
+ *   - cek_trampoline: New CEK-based trampoline (preferred)
  */
 
 #include <stdlib.h>
@@ -16,6 +22,7 @@
 #include <stdbool.h>
 #include "../include/omni.h"
 #include "internal_types.h"
+#include "memory/continuation.h"
 
 /* ============== Bounce Tag ============== */
 
@@ -108,6 +115,13 @@ Obj* prim_bounce(Obj* func, Obj* arg) {
  * The trampoline repeatedly executes bounce objects until
  * a non-bounce value is returned, which is the final result.
  *
+ * IMPLEMENTATION NOTE:
+ * This function handles both:
+ * 1. Legacy bounce objects (TAG_BOUNCE with mark field hack) - for backwards compat
+ * 2. Closures that return closures (CEK-style trampolining)
+ *
+ * For new code, prefer using cek_trampoline() directly.
+ *
  * Args: initial_value
  * Returns: Final result after executing all thunks
  *
@@ -120,18 +134,33 @@ Obj* prim_trampoline(Obj* initial) {
     int iterations = 0;
     const int MAX_ITERATIONS = 10000000;  /* Prevent infinite loops */
 
-    while (is_bounce(current) && iterations < MAX_ITERATIONS) {
-        Obj* (*func)(Obj*) = get_bounce_func(current);
-        Obj* arg = get_bounce_arg(current);
+    while (iterations < MAX_ITERATIONS) {
+        /* Check for legacy bounce objects */
+        if (is_bounce(current)) {
+            Obj* (*func)(Obj*) = get_bounce_func(current);
+            Obj* arg = get_bounce_arg(current);
 
-        if (!func) {
-            fprintf(stderr, "trampoline: Invalid bounce object (NULL function)\n");
-            return NULL;
+            if (!func) {
+                fprintf(stderr, "trampoline: Invalid bounce object (NULL function)\n");
+                return NULL;
+            }
+
+            /* Execute the thunk */
+            current = func(arg);
+            iterations++;
+            continue;
         }
 
-        /* Execute the thunk */
-        current = func(arg);
-        iterations++;
+        /* Check for closure (CEK-style thunk) */
+        if (current && IS_BOXED(current) && current->tag == TAG_CLOSURE) {
+            /* Use CEK trampoline for closures */
+            current = cek_trampoline(current);
+            /* cek_trampoline handles the full execution, so we're done */
+            return current;
+        }
+
+        /* Not a bounce or closure - we're done */
+        break;
     }
 
     if (iterations >= MAX_ITERATIONS) {

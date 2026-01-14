@@ -63,6 +63,7 @@ static int run_slow_tests_enabled(void) {
 #include "test_channel_send_autorepair.c"
 #include "test_store_barrier_merge.c"
 #include "test_dict_insert_autorepair.c"
+#include "test_effect_primitives.c"
 
 int main(int argc, char** argv) {
     (void)argc;
@@ -149,6 +150,9 @@ int main(int argc, char** argv) {
 
     /* Issue 2 P4.4: Dict Insert Autorepair Tests */
     run_dict_insert_autorepair_tests();
+
+    /* Phase 22: Effect System Primitives Tests */
+    run_effect_primitives_tests();
 
     TEST_EXIT();
 }

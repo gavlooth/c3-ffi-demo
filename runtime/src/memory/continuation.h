@@ -26,6 +26,10 @@
 #define OMNI_OBJ_DECLARED
 typedef struct Obj Obj;
 #endif
+#ifndef OMNI_REGION_TYPEDEF
+#define OMNI_REGION_TYPEDEF 1
+typedef struct Region Region;
+#endif
 typedef struct Frame Frame;
 typedef struct Continuation Continuation;
 typedef struct Fiber Fiber;
@@ -92,6 +96,7 @@ struct Frame {
             Obj* result;        /* Result passed back */
             Obj* handler;       /* Optional effect handler */
             bool cloned;        /* TRUE if this frame was cloned (jmp_buf unsafe) */
+            Region* region;     /* Region owned by this prompt (CTRR integration) */
         } prompt;
 
         /* FRAME_YIELD */
@@ -120,6 +125,7 @@ struct Continuation {
     uint32_t refcount;      /* Reference count */
     bool one_shot;          /* Can only be invoked once? */
     bool invoked;           /* Has been invoked? (for one-shot) */
+    Region* captured_from;  /* Region values were transmigrated from (CTRR) */
 };
 
 /* ========== Fiber (Lightweight Cooperative Task) ========== */
@@ -333,10 +339,13 @@ void frame_dec_ref(Frame* f);
 
 /* ========== API: Continuation Operations ========== */
 
-/* Create a new prompt (delimiter) */
+/* Create a new prompt (delimiter) - creates child region (CTRR) */
 Obj* cont_prompt(uint32_t tag, Obj* body, Obj* env, Obj* handler);
 
-/* Capture continuation up to matching prompt */
+/* Exit a prompt normally with result - exits region (CTRR) */
+Obj* cont_prompt_exit(uint32_t tag, Obj* result);
+
+/* Capture continuation up to matching prompt - transmigrates values (CTRR) */
 Continuation* cont_capture(uint32_t tag);
 
 /* Invoke a continuation with a value */
@@ -350,6 +359,11 @@ bool cont_is_valid(Continuation* k);
 
 /* Release continuation */
 void cont_release(Continuation* k);
+
+/* ========== API: Region Stack (CTRR Integration) ========== */
+
+/* Get current region (prompt's region if inside prompt, else global) */
+Region* cont_current_region(void);
 
 /* ========== API: Scheduler ========== */
 
@@ -550,5 +564,130 @@ void cont_set_env(Obj* env);
 /* Get/set current continuation */
 Frame* cont_get_current(void);
 void cont_set_current(Frame* f);
+
+/* ========== API: CEK Machine (Trampoline Unification) ========== */
+
+/*
+ * CEK Step Result
+ *
+ * The CEK stepper returns a result indicating what happened:
+ * - CEK_DONE: Evaluation complete, result is the final value
+ * - CEK_CONTINUE: More work needed, call cek_step again
+ * - CEK_YIELD: Control yielded (to scheduler, prompt, etc)
+ * - CEK_ERROR: Evaluation failed with an error
+ */
+typedef enum {
+    CEK_DONE,       /* Evaluation complete */
+    CEK_CONTINUE,   /* More steps needed */
+    CEK_YIELD,      /* Yielded to scheduler/prompt */
+    CEK_ERROR,      /* Error occurred */
+} CEKResult;
+
+/*
+ * CEK State
+ *
+ * Holds the current state of a CEK machine evaluation.
+ * This unifies:
+ * - Fiber state (expr, env, cont, value)
+ * - Trampoline state (bounce function + argument)
+ * - Continuation capture/invoke
+ */
+typedef struct CEKState {
+    Obj* expr;      /* C: Current expression/control */
+    Obj* env;       /* E: Current environment */
+    Frame* cont;    /* K: Current continuation */
+    Obj* value;     /* Last evaluated value */
+    CEKResult status;
+    const char* error_msg;
+} CEKState;
+
+/*
+ * cek_state_init - Initialize a CEK state for evaluation
+ *
+ * @expr: The expression to evaluate (or NULL if resuming with value)
+ * @env: The environment
+ * @cont: The continuation frame (NULL for top-level)
+ * @value: Initial value (NULL for expr evaluation, non-NULL for applying to cont)
+ */
+void cek_state_init(CEKState* state, Obj* expr, Obj* env, Frame* cont, Obj* value);
+
+/*
+ * cek_step - Take one step of CEK evaluation
+ *
+ * This is the core of the CEK machine. It processes:
+ * 1. If we have a value and a continuation frame, apply the value to the frame
+ * 2. If we have an expression, evaluate it one step
+ *
+ * Returns the result status (DONE, CONTINUE, YIELD, ERROR)
+ *
+ * @state: The CEK state (modified in place)
+ * Returns: CEKResult indicating what happened
+ */
+CEKResult cek_step(CEKState* state);
+
+/*
+ * cek_run - Run CEK machine until completion
+ *
+ * Repeatedly calls cek_step until DONE or ERROR.
+ * This is the "trampoline" that replaces the old bounce-based system.
+ *
+ * @expr: Expression to evaluate
+ * @env: Environment
+ * Returns: Final result (or NULL on error)
+ */
+Obj* cek_run(Obj* expr, Obj* env);
+
+/*
+ * cek_apply_closure - Apply a closure using CEK frames
+ *
+ * Instead of direct function call, this sets up frames for:
+ * 1. Argument evaluation (FRAME_APP_ARGS)
+ * 2. Function application (FRAME_APP_DONE)
+ *
+ * @state: CEK state to modify
+ * @closure: The closure to apply
+ * @args: List of argument expressions
+ */
+void cek_apply_closure(CEKState* state, Obj* closure, Obj* args);
+
+/*
+ * cek_push_frame - Push a new frame onto the continuation
+ *
+ * @state: CEK state
+ * @tag: Frame type tag
+ * Returns: The new frame (caller should fill in frame-specific data)
+ */
+Frame* cek_push_frame(CEKState* state, FrameTag tag);
+
+/*
+ * cek_pop_frame - Pop the current frame and return value
+ *
+ * @state: CEK state
+ * @value: Value to return to the previous frame
+ */
+void cek_pop_frame(CEKState* state, Obj* value);
+
+/*
+ * cek_make_thunk - Create a thunk (delayed computation) as a CEK frame
+ *
+ * This replaces the old "bounce" objects. Instead of storing a function
+ * pointer in a mark field hack, we create proper FRAME_APP_DONE frames.
+ *
+ * @closure: The closure to call
+ * @arg: The argument
+ * Returns: CEK state ready to run
+ */
+CEKState* cek_make_thunk(Obj* closure, Obj* arg);
+
+/*
+ * cek_trampoline - Run a thunk to completion (legacy compatibility)
+ *
+ * This provides backwards compatibility with the old trampoline API.
+ * Internally uses cek_run.
+ *
+ * @thunk: Either a closure (run it) or a CEKState (continue it)
+ * Returns: Final result
+ */
+Obj* cek_trampoline(Obj* thunk);
 
 #endif /* OMNI_CONTINUATION_H */

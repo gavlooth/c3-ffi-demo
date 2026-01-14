@@ -15,10 +15,12 @@
 
 #include "memory/region_core.h"
 #include "memory/region_value.h"
+#include "memory/continuation.h"
 #include "internal_types.h"
 #include "util/hashmap.h"
 #include "smr/qsbr.h"
 #include "omni_atomic.h"
+#include "effect.h"
 
 /* RC-G Runtime: Standard RC is now Region-RC (Coarse-grained) */
 /* For compatibility with tests that check the 'mark' field, we update it. */
@@ -2285,9 +2287,259 @@ Obj* channel_recv(Obj* ch_obj) {
 void channel_close(Obj* ch_obj) {
     if (!ch_obj || !IS_BOXED(ch_obj) || ch_obj->tag != TAG_CHANNEL) return;
     Channel* ch = (Channel*)ch_obj->ptr;
-    
+
     __atomic_store_n(&ch->closed, true, __ATOMIC_RELEASE);
-    
+
     pthread_cond_broadcast(&ch->send_cond);
     pthread_cond_broadcast(&ch->recv_cond);
+}
+
+/* ============================================================
+ * Effect System Primitives (Phase 22: Algebraic Effects)
+ * ============================================================
+ *
+ * These primitives expose the effect system (effect.h) to OmniLisp code.
+ * They bridge the Lisp calling convention (Obj* -> Obj*) to the C effect API.
+ */
+
+/*
+ * prim_effect_init: Initialize the effect system
+ * Must be called before using any effect operations.
+ */
+Obj* prim_effect_init(void) {
+    effect_init();
+    return mk_nothing();
+}
+
+/*
+ * prim_perform: Perform an effect by name
+ * Args: effect_name (symbol/string), payload (any)
+ * Returns: The value passed to resume(), or handler's result
+ *
+ * Usage: (perform 'Fail "error message")
+ */
+Obj* prim_perform(Obj* effect_name, Obj* payload) {
+    if (!effect_name) {
+        fprintf(stderr, "perform: effect name cannot be nil\n");
+        return NULL;
+    }
+
+    const char* name = NULL;
+    if (IS_BOXED(effect_name)) {
+        if (effect_name->tag == TAG_SYM) {
+            name = (const char*)effect_name->ptr;
+        } else if (effect_name->tag == TAG_STRING) {
+            name = (const char*)effect_name->ptr;
+        }
+    }
+
+    if (!name) {
+        fprintf(stderr, "perform: effect name must be a symbol or string\n");
+        return NULL;
+    }
+
+    return effect_perform_named(name, payload);
+}
+
+/*
+ * prim_raise: Raise a Fail effect (non-resumable error)
+ * Args: message (string)
+ * Returns: Never returns normally
+ *
+ * Usage: (raise "Something went wrong")
+ */
+Obj* prim_raise(Obj* message) {
+    if (!EFFECT_FAIL) {
+        effect_init();
+    }
+    return effect_perform(EFFECT_FAIL, message);
+}
+
+/*
+ * prim_resume: Resume a suspended computation with a value
+ * Args: resumption (Resumption object), value (any)
+ * Returns: The result of the resumed computation
+ *
+ * Usage: (resume k 42)
+ */
+Obj* prim_resume(Obj* resumption_obj, Obj* value) {
+    if (!resumption_obj || !IS_BOXED(resumption_obj)) {
+        fprintf(stderr, "resume: invalid resumption object\n");
+        return NULL;
+    }
+
+    if (resumption_obj->tag != TAG_RESUMPTION) {
+        fprintf(stderr, "resume: expected resumption, got tag %d\n", resumption_obj->tag);
+        return NULL;
+    }
+
+    Resumption* r = (Resumption*)resumption_obj->ptr;
+    return resumption_invoke(r, value);
+}
+
+/*
+ * prim_effect_type_register: Register a new effect type
+ * Args: name (symbol/string)
+ * Returns: Effect type object (for use with prim_perform_typed)
+ *
+ * Usage: (define MyEffect (effect-type-register 'MyEffect))
+ */
+Obj* prim_effect_type_register(Obj* name) {
+    const char* name_str = NULL;
+    if (IS_BOXED(name)) {
+        if (name->tag == TAG_SYM || name->tag == TAG_STRING) {
+            name_str = (const char*)name->ptr;
+        }
+    }
+
+    if (!name_str) {
+        fprintf(stderr, "effect-type-register: name must be a symbol or string\n");
+        return NULL;
+    }
+
+    EffectType* type = effect_type_register(name_str, NULL, NULL);
+
+    /* Wrap the effect type in an Obj */
+    _ensure_global_region();
+    Obj* result = region_alloc(_global_region, sizeof(Obj));
+    if (!result) return NULL;
+    result->tag = TAG_EFFECT_TYPE;
+    result->ptr = type;
+    result->mark = 1;
+    return result;
+}
+
+/*
+ * prim_perform_typed: Perform an effect using a typed EffectType
+ * Args: effect_type (EffectType obj), payload (any)
+ * Returns: The value passed to resume(), or handler's result
+ */
+Obj* prim_perform_typed(Obj* effect_type_obj, Obj* payload) {
+    if (!effect_type_obj || !IS_BOXED(effect_type_obj) ||
+        effect_type_obj->tag != TAG_EFFECT_TYPE) {
+        fprintf(stderr, "perform-typed: expected effect type object\n");
+        return NULL;
+    }
+
+    EffectType* type = (EffectType*)effect_type_obj->ptr;
+    return effect_perform(type, payload);
+}
+
+/*
+ * mk_resumption_obj: Create an Obj wrapper for a Resumption
+ * Used internally by effect_perform when capturing continuations.
+ */
+Obj* mk_resumption_obj(Resumption* r) {
+    if (!r) return NULL;
+
+    _ensure_global_region();
+    Obj* obj = region_alloc(_global_region, sizeof(Obj));
+    if (!obj) return NULL;
+
+    obj->tag = TAG_RESUMPTION;
+    obj->ptr = r;
+    obj->mark = 1;
+
+    /* The Obj now owns the resumption reference */
+    resumption_inc_ref(r);
+
+    return obj;
+}
+
+/*
+ * prim_handler_push: Push a handler onto the stack
+ * Args: clauses (list of (effect-name handler-fn) pairs)
+ * Returns: Handler object
+ *
+ * Note: This is a low-level primitive. Prefer using the (handle ...) form.
+ */
+Obj* prim_handler_push(Obj* clauses, Obj* return_clause, Obj* env) {
+    HandlerClause* c_clauses = NULL;
+
+    /* Parse clauses: each is (effect-name handler-fn) */
+    Obj* iter = clauses;
+    while (iter && IS_BOXED(iter) && iter->tag == TAG_PAIR) {
+        Obj* clause = obj_car(iter);
+        if (clause && IS_BOXED(clause) && clause->tag == TAG_PAIR) {
+            Obj* effect_name = obj_car(clause);
+            Obj* handler_fn = obj_car(obj_cdr(clause));
+
+            const char* name_str = NULL;
+            if (IS_BOXED(effect_name)) {
+                if (effect_name->tag == TAG_SYM || effect_name->tag == TAG_STRING) {
+                    name_str = (const char*)effect_name->ptr;
+                }
+            }
+
+            if (name_str) {
+                EffectType* type = effect_type_find(name_str);
+                if (type) {
+                    c_clauses = handler_clause_add(c_clauses, type, handler_fn);
+                }
+            }
+        }
+        iter = obj_cdr(iter);
+    }
+
+    Handler* h = handler_push(c_clauses, return_clause, env);
+
+    /* Wrap handler in Obj */
+    _ensure_global_region();
+    Obj* result = region_alloc(_global_region, sizeof(Obj));
+    if (!result) return NULL;
+    result->tag = TAG_HANDLER;
+    result->ptr = h;
+    result->mark = 1;
+    return result;
+}
+
+/*
+ * prim_handler_pop: Pop the current handler from the stack
+ * Returns: nothing
+ */
+Obj* prim_handler_pop(void) {
+    handler_pop();
+    return mk_nothing();
+}
+
+/*
+ * prim_yield: Yield a value (generator effect)
+ * Args: value (any)
+ * Returns: The value passed to resume (next iteration input)
+ *
+ * Usage: (yield 42)
+ */
+Obj* prim_yield(Obj* value) {
+    if (!EFFECT_YIELD) {
+        effect_init();
+    }
+    return effect_perform(EFFECT_YIELD, value);
+}
+
+/*
+ * prim_ask: Ask for a value (reader effect)
+ * Args: prompt (optional, defaults to nil)
+ * Returns: The value provided by the handler
+ *
+ * Usage: (ask) or (ask "username")
+ */
+Obj* prim_ask(Obj* prompt) {
+    if (!EFFECT_ASK) {
+        effect_init();
+    }
+    return effect_perform(EFFECT_ASK, prompt);
+}
+
+/*
+ * prim_emit: Emit a value (writer effect)
+ * Args: value (any)
+ * Returns: nothing (handler may collect values)
+ *
+ * Usage: (emit "log message")
+ */
+Obj* prim_emit(Obj* value) {
+    if (!EFFECT_EMIT) {
+        effect_init();
+    }
+    return effect_perform(EFFECT_EMIT, value);
 }

@@ -177,7 +177,11 @@ typedef enum {
     TAG_NAMED_TUPLE,
     TAG_GENERIC,
     TAG_KIND,
-    TAG_NOTHING
+    TAG_NOTHING,
+    /* Effect system tags (Phase 22: Algebraic Effects) */
+    TAG_EFFECT_TYPE,
+    TAG_RESUMPTION,
+    TAG_HANDLER
 } ObjTag;
 
 #define TAG_USER_BASE 1000

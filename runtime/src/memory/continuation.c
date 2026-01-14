@@ -11,6 +11,8 @@
  */
 
 #include "continuation.h"
+#include "region_core.h"
+#include "transmigrate.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -19,6 +21,43 @@
 extern void inc_ref(Obj* x);
 extern void dec_ref(Obj* x);
 extern Obj* call_closure(Obj* clos, Obj** args, int arg_count);
+
+/* ========== Region Stack for Prompt-Region Integration ========== */
+/*
+ * CTRR Integration: Each prompt creates a child region.
+ * Allocations during the delimited computation should go to this region.
+ * When the prompt exits, the region is exited.
+ * When a continuation is captured, values are transmigrated out.
+ */
+
+#define REGION_STACK_MAX 64
+static _Thread_local Region* tl_region_stack[REGION_STACK_MAX];
+static _Thread_local int tl_region_stack_top = 0;
+
+/* Get current region (top of stack, or global if empty) */
+Region* cont_current_region(void) {
+    if (tl_region_stack_top > 0) {
+        return tl_region_stack[tl_region_stack_top - 1];
+    }
+    return region_get_or_create();  /* Fall back to global region */
+}
+
+/* Push region onto stack */
+static void region_stack_push(Region* r) {
+    if (tl_region_stack_top < REGION_STACK_MAX) {
+        tl_region_stack[tl_region_stack_top++] = r;
+    } else {
+        fprintf(stderr, "Warning: Region stack overflow\n");
+    }
+}
+
+/* Pop region from stack */
+static Region* region_stack_pop(void) {
+    if (tl_region_stack_top > 0) {
+        return tl_region_stack[--tl_region_stack_top];
+    }
+    return NULL;
+}
 
 /* ========== Thread-Local State ========== */
 
@@ -98,6 +137,8 @@ void frame_free(Frame* f) {
         case FRAME_PROMPT:
             if (f->prompt.result) dec_ref(f->prompt.result);
             if (f->prompt.handler) dec_ref(f->prompt.handler);
+            /* Note: region is NOT freed here - it's managed by prompt lifecycle */
+            /* When frame is freed due to prompt exit, region is already exited */
             break;
 
         default:
@@ -155,6 +196,8 @@ Frame* frame_clone(Frame* f) {
             if (clone->prompt.result) inc_ref(clone->prompt.result);
             if (clone->prompt.handler) inc_ref(clone->prompt.handler);
             clone->prompt.cloned = true;
+            /* CTRR: Cloned prompts do NOT own the region - region belongs to original */
+            clone->prompt.region = NULL;
             break;
 
         default:
@@ -188,6 +231,75 @@ static Continuation* continuation_alloc(void) {
     return k;
 }
 
+/*
+ * Helper: Transmigrate an Obj* from src_region to dest_region.
+ * Returns the new Obj* in dest_region (or original if regions match or NULL).
+ */
+static Obj* transmigrate_obj(Obj* obj, Region* src_region, Region* dest_region) {
+    if (!obj || !src_region || !dest_region) return obj;
+    if (src_region == dest_region) return obj;
+    return (Obj*)transmigrate(obj, src_region, dest_region);
+}
+
+/*
+ * Helper: Transmigrate all Obj* in a frame from src to dest region.
+ * This ensures captured continuations don't hold references into dead regions.
+ */
+static void frame_transmigrate_contents(Frame* f, Region* src_region, Region* dest_region) {
+    if (!f || !src_region || !dest_region || src_region == dest_region) return;
+
+    /* Transmigrate environment */
+    if (f->env) {
+        f->env = transmigrate_obj(f->env, src_region, dest_region);
+    }
+
+    /* Transmigrate frame-specific contents */
+    switch (f->tag) {
+        case FRAME_APP_FN:
+        case FRAME_APP_ARGS:
+        case FRAME_APP_DONE:
+            if (f->app.fn)
+                f->app.fn = transmigrate_obj(f->app.fn, src_region, dest_region);
+            if (f->app.args_done)
+                f->app.args_done = transmigrate_obj(f->app.args_done, src_region, dest_region);
+            if (f->app.args_todo)
+                f->app.args_todo = transmigrate_obj(f->app.args_todo, src_region, dest_region);
+            break;
+
+        case FRAME_IF_TEST:
+            if (f->if_test.then_branch)
+                f->if_test.then_branch = transmigrate_obj(f->if_test.then_branch, src_region, dest_region);
+            if (f->if_test.else_branch)
+                f->if_test.else_branch = transmigrate_obj(f->if_test.else_branch, src_region, dest_region);
+            break;
+
+        case FRAME_LET_BIND:
+        case FRAME_LET_BODY:
+            if (f->let.var)
+                f->let.var = transmigrate_obj(f->let.var, src_region, dest_region);
+            if (f->let.body)
+                f->let.body = transmigrate_obj(f->let.body, src_region, dest_region);
+            if (f->let.bindings_todo)
+                f->let.bindings_todo = transmigrate_obj(f->let.bindings_todo, src_region, dest_region);
+            break;
+
+        case FRAME_SEQ:
+            if (f->seq.remaining)
+                f->seq.remaining = transmigrate_obj(f->seq.remaining, src_region, dest_region);
+            break;
+
+        case FRAME_PROMPT:
+            if (f->prompt.result)
+                f->prompt.result = transmigrate_obj(f->prompt.result, src_region, dest_region);
+            if (f->prompt.handler)
+                f->prompt.handler = transmigrate_obj(f->prompt.handler, src_region, dest_region);
+            break;
+
+        default:
+            break;
+    }
+}
+
 Continuation* cont_capture(uint32_t tag) {
     Continuation* k = continuation_alloc();
     if (!k) return NULL;
@@ -195,11 +307,14 @@ Continuation* cont_capture(uint32_t tag) {
     k->prompt_tag = tag;
     k->one_shot = false;
     k->invoked = false;
+    k->captured_from = NULL;
 
     /* Walk up frame chain, cloning frames until we hit matching prompt */
     Frame* captured_head = NULL;
     Frame* captured_tail = NULL;
     Frame* current = tl_current_frame;
+    Region* prompt_region = NULL;
+    Region* parent_region = NULL;
 
     while (current) {
         if (current->tag == FRAME_PROMPT &&
@@ -207,6 +322,10 @@ Continuation* cont_capture(uint32_t tag) {
             /* Found the delimiter */
             k->prompt_env = current->env;
             if (k->prompt_env) inc_ref(k->prompt_env);
+
+            /* CTRR: Get the prompt's region for transmigration */
+            prompt_region = current->prompt.region;
+            parent_region = prompt_region ? prompt_region->parent : NULL;
             break;
         }
 
@@ -236,6 +355,24 @@ Continuation* cont_capture(uint32_t tag) {
         frame_dec_ref(captured_head);
         free(k);
         return NULL;
+    }
+
+    /*
+     * CTRR Integration: Transmigrate captured frame contents.
+     * Objects allocated in the prompt's region need to move to the parent region
+     * so they survive after the prompt exits.
+     */
+    if (prompt_region && parent_region) {
+        k->captured_from = prompt_region;
+        Frame* f = captured_head;
+        while (f) {
+            frame_transmigrate_contents(f, prompt_region, parent_region);
+            f = f->prev;
+        }
+        /* Also transmigrate the prompt environment */
+        if (k->prompt_env) {
+            k->prompt_env = transmigrate_obj(k->prompt_env, prompt_region, parent_region);
+        }
     }
 
     k->frames = captured_head;
@@ -340,13 +477,40 @@ Obj* cont_prompt(uint32_t tag, Obj* body, Obj* env, Obj* handler) {
     f->prev = tl_current_frame;
     if (tl_current_frame) frame_inc_ref(tl_current_frame);
 
+    /*
+     * CTRR Integration: Create child region for this prompt.
+     * All allocations during the delimited computation will go to this region.
+     * When the prompt exits, the region is exited (deallocating prompt-local data).
+     * When a continuation is captured, values are transmigrated out.
+     */
+    Region* parent_region = cont_current_region();
+    Region* prompt_region = region_create();
+    if (prompt_region) {
+        /* Set up parent-child relationship for outlives tracking */
+        prompt_region->parent = parent_region;
+        prompt_region->lifetime_rank = parent_region ? parent_region->lifetime_rank + 1 : 1;
+        f->prompt.region = prompt_region;
+        region_stack_push(prompt_region);
+    } else {
+        f->prompt.region = NULL;  /* Fallback: no region isolation */
+    }
+
     tl_current_frame = f;
 
     /* Set up escape point */
     if (setjmp(f->prompt.escape) != 0) {
-        /* Returned via control */
+        /* Returned via control (longjmp from cont_capture or abort) */
         Obj* result = f->prompt.result;
         f->prompt.result = NULL;
+
+        /* CTRR: Pop and exit the prompt's region */
+        if (f->prompt.region) {
+            Region* popped = region_stack_pop();
+            if (popped == f->prompt.region) {
+                region_exit(f->prompt.region);
+            }
+            f->prompt.region = NULL;
+        }
 
         /* Pop prompt frame */
         Frame* old = tl_current_frame;
@@ -363,6 +527,68 @@ Obj* cont_prompt(uint32_t tag, Obj* body, Obj* env, Obj* handler) {
 
 uint32_t prompt_tag_generate(void) {
     return tl_next_prompt_tag++;
+}
+
+/*
+ * cont_prompt_exit - Exit a prompt normally with a result.
+ *
+ * CTRR Integration: This function:
+ * 1. Finds the matching prompt frame
+ * 2. Transmigrates the result to the parent region
+ * 3. Pops and exits the prompt's region
+ * 4. Removes the prompt frame from the stack
+ *
+ * Call this when the body of a prompt completes normally (no capture).
+ */
+Obj* cont_prompt_exit(uint32_t tag, Obj* result) {
+    /* Find matching prompt frame */
+    Frame* prompt_frame = tl_current_frame;
+    Frame* prev_of_prompt = NULL;
+
+    while (prompt_frame) {
+        if (prompt_frame->tag == FRAME_PROMPT &&
+            prompt_frame->prompt.tag == tag) {
+            break;
+        }
+        prev_of_prompt = prompt_frame;
+        prompt_frame = prompt_frame->prev;
+    }
+
+    if (!prompt_frame) {
+        /* No matching prompt - return result as-is */
+        return result;
+    }
+
+    /* CTRR: Transmigrate result to parent region before exiting prompt's region */
+    Region* prompt_region = prompt_frame->prompt.region;
+    Region* parent_region = prompt_region ? prompt_region->parent : NULL;
+
+    if (prompt_region && parent_region && result) {
+        result = transmigrate_obj(result, prompt_region, parent_region);
+    }
+
+    /* CTRR: Pop and exit the prompt's region */
+    if (prompt_region) {
+        Region* popped = region_stack_pop();
+        if (popped == prompt_region) {
+            region_exit(prompt_region);
+        }
+        prompt_frame->prompt.region = NULL;
+    }
+
+    /* Remove prompt frame from stack */
+    if (prev_of_prompt) {
+        /* Prompt is not at top - unlink it */
+        prev_of_prompt->prev = prompt_frame->prev;
+        if (prompt_frame->prev) frame_inc_ref(prompt_frame->prev);
+    } else {
+        /* Prompt is at top */
+        tl_current_frame = prompt_frame->prev;
+        if (tl_current_frame) frame_inc_ref(tl_current_frame);
+    }
+    frame_dec_ref(prompt_frame);
+
+    return result;
 }
 
 /* ========== Scheduler ========== */
@@ -1621,4 +1847,433 @@ Fiber* fiber_pool_spawn(Obj* thunk) {
     pthread_mutex_unlock(&g_pool->work_mutex);
 
     return f;
+}
+
+/* ========== CEK Machine Implementation ========== */
+/*
+ * This section implements the CEK (Control, Environment, Continuation) machine
+ * that unifies trampoline-style evaluation with continuation-based control.
+ *
+ * The key insight is that "bounce" objects are just FRAME_APP_DONE frames
+ * waiting to apply a function. By using CEK frames consistently, we get:
+ * - Stack-safe recursion (trampolined)
+ * - First-class continuations (capturable)
+ * - Effects (prompt-based)
+ * - All unified in one mechanism
+ */
+
+/* Thread-local CEK state pool for allocation efficiency */
+#define CEK_STATE_POOL_SIZE 32
+static _Thread_local CEKState tl_cek_pool[CEK_STATE_POOL_SIZE];
+static _Thread_local int tl_cek_pool_used = 0;
+
+static CEKState* cek_state_alloc(void) {
+    if (tl_cek_pool_used < CEK_STATE_POOL_SIZE) {
+        return &tl_cek_pool[tl_cek_pool_used++];
+    }
+    return malloc(sizeof(CEKState));
+}
+
+void cek_state_init(CEKState* state, Obj* expr, Obj* env, Frame* cont, Obj* value) {
+    if (!state) return;
+    state->expr = expr;
+    state->env = env;
+    state->cont = cont;
+    state->value = value;
+    state->status = CEK_CONTINUE;
+    state->error_msg = NULL;
+}
+
+Frame* cek_push_frame(CEKState* state, FrameTag tag) {
+    Frame* f = frame_alloc(tag);
+    if (!f) {
+        state->status = CEK_ERROR;
+        state->error_msg = "Failed to allocate frame";
+        return NULL;
+    }
+
+    f->env = state->env;
+    if (state->env) inc_ref(state->env);
+    f->prev = state->cont;
+    if (state->cont) frame_inc_ref(state->cont);
+
+    state->cont = f;
+    return f;
+}
+
+void cek_pop_frame(CEKState* state, Obj* value) {
+    if (!state->cont) {
+        /* No more frames - evaluation complete */
+        state->value = value;
+        state->status = CEK_DONE;
+        return;
+    }
+
+    Frame* f = state->cont;
+    state->cont = f->prev;
+    if (state->cont) frame_inc_ref(state->cont);
+    state->env = f->env;
+    state->value = value;
+
+    frame_dec_ref(f);
+}
+
+/*
+ * cek_step_apply_frame - Apply a value to a continuation frame
+ *
+ * This is the "return" direction of CEK: we have a value and need to
+ * pass it to the current frame to continue evaluation.
+ */
+static CEKResult cek_step_apply_frame(CEKState* state) {
+    if (!state->cont) {
+        /* No continuation - we're done */
+        state->status = CEK_DONE;
+        return CEK_DONE;
+    }
+
+    Frame* f = state->cont;
+    Obj* val = state->value;
+
+    switch (f->tag) {
+        case FRAME_APP_FN:
+            /* We just evaluated the function position */
+            /* Store function, move to evaluating arguments */
+            f->tag = FRAME_APP_ARGS;
+            f->app.fn = val;
+            if (val) inc_ref(val);
+
+            /* Start evaluating first argument (if any) */
+            if (f->app.args_todo) {
+                /* args_todo is a list of expressions */
+                Obj* first_arg = f->app.args_todo;
+                if (first_arg && first_arg->a) {
+                    state->expr = first_arg->a;
+                    f->app.args_todo = first_arg->b;
+                    return CEK_CONTINUE;
+                }
+            }
+            /* No arguments - fall through to apply */
+            f->tag = FRAME_APP_DONE;
+            /* Fall through */
+
+        case FRAME_APP_ARGS:
+            /* We just evaluated an argument */
+            /* Add to args_done (reversed), check for more */
+            {
+                /* Prepend val to args_done */
+                Obj* new_done = mk_pair(val, f->app.args_done);
+                if (f->app.args_done) dec_ref(f->app.args_done);
+                f->app.args_done = new_done;
+
+                if (f->app.args_todo && f->app.args_todo->a) {
+                    /* More arguments to evaluate */
+                    state->expr = f->app.args_todo->a;
+                    f->app.args_todo = f->app.args_todo->b;
+                    return CEK_CONTINUE;
+                }
+                /* All arguments evaluated - apply */
+                f->tag = FRAME_APP_DONE;
+            }
+            /* Fall through */
+
+        case FRAME_APP_DONE:
+            /* Ready to apply function to arguments */
+            {
+                Obj* fn = f->app.fn;
+                Obj* args = f->app.args_done;
+
+                /* Count and reverse arguments */
+                int argc = 0;
+                Obj* p = args;
+                while (p) {
+                    argc++;
+                    p = p->b;
+                }
+
+                Obj** argv = NULL;
+                if (argc > 0) {
+                    argv = alloca(sizeof(Obj*) * argc);
+                    p = args;
+                    for (int i = argc - 1; i >= 0 && p; i--) {
+                        argv[i] = p->a;
+                        p = p->b;
+                    }
+                }
+
+                /* Pop the frame before calling */
+                Frame* prev = f->prev;
+                if (prev) frame_inc_ref(prev);
+                Obj* saved_env = f->env;
+                state->cont = prev;
+                state->env = saved_env;
+                frame_dec_ref(f);
+
+                /* Call the function */
+                Obj* result = call_closure(fn, argv, argc);
+                state->value = result;
+
+                /* Check if result is a thunk (for trampolining) */
+                /* A thunk would be represented as a special object */
+                /* For now, just return the result to the continuation */
+                return state->cont ? CEK_CONTINUE : CEK_DONE;
+            }
+
+        case FRAME_IF_TEST:
+            /* We just evaluated the test expression */
+            {
+                /* Pick branch based on truthiness */
+                Obj* branch;
+                if (val && (val != OMNI_FALSE) && (val != NULL)) {
+                    branch = f->if_test.then_branch;
+                } else {
+                    branch = f->if_test.else_branch;
+                }
+
+                /* Pop frame and evaluate the branch */
+                Frame* prev = f->prev;
+                if (prev) frame_inc_ref(prev);
+                state->cont = prev;
+                state->env = f->env;
+                state->expr = branch;
+                state->value = NULL;
+                frame_dec_ref(f);
+                return CEK_CONTINUE;
+            }
+
+        case FRAME_LET_BIND:
+            /* We just evaluated a binding value */
+            {
+                /* Extend environment with new binding */
+                /* var contains the variable symbol */
+                Obj* var = f->let.var;
+                Obj* new_env = mk_pair(mk_pair(var, val), state->env);
+                state->env = new_env;
+
+                /* Check for more bindings */
+                if (f->let.bindings_todo && f->let.bindings_todo->a) {
+                    /* More bindings - update var and evaluate next */
+                    Obj* next_binding = f->let.bindings_todo->a;
+                    f->let.var = next_binding->a;  /* variable */
+                    state->expr = next_binding->b ? next_binding->b->a : NULL;  /* expression */
+                    f->let.bindings_todo = f->let.bindings_todo->b;
+                    f->env = new_env;
+                    return CEK_CONTINUE;
+                }
+
+                /* All bindings done - evaluate body */
+                f->tag = FRAME_LET_BODY;
+                state->expr = f->let.body;
+                state->value = NULL;
+                f->env = new_env;
+                return CEK_CONTINUE;
+            }
+
+        case FRAME_LET_BODY:
+            /* We just evaluated the let body - return the value */
+            cek_pop_frame(state, val);
+            return state->status;
+
+        case FRAME_SEQ:
+            /* We just evaluated a sequence expression */
+            {
+                if (f->seq.remaining && f->seq.remaining->a) {
+                    /* More expressions to evaluate */
+                    state->expr = f->seq.remaining->a;
+                    f->seq.remaining = f->seq.remaining->b;
+                    return CEK_CONTINUE;
+                }
+                /* Sequence complete - return last value */
+                cek_pop_frame(state, val);
+                return state->status;
+            }
+
+        case FRAME_PROMPT:
+            /* Normal completion of prompt - exit with value */
+            {
+                /* CTRR: Handle region exit */
+                if (f->prompt.region) {
+                    Region* parent = f->prompt.region->parent;
+                    if (parent && val) {
+                        val = transmigrate_obj(val, f->prompt.region, parent);
+                    }
+                    Region* popped = region_stack_pop();
+                    if (popped == f->prompt.region) {
+                        region_exit(f->prompt.region);
+                    }
+                    f->prompt.region = NULL;
+                }
+
+                cek_pop_frame(state, val);
+                return state->status;
+            }
+
+        case FRAME_YIELD:
+            /* Generator yield - needs special handling */
+            state->status = CEK_YIELD;
+            state->value = val;
+            return CEK_YIELD;
+
+        case FRAME_AWAIT:
+            /* Promise await - needs scheduler integration */
+            state->status = CEK_YIELD;
+            state->value = val;
+            return CEK_YIELD;
+
+        case FRAME_HANDLER:
+            /* Effect handler return */
+            cek_pop_frame(state, val);
+            return state->status;
+    }
+
+    /* Unknown frame type */
+    state->status = CEK_ERROR;
+    state->error_msg = "Unknown frame type in CEK step";
+    return CEK_ERROR;
+}
+
+/*
+ * cek_step - Take one step of CEK evaluation
+ *
+ * If we have a value (and no expr), apply value to continuation.
+ * If we have an expr, evaluate it one step.
+ */
+CEKResult cek_step(CEKState* state) {
+    if (!state) return CEK_ERROR;
+
+    /* If we have a value, apply it to the current frame */
+    if (state->value && !state->expr) {
+        return cek_step_apply_frame(state);
+    }
+
+    /* If we have an expression, we need to evaluate it */
+    /* This would integrate with the expression evaluator */
+    /* For now, we treat expressions as values (already evaluated) */
+    if (state->expr) {
+        /* Check if expr is a self-evaluating value */
+        Obj* e = state->expr;
+        state->expr = NULL;
+        state->value = e;
+        return cek_step_apply_frame(state);
+    }
+
+    /* No expr and no value - shouldn't happen */
+    state->status = CEK_ERROR;
+    state->error_msg = "CEK step with no expr and no value";
+    return CEK_ERROR;
+}
+
+/*
+ * cek_run - Run CEK machine to completion
+ */
+Obj* cek_run(Obj* expr, Obj* env) {
+    CEKState state;
+    cek_state_init(&state, expr, env, NULL, NULL);
+
+    const int MAX_STEPS = 10000000;  /* Prevent infinite loops */
+    int steps = 0;
+
+    while (state.status == CEK_CONTINUE && steps < MAX_STEPS) {
+        cek_step(&state);
+        steps++;
+    }
+
+    if (steps >= MAX_STEPS) {
+        fprintf(stderr, "cek_run: Exceeded maximum steps (possible infinite loop)\n");
+        return NULL;
+    }
+
+    if (state.status == CEK_ERROR) {
+        fprintf(stderr, "cek_run: Error: %s\n",
+                state.error_msg ? state.error_msg : "unknown error");
+        return NULL;
+    }
+
+    return state.value;
+}
+
+/*
+ * cek_apply_closure - Set up CEK state for closure application
+ */
+void cek_apply_closure(CEKState* state, Obj* closure, Obj* args) {
+    Frame* f = cek_push_frame(state, FRAME_APP_DONE);
+    if (!f) return;
+
+    f->app.fn = closure;
+    if (closure) inc_ref(closure);
+    f->app.args_done = NULL;
+    f->app.args_todo = args;
+
+    /* If there are arguments, start evaluating them */
+    if (args && args->a) {
+        f->tag = FRAME_APP_ARGS;
+        state->expr = args->a;
+        f->app.args_todo = args->b;
+    } else {
+        /* No arguments - ready to apply */
+        state->value = closure;
+        state->expr = NULL;
+    }
+}
+
+/*
+ * cek_make_thunk - Create a thunk as a CEK state
+ *
+ * This replaces the old bounce mechanism.
+ */
+CEKState* cek_make_thunk(Obj* closure, Obj* arg) {
+    CEKState* state = cek_state_alloc();
+    if (!state) return NULL;
+
+    cek_state_init(state, NULL, NULL, NULL, NULL);
+
+    /* Create an APP_DONE frame with the closure and arg */
+    Frame* f = frame_alloc(FRAME_APP_DONE);
+    if (!f) {
+        state->status = CEK_ERROR;
+        return state;
+    }
+
+    f->app.fn = closure;
+    if (closure) inc_ref(closure);
+    f->app.args_done = arg ? mk_pair(arg, NULL) : NULL;
+    f->app.args_todo = NULL;
+    f->env = NULL;
+    f->prev = NULL;
+    f->refcount = 1;
+
+    state->cont = f;
+    state->value = closure;  /* Trigger application */
+    state->status = CEK_CONTINUE;
+
+    return state;
+}
+
+/*
+ * cek_trampoline - Legacy trampoline API using CEK
+ *
+ * If thunk is a closure, call it with no arguments and trampoline the result.
+ * If result is another closure (continuation), call it again.
+ */
+Obj* cek_trampoline(Obj* thunk) {
+    if (!thunk) return NULL;
+
+    Obj* current = thunk;
+    const int MAX_BOUNCES = 10000000;
+    int bounces = 0;
+
+    while (bounces < MAX_BOUNCES) {
+        /* Check if current is a closure/thunk */
+        if (!current || !IS_BOXED(current) || current->tag != TAG_CLOSURE) {
+            /* Not a closure - this is the final result */
+            return current;
+        }
+
+        /* Call the closure with no arguments */
+        Obj* result = call_closure(current, NULL, 0);
+        current = result;
+        bounces++;
+    }
+
+    fprintf(stderr, "cek_trampoline: Exceeded maximum bounces\n");
+    return NULL;
 }

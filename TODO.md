@@ -316,6 +316,10 @@ Before beginning ANY implementation subtask:
 
 **Objective:** Wire the existing continuation/effect infrastructure into the compiler and runtime.
 
+**DESIGN PRINCIPLE:** Continuations are the **foundational primitive**. Everything else
+(effects, generators, async, trampolines) builds on top of continuations. The correct
+integration order is: continuations → regions → trampolines → effects → higher abstractions.
+
 **Analysis (2026-01-14):** The runtime has comprehensive infrastructure that is NOT connected:
 - CEK machine with continuation frames exists but codegen doesn't use it
 - Effect system exists but no primitives are registered
@@ -326,64 +330,87 @@ Before beginning ANY implementation subtask:
 - `runtime/src/memory/continuation.h` (CEK machine, fibers, generators, promises)
 - `runtime/src/effect.h` (effect handlers, resumptions)
 - `docs/SYNTAX_REVISION.md` (Section 7: Algebraic Effects)
+- `docs/CTRR.md` (Region memory model)
 
-### P0: Wire Effect Primitives [TODO]
+### P0: Region-Continuation Boundary Integration [TODO] (FOUNDATION)
 
-- [TODO] Label: I14-p0-register-effect-primitives
+- [TODO] Label: I14-p0-prompt-region-boundary
+  Objective: Connect continuation prompts with region boundaries.
+  Where: `runtime/src/memory/continuation.c`, `runtime/src/memory/region_core.c`
+  Why: **This is the foundation.** Design specifies "prompt = region boundary" for memory safety.
+       Continuations capture state; regions manage that state's lifetime.
+  What to change:
+    1. Add `Region*` field to Prompt frame in continuation.h
+    2. On prompt install: create child region (prompt owns region)
+    3. On control capture: transmigrate captured values out of prompt's region
+    4. On prompt exit: exit region (deallocate prompt-local allocations)
+    5. Ensure continuation frames track their owning region
+  Verification:
+    - Captured continuations don't hold stale region pointers
+    - Memory allocated during delimited computation is freed on prompt exit
+    - `runtime/tests/test_continuation_region.c` passes
+
+### P1: Trampoline-CEK Unification [TODO] (USE FOUNDATION)
+
+- [TODO] Label: I14-p1-trampoline-use-cek
+  Objective: Reimplement trampoline using CEK machine.
+  Where: `runtime/src/trampoline.c`
+  Why: Trampoline is manual continuation-passing. CEK provides this natively.
+       Once regions are connected, CEK frames have proper lifetime management.
+  What to change:
+    1. Replace bounce objects with CEK APP frames
+    2. Use `omni_cek_step` instead of manual trampoline loop
+    3. Bounce thunks become proper continuation frames
+    4. Remove manual mark-field hack for function pointers
+  Verification: Mutual recursion tests pass with CEK backend.
+
+### P2: Wire Effect Primitives [TODO] (BUILD ON CONTINUATIONS)
+
+- [TODO] Label: I14-p2-register-effect-primitives
   Objective: Register effect primitives for use from Lisp code.
   Where: `runtime/src/primitives.c` or new `runtime/src/primitives_effect.c`
+  Why: Effects use delimited continuations (prompt/control). Must be done after P0.
   What to change:
-    1. Create `prim_handle` - install effect handler
-    2. Create `prim_perform` - perform effect operation
+    1. Create `prim_handle` - install effect handler (creates prompt + region)
+    2. Create `prim_perform` - perform effect operation (captures continuation)
     3. Create `prim_resume` - resume captured continuation
     4. Register with primitive table
   Verification: `(handle (raise "test") [raise [msg] "caught"])` works.
 
-- [TODO] Label: I14-p0-codegen-handle-form
+- [TODO] Label: I14-p2-codegen-handle-form
   Objective: Emit C code for `handle` special form.
   Where: `csrc/codegen/codegen.c`
   What to change:
     1. Add `handle` to special form detection
-    2. Emit calls to `omni_effect_push_handler`
+    2. Emit calls to `omni_effect_push_handler` (installs prompt)
     3. Emit handler clauses as C functions
-    4. Emit `omni_effect_pop_handler` at scope exit
+    4. Emit `omni_effect_pop_handler` at scope exit (exits region)
   Verification: Generated C compiles and runs effect handling.
 
-### P1: Unify Condition/Restart with Effects [TODO]
+### P3: Unify Condition/Restart with Effects [TODO]
 
-- [TODO] Label: I14-p1-unify-conditions-effects
+- [TODO] Label: I14-p3-unify-conditions-effects
   Objective: Reimplement conditions/restarts on top of effect system.
   Where: `runtime/src/condition.c`, `runtime/src/restart.c`
-  Why: Currently duplicate error handling systems.
+  Why: Currently duplicate error handling systems. Effects subsume conditions.
   What to change:
     1. Define `{effect Condition}` with raise/handle operations
     2. Rewrite condition_signal using omni_effect_perform
     3. Rewrite restarts as effect handlers with resume
   Verification: Existing condition tests pass using effect backend.
 
-### P2: Region-Continuation Boundary Integration [TODO]
+### P4: Iterator-Generator Integration [TODO]
 
-- [TODO] Label: I14-p2-prompt-region-boundary
-  Objective: Connect continuation prompts with region boundaries.
-  Where: `runtime/src/memory/continuation.c`, `runtime/src/memory/region_core.c`
-  Why: Design specifies "prompt = region boundary" for memory safety.
+- [TODO] Label: I14-p4-iterator-generator
+  Objective: Implement iterators using generator continuations.
+  Where: `runtime/src/iterator.c`
+  Why: Generators provide proper lazy evaluation with suspend/resume.
+       Generators are implemented using delimited continuations.
   What to change:
-    1. Add `Region*` field to Prompt frame
-    2. On prompt install: create child region
-    3. On control capture: transmigrate captured values
-    4. On prompt exit: exit region
-  Verification: Captured continuations don't hold stale region pointers.
-
-### P3: Trampoline-CEK Unification [TODO]
-
-- [TODO] Label: I14-p3-trampoline-use-cek
-  Objective: Reimplement trampoline using CEK machine.
-  Where: `runtime/src/trampoline.c`
-  Why: Currently reimplements continuation-passing manually.
-  What to change:
-    1. Replace bounce objects with CEK frames
-    2. Use CEK step function instead of manual loop
-  Verification: Mutual recursion tests pass with CEK backend.
+    1. Implement `prim_iterate` using `omni_generator_create`
+    2. Implement `prim_iter_next` using `omni_generator_next`
+    3. Add `yield` primitive using generator yield
+  Verification: `(take 5 (iterate inc 0))` returns `[0 1 2 3 4]`.
 
 ### P4: Iterator-Generator Integration [TODO]
 

@@ -305,6 +305,26 @@ void omni_codegen_runtime_header(CodeGenContext* ctx) {
         omni_codegen_emit_raw(ctx, "extern Obj* o_Any;    /* Any type object */\n");
         omni_codegen_emit_raw(ctx, "extern Obj* o_Nothing; /* Nothing type object */\n");
         omni_codegen_emit_raw(ctx, "\n");
+
+        /* Effect system declarations (Phase 22: Algebraic Effects) */
+        omni_codegen_emit_raw(ctx, "/* Effect System (Phase 22: Algebraic Effects) */\n");
+        omni_codegen_emit_raw(ctx, "/* Forward declarations for effect types */\n");
+        omni_codegen_emit_raw(ctx, "typedef struct EffectType EffectType;\n");
+        omni_codegen_emit_raw(ctx, "typedef struct Handler Handler;\n");
+        omni_codegen_emit_raw(ctx, "typedef struct HandlerClause HandlerClause;\n");
+        omni_codegen_emit_raw(ctx, "typedef struct RecoveryProtocol RecoveryProtocol;\n");
+        omni_codegen_emit_raw(ctx, "/* Effect primitives */\n");
+        omni_codegen_emit_raw(ctx, "extern void effect_init(void);\n");
+        omni_codegen_emit_raw(ctx, "extern Obj* prim_perform(Obj* effect_name, Obj* payload);\n");
+        omni_codegen_emit_raw(ctx, "extern Obj* prim_raise(Obj* message);\n");
+        omni_codegen_emit_raw(ctx, "extern Obj* prim_resume(Obj* resumption, Obj* value);\n");
+        omni_codegen_emit_raw(ctx, "extern Obj* prim_yield(Obj* value);\n");
+        omni_codegen_emit_raw(ctx, "extern Handler* handler_push(HandlerClause* clauses, Obj* return_clause, Obj* env);\n");
+        omni_codegen_emit_raw(ctx, "extern void handler_pop(void);\n");
+        omni_codegen_emit_raw(ctx, "extern EffectType* effect_type_find(const char* name);\n");
+        omni_codegen_emit_raw(ctx, "extern EffectType* effect_type_register(const char* name, Obj* payload_type, RecoveryProtocol* recovery);\n");
+        omni_codegen_emit_raw(ctx, "extern HandlerClause* handler_clause_add(HandlerClause* clauses, EffectType* type, Obj* handler_fn);\n");
+        omni_codegen_emit_raw(ctx, "\n");
         omni_codegen_emit_raw(ctx, "#define cdr(o) obj_cdr(o)\n");
         omni_codegen_emit_raw(ctx, "#define mk_cell(a, b) mk_pair(a, b)\n");
         omni_codegen_emit_raw(ctx, "#define prim_cons(a, b) mk_pair(a, b)\n\n");
@@ -2365,6 +2385,243 @@ static void codegen_match(CodeGenContext* ctx, OmniValue* expr) {
     omni_codegen_emit_raw(ctx, "})\n");
 }
 
+/* ============================================================
+ * Effect System Code Generation (Phase 22: Algebraic Effects)
+ * ============================================================ */
+
+/*
+ * codegen_handle - Generate code for effect handler blocks
+ *
+ * Syntax: (handle body
+ *           (EffectName (payload resume) handler-body)
+ *           ...
+ *           [(return (value) return-body)])
+ *
+ * Example:
+ *   (handle
+ *     (perform 'Ask nil)
+ *     (Ask (payload resume)
+ *       (resume 42)))
+ *
+ * Generates:
+ *   ({
+ *     effect_init();
+ *     HandlerClause* _clauses = NULL;
+ *     // Build clauses from handler lambdas...
+ *     handler_push(_clauses, return_clause, env);
+ *     Obj* _result = body;
+ *     handler_pop();
+ *     _result;
+ *   })
+ */
+static void codegen_handle(CodeGenContext* ctx, OmniValue* expr) {
+    OmniValue* args = omni_cdr(expr);
+    if (omni_is_nil(args)) {
+        omni_codegen_emit_raw(ctx, "NIL");
+        return;
+    }
+
+    /* First arg is the body to evaluate */
+    OmniValue* body = omni_car(args);
+    OmniValue* clauses = omni_cdr(args);
+
+    omni_codegen_emit_raw(ctx, "({ /* handle */\n");
+    omni_codegen_indent(ctx);
+
+    /* Initialize effect system */
+    omni_codegen_emit(ctx, "effect_init();\n");
+    omni_codegen_emit(ctx, "HandlerClause* _h_clauses = NULL;\n");
+    omni_codegen_emit(ctx, "Obj* _h_return_clause = NULL;\n");
+    omni_codegen_emit_raw(ctx, "\n");
+
+    /* Process each handler clause: (EffectName (payload resume) body) */
+    while (!omni_is_nil(clauses) && omni_is_cell(clauses)) {
+        OmniValue* clause = omni_car(clauses);
+        clauses = omni_cdr(clauses);
+
+        if (!omni_is_cell(clause)) continue;
+
+        OmniValue* effect_name = omni_car(clause);
+        OmniValue* rest = omni_cdr(clause);
+
+        if (!omni_is_sym(effect_name)) continue;
+        const char* name = effect_name->str_val;
+
+        /* Check for return clause: (return (value) body) */
+        if (strcmp(name, "return") == 0) {
+            /* Return clause - build a lambda for it */
+            OmniValue* params = omni_car(rest);
+            OmniValue* body_rest = omni_cdr(rest);
+            OmniValue* ret_body = omni_is_cell(body_rest) ? omni_car(body_rest) : body_rest;
+
+            omni_codegen_emit(ctx, "/* return clause */\n");
+            omni_codegen_emit(ctx, "_h_return_clause = ");
+
+            /* Build a lambda: (fn (params) ret_body) */
+            omni_codegen_emit_raw(ctx, "mk_closure_simple(\"return_handler\", ");
+            codegen_expr(ctx, params);
+            omni_codegen_emit_raw(ctx, ", ");
+            codegen_expr(ctx, ret_body);
+            omni_codegen_emit_raw(ctx, ");\n");
+            continue;
+        }
+
+        /* Effect clause: (EffectName (payload resume) handler-body) */
+        OmniValue* params = omni_car(rest);
+        OmniValue* handler_body_list = omni_cdr(rest);
+        OmniValue* handler_body = omni_is_cell(handler_body_list) ?
+                                  omni_car(handler_body_list) : handler_body_list;
+
+        omni_codegen_emit(ctx, "/* handler for effect: %s */\n", name);
+        omni_codegen_emit(ctx, "{\n");
+        omni_codegen_indent(ctx);
+
+        /* Find effect type */
+        omni_codegen_emit(ctx, "EffectType* _eff_type = effect_type_find(\"%s\");\n", name);
+        omni_codegen_emit(ctx, "if (!_eff_type) {\n");
+        omni_codegen_indent(ctx);
+        omni_codegen_emit(ctx, "_eff_type = effect_type_register(\"%s\", NULL, NULL);\n", name);
+        omni_codegen_dedent(ctx);
+        omni_codegen_emit(ctx, "}\n");
+
+        /* Build handler lambda: (fn (payload resume) handler-body) */
+        omni_codegen_emit(ctx, "Obj* _handler_fn = ");
+
+        /* For now, emit the handler as an inline lambda */
+        /* This creates a lambda capturing the handler body */
+        omni_codegen_emit_raw(ctx, "mk_closure_simple(\"%s_handler\", ", name);
+        codegen_expr(ctx, params);
+        omni_codegen_emit_raw(ctx, ", ");
+        codegen_expr(ctx, handler_body);
+        omni_codegen_emit_raw(ctx, ");\n");
+
+        /* Add clause to list */
+        omni_codegen_emit(ctx, "_h_clauses = handler_clause_add(_h_clauses, _eff_type, _handler_fn);\n");
+
+        omni_codegen_dedent(ctx);
+        omni_codegen_emit(ctx, "}\n");
+    }
+
+    omni_codegen_emit_raw(ctx, "\n");
+
+    /* Push handler */
+    omni_codegen_emit(ctx, "handler_push(_h_clauses, _h_return_clause, NULL);\n");
+    omni_codegen_emit_raw(ctx, "\n");
+
+    /* Evaluate body in handler scope */
+    omni_codegen_emit(ctx, "Obj* _h_result = ");
+    codegen_expr(ctx, body);
+    omni_codegen_emit_raw(ctx, ";\n");
+    omni_codegen_emit_raw(ctx, "\n");
+
+    /* Pop handler */
+    omni_codegen_emit(ctx, "handler_pop();\n");
+
+    /* Return result */
+    omni_codegen_emit(ctx, "_h_result;  /* handle result */\n");
+    omni_codegen_dedent(ctx);
+    omni_codegen_emit_raw(ctx, "})\n");
+}
+
+/*
+ * codegen_perform - Generate code for performing an effect
+ *
+ * Syntax: (perform 'EffectName payload)
+ * Syntax: (perform effect-type-obj payload)
+ *
+ * Generates: prim_perform(mk_sym("EffectName"), payload)
+ */
+static void codegen_perform(CodeGenContext* ctx, OmniValue* expr) {
+    OmniValue* args = omni_cdr(expr);
+    if (omni_is_nil(args)) {
+        omni_codegen_emit_raw(ctx, "NIL");
+        return;
+    }
+
+    OmniValue* effect_name = omni_car(args);
+    OmniValue* payload = omni_cdr(args);
+    OmniValue* payload_expr = omni_is_cell(payload) ? omni_car(payload) : NULL;
+
+    omni_codegen_emit_raw(ctx, "prim_perform(");
+    codegen_expr(ctx, effect_name);
+    omni_codegen_emit_raw(ctx, ", ");
+    if (payload_expr) {
+        codegen_expr(ctx, payload_expr);
+    } else {
+        omni_codegen_emit_raw(ctx, "NIL");
+    }
+    omni_codegen_emit_raw(ctx, ")");
+}
+
+/*
+ * codegen_raise - Generate code for raising a Fail effect
+ *
+ * Syntax: (raise message)
+ *
+ * Generates: prim_raise(message)
+ */
+static void codegen_raise(CodeGenContext* ctx, OmniValue* expr) {
+    OmniValue* args = omni_cdr(expr);
+    OmniValue* message = omni_is_cell(args) ? omni_car(args) : NULL;
+
+    omni_codegen_emit_raw(ctx, "prim_raise(");
+    if (message) {
+        codegen_expr(ctx, message);
+    } else {
+        omni_codegen_emit_raw(ctx, "mk_string_cstr(\"error\")");
+    }
+    omni_codegen_emit_raw(ctx, ")");
+}
+
+/*
+ * codegen_resume - Generate code for resuming a suspended computation
+ *
+ * Syntax: (resume resumption value)
+ *
+ * Generates: prim_resume(resumption, value)
+ */
+static void codegen_resume(CodeGenContext* ctx, OmniValue* expr) {
+    OmniValue* args = omni_cdr(expr);
+    if (omni_is_nil(args)) {
+        omni_codegen_emit_raw(ctx, "NIL");
+        return;
+    }
+
+    OmniValue* resumption = omni_car(args);
+    OmniValue* value_rest = omni_cdr(args);
+    OmniValue* value = omni_is_cell(value_rest) ? omni_car(value_rest) : NULL;
+
+    omni_codegen_emit_raw(ctx, "prim_resume(");
+    codegen_expr(ctx, resumption);
+    omni_codegen_emit_raw(ctx, ", ");
+    if (value) {
+        codegen_expr(ctx, value);
+    } else {
+        omni_codegen_emit_raw(ctx, "NIL");
+    }
+    omni_codegen_emit_raw(ctx, ")");
+}
+
+/*
+ * codegen_yield - Generate code for yielding a value (generator effect)
+ *
+ * Syntax: (yield value)
+ *
+ * Generates: prim_yield(value)
+ */
+static void codegen_yield(CodeGenContext* ctx, OmniValue* expr) {
+    OmniValue* args = omni_cdr(expr);
+    OmniValue* value = omni_is_cell(args) ? omni_car(args) : NULL;
+
+    omni_codegen_emit_raw(ctx, "prim_yield(");
+    if (value) {
+        codegen_expr(ctx, value);
+    } else {
+        omni_codegen_emit_raw(ctx, "NIL");
+    }
+    omni_codegen_emit_raw(ctx, ")");
+}
+
 /* Mutation operator: (set! var value) */
 static void codegen_set_bang(CodeGenContext* ctx, OmniValue* expr) {
     /* (set! x 10) - modify a binding */
@@ -2751,6 +3008,27 @@ static void codegen_list(CodeGenContext* ctx, OmniValue* expr) {
         /* T-wire-pika-compile-04: Pattern compilation */
         if (strcmp(name, "compile-pattern") == 0) {
             codegen_compile_pattern(ctx, expr);
+            return;
+        }
+        /* Phase 22: Effect system special forms */
+        if (strcmp(name, "handle") == 0) {
+            codegen_handle(ctx, expr);
+            return;
+        }
+        if (strcmp(name, "perform") == 0) {
+            codegen_perform(ctx, expr);
+            return;
+        }
+        if (strcmp(name, "raise") == 0) {
+            codegen_raise(ctx, expr);
+            return;
+        }
+        if (strcmp(name, "resume") == 0) {
+            codegen_resume(ctx, expr);
+            return;
+        }
+        if (strcmp(name, "yield") == 0) {
+            codegen_yield(ctx, expr);
             return;
         }
     }

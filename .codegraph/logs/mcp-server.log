@@ -872,3 +872,69 @@
 2026-01-14T06:57:34.876321Z  INFO serve_inner: 785: received notification notification=CancelledNotification(Notification { method: CancelledNotificationMethod, params: CancelledNotificationParam { request_id: Number(4), reason: Some("AbortError: This operation was aborted") }, extensions: Extensions })
 2026-01-14T06:57:34.876354Z  INFO serve_inner: 785: received notification notification=CancelledNotification(Notification { method: CancelledNotificationMethod, params: CancelledNotificationParam { request_id: Number(5), reason: Some("AbortError: This operation was aborted") }, extensions: Extensions })
 2026-01-14T06:57:34.876358Z  INFO serve_inner: 785: received notification notification=CancelledNotification(Notification { method: CancelledNotificationMethod, params: CancelledNotificationParam { request_id: Number(6), reason: Some("AbortError: This operation was aborted") }, extensions: Extensions })
+2026-01-14T09:09:49.678462Z  INFO 599: 🔧 Loading CodeGraph configuration...
+2026-01-14T09:09:49.679303Z  WARN 958: ⚠️  Using legacy Chat Completions API. Consider upgrading to Responses API for better performance. Set CODEGRAPH_USE_COMPLETIONS_API=false or remove the variable.
+2026-01-14T09:09:49.679309Z  INFO 613: ✅ Configuration loaded successfully
+2026-01-14T09:09:49.679310Z  INFO 615:    📄 Config file: /home/heefoo/.codegraph/config.toml
+2026-01-14T09:09:49.679311Z  INFO 619:    🤖 Embedding provider: ollama
+2026-01-14T09:09:49.679312Z  INFO 620:    🔧 Embedding model: Some("nomic-embed-text")
+2026-01-14T09:09:49.679529Z  INFO 621:    📐 Embedding dimension: 768
+2026-01-14T09:09:49.679530Z  INFO 622:    🌐 Ollama URL: http://localhost:11434
+2026-01-14T09:09:49.679531Z  INFO 623:    💬 LLM insights: enabled
+2026-01-14T09:09:49.680389Z  INFO 128: Background daemon started project=/home/heefoo/Documents/code/OmniLisp
+2026-01-14T09:09:49.684198Z  INFO 670: 🔧 Rayon threads capped to 4 (workers/env)
+2026-01-14T09:09:49.686225Z  INFO 3776: 🗄️ Connecting to SurrealDB: ws://localhost:3004/ namespace=ouroboros database=codegraph_experimental
+2026-01-14T09:09:49.686245Z  INFO 105: Initializing SurrealDB storage with connection: ws://localhost:3004
+2026-01-14T09:09:49.688481Z  INFO 239: client initialized
+2026-01-14T09:09:49.688592Z  INFO serve_inner: 562: Service initialized as server peer_info=Some(InitializeRequestParam { protocol_version: ProtocolVersion("2025-11-25"), capabilities: ClientCapabilities { experimental: None, roots: Some(RootsCapabilities { list_changed: None }), sampling: None, elicitation: None }, client_info: Implementation { name: "claude-code", title: None, version: "2.1.7", icons: None, website_url: None } })
+2026-01-14T09:09:49.716036Z  INFO 150: SurrealDB storage initialized successfully (schema management disabled)
+2026-01-14T09:09:49.716066Z  INFO 3811: 🗄️ SurrealDB connection established: ws://localhost:3004/ namespace=ouroboros database=codegraph_experimental
+2026-01-14T09:09:49.873092Z  INFO 385: 🔍 EmbeddingGenerator::with_config called with provider='ollama', model=Some("nomic-embed-text"), dimension=768
+2026-01-14T09:09:49.873111Z  INFO 393: 🎯 Provider matches 'ollama', attempting to initialize...
+2026-01-14T09:09:49.873112Z  INFO 396: ✅ 'ollama' feature is ENABLED
+2026-01-14T09:09:49.873122Z  INFO 400: 🔧 Created OllamaEmbeddingConfig: model='nomic-embed-text', url='http://localhost:11434'
+2026-01-14T09:09:49.999808Z  INFO 408: 🔍 Checking Ollama availability...
+2026-01-14T09:09:50.003425Z  INFO 201: nomic-embed-text availability: true
+2026-01-14T09:09:50.003439Z  INFO 412: ✅ Ollama nomic-embed-text available for embeddings (from config)
+2026-01-14T09:09:50.003606Z  INFO 418: ✅ ollama_provider successfully set!
+2026-01-14T09:09:50.003609Z  INFO 787: Active embeddings: ollama (batch_size: 100, max_concurrent: 10)
+2026-01-14T09:09:50.003612Z  INFO 826: 🧭 Embedding dimension override: CODEGRAPH_EMBEDDING_DIMENSION=768 → Surreal column embedding_768
+2026-01-14T09:09:50.005021Z  WARN 87: Removing stale PID file for non-running process 719828
+2026-01-14T09:09:50.005065Z  INFO 65: PID file removed: "/home/heefoo/Documents/code/OmniLisp/.codegraph/daemon.pid"
+2026-01-14T09:09:50.005108Z  INFO 38: PID file written: "/home/heefoo/Documents/code/OmniLisp/.codegraph/daemon.pid" (PID: 13225)
+2026-01-14T09:09:50.005129Z  INFO 103: Adding watch directory: "/home/heefoo/Documents/code/OmniLisp"
+2026-01-14T09:09:50.154812Z  INFO 57: Watch session initialized: 635 files tracked in "/home/heefoo/Documents/code/OmniLisp"
+2026-01-14T09:09:50.155050Z  INFO 107: Daemon started: watching "/home/heefoo/Documents/code/OmniLisp" (635 files)
+2026-01-14T11:33:23.917654Z  INFO 599: 🔧 Loading CodeGraph configuration...
+2026-01-14T11:33:23.917733Z  WARN 958: ⚠️  Using legacy Chat Completions API. Consider upgrading to Responses API for better performance. Set CODEGRAPH_USE_COMPLETIONS_API=false or remove the variable.
+2026-01-14T11:33:23.917736Z  INFO 613: ✅ Configuration loaded successfully
+2026-01-14T11:33:23.917736Z  INFO 615:    📄 Config file: /home/heefoo/.codegraph/config.toml
+2026-01-14T11:33:23.917737Z  INFO 619:    🤖 Embedding provider: ollama
+2026-01-14T11:33:23.917737Z  INFO 620:    🔧 Embedding model: Some("nomic-embed-text")
+2026-01-14T11:33:23.917741Z  INFO 621:    📐 Embedding dimension: 768
+2026-01-14T11:33:23.917742Z  INFO 622:    🌐 Ollama URL: http://localhost:11434
+2026-01-14T11:33:23.917742Z  INFO 623:    💬 LLM insights: enabled
+2026-01-14T11:33:23.917772Z  INFO 128: Background daemon started project=/home/heefoo/Documents/code/OmniLisp
+2026-01-14T11:33:23.918294Z  INFO 670: 🔧 Rayon threads capped to 4 (workers/env)
+2026-01-14T11:33:23.918557Z  INFO 3776: 🗄️ Connecting to SurrealDB: ws://localhost:3004/ namespace=ouroboros database=codegraph_experimental
+2026-01-14T11:33:23.918574Z  INFO 105: Initializing SurrealDB storage with connection: ws://localhost:3004
+2026-01-14T11:33:23.922486Z  INFO 239: client initialized
+2026-01-14T11:33:23.922512Z  INFO serve_inner: 562: Service initialized as server peer_info=Some(InitializeRequestParam { protocol_version: ProtocolVersion("2025-11-25"), capabilities: ClientCapabilities { experimental: None, roots: None, sampling: None, elicitation: None }, client_info: Implementation { name: "opencode", title: None, version: "1.1.19", icons: None, website_url: None } })
+2026-01-14T11:33:23.944656Z  INFO 150: SurrealDB storage initialized successfully (schema management disabled)
+2026-01-14T11:33:23.944690Z  INFO 3811: 🗄️ SurrealDB connection established: ws://localhost:3004/ namespace=ouroboros database=codegraph_experimental
+2026-01-14T11:33:24.089042Z  INFO 385: 🔍 EmbeddingGenerator::with_config called with provider='ollama', model=Some("nomic-embed-text"), dimension=768
+2026-01-14T11:33:24.089057Z  INFO 393: 🎯 Provider matches 'ollama', attempting to initialize...
+2026-01-14T11:33:24.089058Z  INFO 396: ✅ 'ollama' feature is ENABLED
+2026-01-14T11:33:24.089065Z  INFO 400: 🔧 Created OllamaEmbeddingConfig: model='nomic-embed-text', url='http://localhost:11434'
+2026-01-14T11:33:24.220171Z  INFO 408: 🔍 Checking Ollama availability...
+2026-01-14T11:33:24.221908Z  INFO 201: nomic-embed-text availability: true
+2026-01-14T11:33:24.221917Z  INFO 412: ✅ Ollama nomic-embed-text available for embeddings (from config)
+2026-01-14T11:33:24.221926Z  INFO 418: ✅ ollama_provider successfully set!
+2026-01-14T11:33:24.221928Z  INFO 787: Active embeddings: ollama (batch_size: 100, max_concurrent: 10)
+2026-01-14T11:33:24.221932Z  INFO 826: 🧭 Embedding dimension override: CODEGRAPH_EMBEDDING_DIMENSION=768 → Surreal column embedding_768
+2026-01-14T11:33:24.222828Z  WARN 87: Removing stale PID file for non-running process 13225
+2026-01-14T11:33:24.222887Z  INFO 65: PID file removed: "/home/heefoo/Documents/code/OmniLisp/.codegraph/daemon.pid"
+2026-01-14T11:33:24.222938Z  INFO 38: PID file written: "/home/heefoo/Documents/code/OmniLisp/.codegraph/daemon.pid" (PID: 342126)
+2026-01-14T11:33:24.222974Z  INFO 103: Adding watch directory: "/home/heefoo/Documents/code/OmniLisp"
+2026-01-14T11:33:24.282527Z  INFO 57: Watch session initialized: 636 files tracked in "/home/heefoo/Documents/code/OmniLisp"
+2026-01-14T11:33:24.282604Z  INFO 107: Daemon started: watching "/home/heefoo/Documents/code/OmniLisp" (636 files)
