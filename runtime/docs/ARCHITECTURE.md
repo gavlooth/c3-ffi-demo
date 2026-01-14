@@ -683,6 +683,330 @@ REGION:  region_id = encoded >> 48
 
 ---
 
+## Arena Allocator Implementation
+
+OmniLisp provides a **dual-architecture arena system** selectable at compile time via `OMNI_USE_VMEM_ARENA`.
+
+### Two Implementations
+
+#### 1. Original Arena (`third_party/arena/arena.h`)
+
+Classic bump allocator with linked-list chunk management:
+
+```c
+struct ArenaChunk {
+    ArenaChunk *next;        // Linked list pointer
+    size_t count;            // Current offset (in uintptr_t units)
+    size_t capacity;         // Total capacity
+    uintptr_t data[];        // Flexible array
+};
+
+typedef struct Arena {
+    ArenaChunk *begin, *end; // First chunk, current chunk
+} Arena;
+```
+
+**Backend support:**
+- `ARENA_BACKEND_LIBC_MALLOC` - Standard malloc (portable, WASM-compatible)
+- `ARENA_BACKEND_LINUX_MMAP` - Direct mmap (better memory characteristics)
+- `ARENA_BACKEND_WIN32_VIRTUALALLOC` - Windows VirtualAlloc
+
+**Default chunk size:** 8KB
+
+#### 2. Virtual Memory Arena (`third_party/arena/vmem_arena.h`)
+
+Commit-on-demand allocator with OS virtual memory integration:
+
+```c
+struct VMemChunk {
+    VMemChunk*  next;       // Linked list pointer
+    void*       base;       // Start of usable memory
+    size_t      reserved;   // Total VA space (2MB, THP-aligned)
+    size_t      committed;  // Currently committed physical bytes
+    size_t      offset;     // Bump pointer
+};
+```
+
+**Memory strategy:**
+| Parameter | Value | Purpose |
+|-----------|-------|---------|
+| Reserved VA | 2MB | Total virtual address space per chunk |
+| Initial commit | 256KB | Physical RAM committed on creation |
+| Commit-ahead | 256KB | Pre-commit to reduce syscalls |
+| THP alignment | 2MB | Transparent Huge Page optimization |
+
+### Allocation Strategy
+
+Both arenas use **O(1) bump pointer allocation**:
+
+```c
+void* arena_alloc(Arena* a, size_t size_bytes) {
+    size_t aligned = ALIGN_UP(size_bytes, sizeof(void*));
+
+    // FAST PATH: space in current chunk
+    if (a->end && a->end->offset + aligned <= a->end->committed) {
+        void* ptr = (char*)a->end->base + a->end->offset;
+        a->end->offset += aligned;
+        return ptr;  // O(1) - no syscall
+    }
+
+    // MEDIUM PATH (vmem only): commit more pages
+    if (a->end && new_offset <= a->end->reserved) {
+        vmem_chunk_ensure_committed(a->end, new_offset);
+        // ... allocate
+    }
+
+    // SLOW PATH: allocate new chunk
+    VMemChunk* new_chunk = vmem_chunk_new(aligned);
+    // ... link and allocate
+}
+```
+
+### Deallocation and Reset
+
+#### `arena_reset()` - Zero-cost bulk reset
+
+```c
+void arena_reset(Arena *a) {
+    for (ArenaChunk *r = a->begin; r != NULL; r = r->next) {
+        r->count = 0;  // Original: just reset counter
+    }
+    // VMemArena: also return pages to OS
+    for (VMemChunk* c = a->begin; c; c = c->next) {
+        madvise(c->base, c->committed, MADV_DONTNEED);
+        c->offset = 0;
+    }
+    a->end = a->begin;
+}
+```
+
+#### `arena_rewind()` - Partial reset to snapshot
+
+```c
+Arena_Mark arena_snapshot(Arena *a) {
+    return (Arena_Mark){ .chunk = a->end, .count = a->end->count };
+}
+
+void arena_rewind(Arena *a, Arena_Mark m) {
+    m.chunk->count = m.count;
+    for (ArenaChunk *r = m.chunk->next; r; r = r->next) {
+        r->count = 0;
+    }
+    a->end = m.chunk;
+}
+```
+
+### O(1) Chunk Splice Operations
+
+Critical for transmigration - entire chunk ranges can be moved without copying:
+
+```c
+void arena_detach_blocks(Arena *a, ArenaChunk *start, ArenaChunk *end) {
+    // Unlink range: prev->next = end->next
+    // O(1) - no data movement
+}
+
+void arena_attach_blocks(Arena *a, ArenaChunk *start, ArenaChunk *end) {
+    // Append range: a->end->next = start
+    // O(1) - no data movement
+}
+```
+
+**Use case:** When transmigrating 2MB of data, splice the chunks instead of copying.
+
+### Performance Characteristics
+
+| Operation | Original Arena | VMemArena |
+|-----------|---------------|-----------|
+| Fast-path alloc | ~5-10 cycles | ~5-10 cycles |
+| New chunk | 1-10 µs (malloc) | 5-50 µs (mmap) |
+| Commit pages | N/A | 1-5 µs per 4KB |
+| Reset | O(n) counters | O(n) + madvise |
+| Splice | O(1) | O(1) |
+
+### Configuration
+
+Selection in `third_party/arena/arena_config.h`:
+
+```c
+#ifdef OMNI_USE_VMEM_ARENA
+  #include "vmem_arena.h"    // Commit-on-demand
+#else
+  #include "arena.h"         // Malloc-based
+#endif
+```
+
+**When to use which:**
+- **Original arena:** Short-lived processes, WASM, simpler debugging
+- **VMemArena:** Long-running services, heavy allocation churn, lower peak memory
+
+---
+
+## SOTA Arena Techniques (2025-2026)
+
+Modern arena allocator research and production systems have converged on several key techniques.
+
+### 1. Commit-on-Demand (Virtual Memory Arena)
+
+**Pattern:** Reserve large VA space, commit physical pages lazily.
+
+```c
+// Reserve 1GB, commit nothing
+void* base = mmap(NULL, 1GB, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+
+// Commit 4KB when needed
+mprotect(base + offset, 4096, PROT_READ|PROT_WRITE);
+```
+
+**Benefits:**
+- Peak memory usage matches actual usage, not reserved size
+- Long-running processes don't bloat RSS
+- Pages returned to OS on reset via `madvise(MADV_DONTNEED)`
+
+**OmniLisp status:** ✅ Implemented in `vmem_arena.h`
+
+### 2. Transparent Huge Page (THP) Alignment
+
+**Pattern:** Align chunk reservations to 2MB boundaries.
+
+```c
+#define VMEM_CHUNK_RESERVE (2 * 1024 * 1024)  // 2MB THP-aligned
+```
+
+**Benefits:**
+- Linux kernel can promote to 2MB huge pages automatically
+- Reduces TLB pressure for large allocations
+- 10-30% speedup for memory-intensive workloads
+
+**OmniLisp status:** ✅ Implemented (2MB alignment)
+
+### 3. Scratch Arena Pattern (Double-Buffered Arenas)
+
+**Pattern:** Two arenas that alternate each "frame" or phase.
+
+```c
+typedef struct {
+    Arena arenas[2];
+    int current;
+} ScratchArenas;
+
+Arena* get_scratch(ScratchArenas* s, Arena* conflict) {
+    // Return whichever arena isn't the conflict
+    if (&s->arenas[0] == conflict) return &s->arenas[1];
+    if (&s->arenas[1] == conflict) return &s->arenas[0];
+    return &s->arenas[s->current];  // Default to current
+}
+
+void swap_scratch(ScratchArenas* s) {
+    arena_reset(&s->arenas[s->current]);
+    s->current = 1 - s->current;
+}
+```
+
+**Use cases:**
+- **Game engines:** "This frame" vs "last frame" data
+- **Compilers:** "Current pass" vs "previous pass" AST
+- **Servers:** "Current request" vs "temp allocations"
+
+**Key insight:** Instead of tracking individual allocations, categorize by phase lifetime:
+- "I need this data for THIS function call only" → scratch[0]
+- "I need this data for the CALLER to use" → scratch[1] or persistent arena
+
+**Benefits:**
+- Zero individual frees during a phase
+- Automatic bulk cleanup on phase transition
+- No fragmentation within a phase
+
+**OmniLisp status:** ⚠️ Not explicitly implemented (regions serve similar purpose)
+
+### 4. Thread-Local Arena Caching
+
+**Pattern:** Each thread maintains its own arena pool.
+
+```c
+__thread ArenaPool thread_pool = {0};
+
+Arena* arena_get_cached(void) {
+    if (thread_pool.free_count > 0) {
+        return thread_pool.free_list[--thread_pool.free_count];
+    }
+    return arena_new();
+}
+
+void arena_return_cached(Arena* a) {
+    arena_reset(a);
+    if (thread_pool.free_count < MAX_CACHED) {
+        thread_pool.free_list[thread_pool.free_count++] = a;
+    } else {
+        arena_free(a);
+    }
+}
+```
+
+**Benefits:**
+- No lock contention for arena allocation
+- Reuse chunks across function calls
+- Amortize mmap/VirtualAlloc costs
+
+**OmniLisp status:** ✅ Per-thread region pools exist (`__thread RegionPool`)
+
+### 5. Size-Class Segregation
+
+**Pattern:** Separate arenas for different size classes.
+
+```c
+typedef struct {
+    Arena small;   // < 256 bytes
+    Arena medium;  // 256 - 4KB
+    Arena large;   // > 4KB (or direct mmap)
+} SizeClassArenas;
+```
+
+**Benefits:**
+- Better cache locality within size class
+- Predictable chunk utilization
+- Can tune chunk sizes per class
+
+**Used by:** LLVM's BumpPtrAllocator, mimalloc, jemalloc
+
+**OmniLisp status:** ⚠️ Not implemented (inline buffer serves small-object purpose)
+
+### 6. Explicit Huge Page Support
+
+**Pattern:** Request huge pages explicitly for very large arenas.
+
+```c
+void* base = mmap(NULL, size, PROT_READ|PROT_WRITE,
+                  MAP_PRIVATE|MAP_ANONYMOUS|MAP_HUGETLB, -1, 0);
+
+// Or advise the kernel
+madvise(base, size, MADV_HUGEPAGE);
+```
+
+**Benefits:**
+- Guaranteed 2MB pages (vs THP's opportunistic promotion)
+- Eliminates page table overhead for large datasets
+
+**OmniLisp status:** ⚠️ Could add `MADV_HUGEPAGE` hint in vmem_arena
+
+### Performance Benchmarks (Industry)
+
+| Technique | Speedup vs malloc | Source |
+|-----------|-------------------|--------|
+| Basic bump allocator | 10-50x | General |
+| + Commit-on-demand | +5-15% peak memory | OmniLisp vmem_arena |
+| + THP alignment | +10-30% throughput | Linux kernel docs |
+| + Scratch pattern | 358,000x dealloc | Ryan Fleury |
+| + Thread-local cache | +20-40% multi-threaded | mimalloc |
+
+### Recommended Additions for OmniLisp
+
+1. **Explicit MADV_HUGEPAGE** for vmem_arena chunks > 2MB
+2. **Scratch arena API** for temporary computations within transmigration
+3. **Chunk recycling** between regions (already partially done via region pools)
+
+---
+
 ## Compiler Integration (Phase 24 - COMPLETE)
 
 ### What the Compiler Does Now

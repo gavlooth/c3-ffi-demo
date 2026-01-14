@@ -30,8 +30,8 @@ This document tracks identified inconsistencies in the language syntax, document
 *   **Status:** ⚠️ **PARTIALLY RESOLVED** (2026-01-14)
 *   **Parser Implementation:**
     *   ✅ Arrays `[...]` - implemented (`act_array`)
-    *   ❌ Dicts `#{}` - **NOT implemented** (no parser rule)
-    *   ❌ Signed integers `+456` - **NOT implemented**
+    *   ✅ Dicts `#{}` - **IMPLEMENTED** (2026-01-14)
+    *   ✅ Signed integers `+456` - **IMPLEMENTED** (2026-01-14)
     *   ❌ Partial floats `.5`, `3.` - **NOT implemented**
 *   **Resolution:** `SYNTAX.md` now has an "Implementation Status" section documenting
     what is actually implemented vs designed.
@@ -79,7 +79,7 @@ This document tracks identified inconsistencies in the language syntax, document
 ### New Tasks (Added 2026-01-14)
 
 See `TODO.md` for implementation tasks:
-- Implement dict literal parsing `#{}`
-- Implement signed integer parsing `+456`
+- ✅ **Implement dict literal parsing `#{}`**
+- ✅ **Implement signed integer parsing `+456`**
 - Implement partial float parsing `.5`, `3.`
 - Complete match clause parsing

@@ -81,7 +81,7 @@ static RemapStats g_remap_stats = {0};
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
-#include "../../third_party/arena/arena.h"
+#include "../../../third_party/arena/arena_config.h"
 #include "../../include/omni.h"
 
 /* ============================================================================
@@ -147,10 +147,19 @@ int omni_transmigrate_debug_used_forwarding_table(void) {
 // Region Bitmap for Cycle Detection (OPTIMIZATION: 10-100x faster than uthash)
 // ----------------------------------------------------------------------------
 
+/* Inline buffer is small (512 bytes = 64 pointers = 1 uint64_t bitmap) */
+#define INLINE_BUF_MAX_WORDS ((REGION_INLINE_BUF_SIZE + sizeof(uintptr_t) - 1) / sizeof(uintptr_t))
+#define INLINE_BUF_BITMAP_SIZE ((INLINE_BUF_MAX_WORDS + 63) / 64)
+
 typedef struct {
     uintptr_t start;
     size_t size_words;
     uint64_t* bits;
+    /* Inline buffer range (separate from arena bitmap due to address gap) */
+    uintptr_t inline_start;
+    uintptr_t inline_end;
+    /* Small dedicated bitmap for inline buffer (64 pointers = 1 uint64_t) */
+    uint64_t inline_bits[INLINE_BUF_BITMAP_SIZE];
 } RegionBitmap;
 
 static RegionBitmap* bitmap_create(Region* r, Arena* tmp_arena) {
@@ -167,30 +176,64 @@ static RegionBitmap* bitmap_create(Region* r, Arena* tmp_arena) {
 
     // CTRR SOUNDNESS: Include arena chunks in address range
     for (ArenaChunk* c = r->arena.begin; c; c = c->next) {
-        uintptr_t start = (uintptr_t)c->data;
-        uintptr_t end = start + (c->capacity * sizeof(uintptr_t));
+        uintptr_t start = (uintptr_t)ARENA_CHUNK_DATA(c);
+        size_t capacity = ARENA_CHUNK_CAPACITY(c);
+        uintptr_t end = start + (capacity * sizeof(uintptr_t));
         if (start < min_addr) min_addr = start;
         if (end > max_addr) max_addr = end;
     }
 
-    // CTRR SOUNDNESS: Include inline buffer in address range
-    // Objects allocated from inline_buf have different addresses than arena chunks
+    // CTRR SOUNDNESS: Handle inline buffer SEPARATELY from arena bitmap.
+    //
+    // With vmem_arena, mmap'd chunks are in a completely different address
+    // range than heap-embedded inline buffers. Including both in a single
+    // bitmap would require a bitmap spanning terabytes of address space!
+    //
+    // Solution: Only include arena chunks in the bitmap. Check inline buffer
+    // membership separately via bitmap_test_inline() or explicit range check.
+    //
+    // NOTE: Inline buffer addresses are stored in the InlineBufRange fields
+    // of RegionBitmap for separate checking.
+#if 0  /* Disabled: would create terabyte-spanning bitmap with vmem_arena */
     if (r->inline_buf.offset > 0) {
         uintptr_t inline_start = (uintptr_t)r->inline_buf.buffer;
         uintptr_t inline_end = inline_start + r->inline_buf.offset;
         if (inline_start < min_addr) min_addr = inline_start;
         if (inline_end > max_addr) max_addr = inline_end;
     }
+#endif
 
-    size_t range = max_addr - min_addr;
-    size_t words = (range + sizeof(uintptr_t) - 1) / sizeof(uintptr_t);
-    size_t bitmap_len = (words + 63) / 64;
+    /* Handle degenerate cases where only inline buffer or only arena exists */
+    size_t range = 0;
+    size_t words = 0;
+    size_t bitmap_len = 0;
+
+    if (max_addr > min_addr) {
+        range = max_addr - min_addr;
+        words = (range + sizeof(uintptr_t) - 1) / sizeof(uintptr_t);
+        bitmap_len = (words + 63) / 64;
+    }
 
     RegionBitmap* b = arena_alloc(tmp_arena, sizeof(RegionBitmap));
     b->start = min_addr;
     b->size_words = words;
-    b->bits = arena_alloc(tmp_arena, bitmap_len * sizeof(uint64_t));
-    memset(b->bits, 0, bitmap_len * sizeof(uint64_t));
+    if (bitmap_len > 0) {
+        b->bits = arena_alloc(tmp_arena, bitmap_len * sizeof(uint64_t));
+        memset(b->bits, 0, bitmap_len * sizeof(uint64_t));
+    } else {
+        b->bits = NULL;
+    }
+
+    /* Store inline buffer range for separate checking */
+    if (r->inline_buf.offset > 0) {
+        b->inline_start = (uintptr_t)r->inline_buf.buffer;
+        b->inline_end = b->inline_start + r->inline_buf.offset;
+    } else {
+        b->inline_start = 0;
+        b->inline_end = 0;
+    }
+    /* Zero the inline buffer visited bitmap */
+    memset(b->inline_bits, 0, sizeof(b->inline_bits));
 
     return b;
 }
@@ -199,6 +242,18 @@ static RegionBitmap* bitmap_create(Region* r, Arena* tmp_arena) {
 static inline bool bitmap_test(RegionBitmap* b, void* ptr) {
     if (!b || !ptr) return false;
     uintptr_t addr = (uintptr_t)ptr;
+
+    /* Check inline buffer range first (separate address space) */
+    if (b->inline_start && addr >= b->inline_start && addr < b->inline_end) {
+        size_t word_offset = (addr - b->inline_start) / sizeof(uintptr_t);
+        if (word_offset >= INLINE_BUF_MAX_WORDS) return false;
+        size_t bit_index = word_offset % 64;
+        size_t word_index = word_offset / 64;
+        return (b->inline_bits[word_index] & (1ULL << bit_index)) != 0;
+    }
+
+    /* Check arena bitmap */
+    if (b->size_words == 0 || !b->bits) return false;
     if (addr < b->start) return false;
 
     size_t word_offset = (addr - b->start) / sizeof(uintptr_t);
@@ -227,6 +282,14 @@ static inline bool bitmap_test(RegionBitmap* b, void* ptr) {
 static inline bool bitmap_in_range(RegionBitmap* b, void* ptr) {
     if (!b || !ptr) return false;
     uintptr_t addr = (uintptr_t)ptr;
+
+    /* Check inline buffer range (separate address space from arena) */
+    if (b->inline_start && addr >= b->inline_start && addr < b->inline_end) {
+        return true;
+    }
+
+    /* Check arena bitmap range */
+    if (b->size_words == 0 || !b->bits) return false;
     if (addr < b->start) return false;
     size_t word_offset = (addr - b->start) / sizeof(uintptr_t);
     return word_offset < b->size_words;
@@ -235,6 +298,19 @@ static inline bool bitmap_in_range(RegionBitmap* b, void* ptr) {
 static inline void bitmap_set(RegionBitmap* b, void* ptr) {
     if (!b || !ptr) return;
     uintptr_t addr = (uintptr_t)ptr;
+
+    /* Check inline buffer range first (separate address space) */
+    if (b->inline_start && addr >= b->inline_start && addr < b->inline_end) {
+        size_t word_offset = (addr - b->inline_start) / sizeof(uintptr_t);
+        if (word_offset >= INLINE_BUF_MAX_WORDS) return;
+        size_t bit_index = word_offset % 64;
+        size_t word_index = word_offset / 64;
+        b->inline_bits[word_index] |= (1ULL << bit_index);
+        return;
+    }
+
+    /* Set in arena bitmap */
+    if (b->size_words == 0 || !b->bits) return;
     if (addr < b->start) return;
 
     size_t word_offset = (addr - b->start) / sizeof(uintptr_t);

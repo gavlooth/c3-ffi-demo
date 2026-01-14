@@ -1,4 +1,5 @@
 #include "region_core.h"
+#include "region_pointer.h"  /* Issue 15 P3: For pointer_mask_get_region() in region_of() */
 #include <stdio.h>
 #include <string.h>
 #include "../../include/omni_atomic.h"  /* Issue 4 P3: Centralized atomic operations */
@@ -24,6 +25,60 @@ static __thread RegionPool g_region_pool = { .count = 0 };
 
 // Global region ID counter (OPTIMIZATION: T-opt-region-metadata-pointer-masking)
 static uint16_t g_next_region_id = 1;  // Start at 1 (0 is reserved for NULL/global
+
+/* ========== Issue 15 P3: Region Registry for O(1) region_of() lookup ========== */
+
+/*
+ * g_region_registry - Global registry mapping region_id -> Region*
+ *
+ * This enables O(1) lookup of Region* from any encoded pointer.
+ * The pointer masking system encodes region_id in high 16 bits.
+ * Combined with this registry, we can implement region_of(obj) in O(1).
+ *
+ * Thread-safety:
+ * - Registration/unregistration are atomic (single pointer writes)
+ * - Lookup is lock-free (single pointer read)
+ * - Region* is only set to NULL after region_destroy_if_dead() confirms death
+ *
+ * Note: POINTER_MAX_REGIONS = 65536, but we use a smaller table to save memory.
+ * If more than REGION_REGISTRY_SIZE concurrent regions exist, some will share slots.
+ * This is a time-space tradeoff; can be expanded if needed.
+ */
+#define REGION_REGISTRY_SIZE 8192  // 8K slots = 64KB memory footprint (good for most workloads)
+#define REGION_REGISTRY_MASK (REGION_REGISTRY_SIZE - 1)
+
+static Region* g_region_registry[REGION_REGISTRY_SIZE] = {0};
+
+/*
+ * region_registry_register - Add region to global registry
+ *
+ * Called by region_create() after assigning region_id.
+ * Thread-safe: atomic pointer store.
+ */
+static inline void region_registry_register(Region* r) {
+    if (r) {
+        uint16_t slot = r->region_id & REGION_REGISTRY_MASK;
+        __atomic_store_n(&g_region_registry[slot], r, __ATOMIC_RELEASE);
+    }
+}
+
+/*
+ * region_registry_unregister - Remove region from global registry
+ *
+ * Called by region_destroy_if_dead() when region is actually freed (not pooled).
+ * Thread-safe: atomic pointer store.
+ *
+ * Note: For pooled regions, we keep them in registry since region_id is preserved.
+ */
+static inline void region_registry_unregister(Region* r) {
+    if (r) {
+        uint16_t slot = r->region_id & REGION_REGISTRY_MASK;
+        /* Only clear if this region is still the registered one */
+        Region* expected = r;
+        __atomic_compare_exchange_n(&g_region_registry[slot], &expected, NULL,
+                                    false, __ATOMIC_RELEASE, __ATOMIC_RELAXED);
+    }
+}
 
 // Reset a region for reuse (fast path)
 static inline void region_reset(Region* r) {
@@ -111,6 +166,9 @@ Region* region_create(void) {
     /* Issue 4 P3: Use atomic wrapper for consistent memory ordering */
     r->region_id = omni_atomic_fetch_add_u16(&g_next_region_id, 1);
 
+    /* Issue 15 P3: Register in global registry for O(1) region_of() lookup */
+    region_registry_register(r);
+
     // Initialize Control Block
     r->external_rc = 0;
     r->tether_count = 0;
@@ -155,6 +213,9 @@ void region_destroy_if_dead(Region* r) {
             r->type_table = NULL;
             r->num_types = 0;
         }
+
+        /* Issue 15 P3: Unregister from global registry before freeing */
+        region_registry_unregister(r);
 
         free(r);
     }
@@ -427,8 +488,8 @@ void region_splice(Region* dest, Region* src, void* start_ptr, void* end_ptr) {
 
     // Find which chunks contain the pointers
     for (ArenaChunk* c = src->arena.begin; c; c = c->next) {
-        uintptr_t data_start = (uintptr_t)c->data;
-        uintptr_t data_end = data_start + (c->capacity * sizeof(uintptr_t));
+        uintptr_t data_start = (uintptr_t)ARENA_CHUNK_DATA(c);
+        uintptr_t data_end = data_start + (ARENA_CHUNK_CAPACITY(c) * sizeof(uintptr_t));
         
         if ((uintptr_t)start_ptr >= data_start && (uintptr_t)start_ptr < data_end) {
             start_chunk = c;
@@ -577,4 +638,61 @@ int region_merge_safe(Region* src, Region* dst) {
 
     // Merge successful
     return 0;
+}
+
+/* ========== Issue 15 P3: region_of() O(1) Lookup ========== */
+
+/*
+ * region_of - Get the Region* that owns an encoded pointer in O(1)
+ *
+ * Issue 15 P3: This is the core lookup function for the store barrier.
+ * Given any encoded pointer (with region_id in high bits), returns
+ * the owning Region* in constant time.
+ *
+ * @param encoded_ptr: Any pointer with region_id encoded in high 16 bits
+ * @return: Region* if found in registry, NULL otherwise
+ *
+ * How it works:
+ * 1. Extract region_id from pointer high bits (via pointer_mask_get_region)
+ * 2. Hash region_id to registry slot (& REGION_REGISTRY_MASK)
+ * 3. Load Region* from registry with atomic acquire
+ * 4. Validate that the region's region_id matches (collision check)
+ *
+ * Thread-safety: Lock-free read with atomic acquire semantics.
+ *
+ * Edge cases:
+ * - NULL pointer: Returns NULL
+ * - Unencoded pointer (region_id=0): Returns NULL (0 is reserved)
+ * - Freed region: Returns NULL (unregistered on free)
+ * - Pooled region: Returns valid Region* (stays registered)
+ *
+ * Performance: O(1) - single array lookup + validation
+ *
+ * Usage in store barrier:
+ *   Region* src_region = region_of(src_obj);
+ *   Region* dst_region = region_of(dst_obj);
+ *   if (!omni_region_outlives(dst_region, src_region)) {
+ *       // Repair needed: dst is younger or ordering unknown
+ *   }
+ */
+Region* region_of(const void* encoded_ptr) {
+    if (!encoded_ptr) return NULL;
+
+    /* Extract region_id from pointer high bits */
+    uint16_t region_id = pointer_mask_get_region(encoded_ptr);
+
+    /* Region ID 0 is reserved for NULL/unencoded pointers */
+    if (region_id == 0) return NULL;
+
+    /* O(1) lookup in registry */
+    uint16_t slot = region_id & REGION_REGISTRY_MASK;
+    Region* r = __atomic_load_n(&g_region_registry[slot], __ATOMIC_ACQUIRE);
+
+    /* Validate region_id matches (handle hash collisions) */
+    if (r && r->region_id == region_id) {
+        return r;
+    }
+
+    /* Collision or region was freed */
+    return NULL;
 }

@@ -87,9 +87,9 @@ Before beginning ANY implementation subtask:
 - `docs/SYNTAX.md` (Implementation Status section)
 - `csrc/parser/parser.c`
 
-### P0: Implement Dict Literal Parsing `#{}` [TODO]
+### P0: Implement Dict Literal Parsing `#{}` [DONE] (Review Needed)
 
-- [TODO] Label: I6-p0-dict-literals
+- [DONE] (Review Needed) Label: I6-p0-dict-literals
   Objective: Parse `#{:a 1 :b 2}` as dictionary literal.
   Where: `csrc/parser/parser.c`
   Why: Documented syntax but no parser rule exists.
@@ -101,9 +101,9 @@ Before beginning ANY implementation subtask:
     - Add test: `#{:a 1}` parses to dict with key 'a value 1
     - Run: `make -C csrc/tests test`
 
-### P1: Implement Signed Integer Parsing `+456` [TODO]
+### P1: Implement Signed Integer Parsing `+456` [DONE] (Review Needed)
 
-- [TODO] Label: I6-p1-signed-integers
+- [DONE] (Review Needed) Label: I6-p1-signed-integers
   Objective: Parse `+456` as positive integer literal.
   Where: `csrc/parser/parser.c`
   Why: Currently `+` parsed as symbol, not sign.
@@ -426,6 +426,101 @@ integration order is: continuations → regions → trampolines → effects → 
 
 ---
 
+## Issue 15: Arena & Memory System Enhancements [TODO]
+
+**Objective:** Implement remaining SOTA arena techniques and complete memory system integration.
+
+**Reference (read first):**
+- `runtime/docs/ARCHITECTURE.md` (Arena Allocator Implementation, SOTA Techniques sections)
+- `third_party/arena/vmem_arena.h`
+- `runtime/src/memory/region_core.h`
+
+**Background (2026-01-14):** Arena implementation review completed. Current system has:
+- ✅ Dual arena (malloc-based + vmem commit-on-demand)
+- ✅ O(1) chunk splice for transmigration
+- ✅ Inline buffer (512B) for small objects
+- ✅ Thread-local region pools
+- ✅ THP alignment (2MB chunks)
+- ⚠️ Partial store barrier / region_of support
+
+### P0: Scratch Arena API [TODO]
+
+- [TODO] Label: I15-p0-scratch-arena-api
+  Objective: Implement double-buffered scratch arenas for temporary allocations.
+  Where: `runtime/src/memory/scratch_arena.h` (new), `runtime/src/memory/transmigrate.c`
+  Why: Transmigration temporaries (forwarding table, worklist) currently pollute destination region.
+  What to change:
+    1. Create `ScratchArenas` struct with two arenas + current index
+    2. Implement `get_scratch(Arena* conflict)` - return non-conflicting arena
+    3. Implement `scratch_checkpoint()` / `scratch_rewind()` for scoped usage
+    4. Add `__thread ScratchArenas tls_scratch` per-thread pool
+    5. Update transmigrate.c to use scratch for forwarding table
+  Verification:
+    - Transmigration doesn't bloat destination region with temporaries
+    - `runtime/tests/test_scratch_arena.c` passes
+
+### P1: Explicit Huge Page Support [TODO]
+
+- [TODO] Label: I15-p1-madv-hugepage
+  Objective: Add MADV_HUGEPAGE hint for vmem_arena chunks.
+  Where: `third_party/arena/vmem_arena.h`
+  Why: Explicit hint guarantees huge pages vs THP's opportunistic promotion.
+  What to change:
+    1. Add `madvise(base, reserved, MADV_HUGEPAGE)` after mmap in `vmem_chunk_new()`
+    2. Guard with `#ifdef MADV_HUGEPAGE` for portability
+    3. Add `VMEM_USE_HUGEPAGES` compile flag to enable/disable
+  Verification:
+    - Check `/proc/meminfo` shows AnonHugePages increasing
+    - No regression on systems without huge page support
+
+### P2: Store Barrier Choke-Point [TODO]
+
+- [TODO] Label: I15-p2-store-barrier-impl
+  Objective: Implement single choke-point for all pointer stores with lifetime checking.
+  Where: `runtime/src/memory/store_barrier.h` (new), codegen integration
+  Why: Required to enforce Region Closure Property at mutation time.
+  What to change:
+    1. Create `omni_store_barrier(Obj* container, int field, Obj* value)` function
+    2. Implement lifetime check: `if (!omni_region_outlives(dst_region, src_region))`
+    3. Auto-repair via transmigrate or merge based on `get_merge_threshold()`
+    4. Update codegen to emit store barrier for all pointer field assignments
+    5. Increment `region->escape_repair_count` on auto-repair
+  Verification:
+    - Younger→older store triggers auto-repair
+    - `runtime/tests/test_store_barrier.c` passes
+
+### P3: region_of(obj) Lookup [TODO]
+
+- [TODO] Label: I15-p3-region-of-lookup
+  Objective: Implement O(1) lookup from object pointer to owning region.
+  Where: `runtime/src/memory/region_pointer.h`, `runtime/src/memory/region_core.c`
+  Why: Store barrier needs to determine object's region efficiently.
+  What to change:
+    1. Option A: Use existing pointer masking (region_id in high bits)
+       - Add `region_lookup_by_id(uint16_t id)` global registry
+    2. Option B: Store region pointer in object header (space tradeoff)
+    3. Implement `Region* region_of(Obj* obj)` using chosen strategy
+  Verification:
+    - `region_of(arena_allocated_obj)` returns correct region
+    - O(1) lookup performance
+
+### P4: Size-Class Segregation [OPTIONAL]
+
+- [TODO] Label: I15-p4-size-class-segregation
+  Objective: Separate arenas for different allocation sizes.
+  Where: `runtime/src/memory/region_core.h`
+  Why: Better cache locality for homogeneous object traversal.
+  What to change:
+    1. Add `Arena pair_arena` for TYPE_ID_PAIR allocations
+    2. Add `Arena container_arena` for arrays/dicts/strings
+    3. Route `region_alloc_typed()` to appropriate arena
+  Note: May not be needed - inline buffer already handles small objects.
+  Verification:
+    - List traversal benchmark shows improved cache behavior
+    - No regression in allocation throughput
+
+---
+
 ## Summary
 
 | Issue | Status | Description |
@@ -437,5 +532,6 @@ integration order is: continuations → regions → trampolines → effects → 
 | 10 | TODO | IPGE integration, region realloc |
 | 11 | TODO | Build/test consolidation |
 | 14 | TODO | **Continuation infrastructure integration** |
+| 15 | TODO | **Arena & memory system enhancements** |
 
 **Completed issues:** See `TODO_COMPLETED.md` for Issues 2, 3, 4, 5, 7.

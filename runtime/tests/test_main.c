@@ -1,5 +1,8 @@
 /* OmniLisp Runtime Test Suite - Single Compilation Unit */
-/* Define POSIX features FIRST before any includes */
+/* Define POSIX/GNU features FIRST before any includes */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #define _POSIX_C_SOURCE 200809L
 
 #include "test_framework.h"

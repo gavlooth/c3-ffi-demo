@@ -1367,6 +1367,28 @@ static void codegen_compile_pattern(CodeGenContext* ctx, OmniValue* expr) {
     omni_codegen_emit_raw(ctx, ")");
 }
 
+static void codegen_dict(CodeGenContext* ctx, OmniValue* expr) {
+    /* Generate dict literal: #{ k1 v1 k2 v2 } */
+    char* dict_var = omni_codegen_temp(ctx);
+
+    /* Use GCC statement expression */
+    omni_codegen_emit_raw(ctx, "({ Obj* %s = mk_dict_region(_local_region); ", dict_var);
+
+    for (size_t i = 0; i < expr->dict.len; i++) {
+        OmniValue* key = expr->dict.keys[i];
+        OmniValue* val = expr->dict.values[i];
+
+        omni_codegen_emit_raw(ctx, "dict_set(%s, ", dict_var);
+        codegen_expr(ctx, key);
+        omni_codegen_emit_raw(ctx, ", ");
+        codegen_expr(ctx, val);
+        omni_codegen_emit_raw(ctx, "); ");
+    }
+
+    omni_codegen_emit_raw(ctx, "%s; })", dict_var);
+    free(dict_var);
+}
+
 /* T-codegen-array-01: Array literal codegen */
 /* Generate code to create an array from literal syntax [elem1 elem2 ...]
  * Uses GCC statement expressions ({...}) to allow array literals in expression context.
@@ -3067,6 +3089,9 @@ static void codegen_expr(CodeGenContext* ctx, OmniValue* expr) {
         break;
     case OMNI_ARRAY:
         codegen_array(ctx, expr);
+        break;
+    case OMNI_DICT:
+        codegen_dict(ctx, expr);
         break;
     default:
         omni_codegen_emit_raw(ctx, "NIL");

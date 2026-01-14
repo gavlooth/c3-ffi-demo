@@ -938,3 +938,75 @@
 2026-01-14T11:33:24.222974Z  INFO 103: Adding watch directory: "/home/heefoo/Documents/code/OmniLisp"
 2026-01-14T11:33:24.282527Z  INFO 57: Watch session initialized: 636 files tracked in "/home/heefoo/Documents/code/OmniLisp"
 2026-01-14T11:33:24.282604Z  INFO 107: Daemon started: watching "/home/heefoo/Documents/code/OmniLisp" (636 files)
+2026-01-14T15:51:25.631595Z  INFO 599: 🔧 Loading CodeGraph configuration...
+2026-01-14T15:51:25.631672Z  WARN 958: ⚠️  Using legacy Chat Completions API. Consider upgrading to Responses API for better performance. Set CODEGRAPH_USE_COMPLETIONS_API=false or remove the variable.
+2026-01-14T15:51:25.631673Z  INFO 613: ✅ Configuration loaded successfully
+2026-01-14T15:51:25.631674Z  INFO 615:    📄 Config file: /home/heefoo/.codegraph/config.toml
+2026-01-14T15:51:25.631675Z  INFO 619:    🤖 Embedding provider: ollama
+2026-01-14T15:51:25.631675Z  INFO 620:    🔧 Embedding model: Some("nomic-embed-text")
+2026-01-14T15:51:25.631681Z  INFO 621:    📐 Embedding dimension: 768
+2026-01-14T15:51:25.631681Z  INFO 622:    🌐 Ollama URL: http://localhost:11434
+2026-01-14T15:51:25.631682Z  INFO 623:    💬 LLM insights: enabled
+2026-01-14T15:51:25.631711Z  INFO 128: Background daemon started project=/home/heefoo/Documents/code/OmniLisp
+2026-01-14T15:51:25.636885Z  INFO 670: 🔧 Rayon threads capped to 4 (workers/env)
+2026-01-14T15:51:25.637155Z  INFO 3776: 🗄️ Connecting to SurrealDB: ws://localhost:3004/ namespace=ouroboros database=codegraph_experimental
+2026-01-14T15:51:25.637164Z  INFO 105: Initializing SurrealDB storage with connection: ws://localhost:3004
+2026-01-14T15:51:25.639589Z  INFO 239: client initialized
+2026-01-14T15:51:25.639608Z  INFO serve_inner: 562: Service initialized as server peer_info=Some(InitializeRequestParam { protocol_version: ProtocolVersion("2025-11-25"), capabilities: ClientCapabilities { experimental: None, roots: Some(RootsCapabilities { list_changed: None }), sampling: None, elicitation: None }, client_info: Implementation { name: "claude-code", title: None, version: "2.1.7", icons: None, website_url: None } })
+2026-01-14T15:51:25.658401Z  INFO 150: SurrealDB storage initialized successfully (schema management disabled)
+2026-01-14T15:51:25.658424Z  INFO 3811: 🗄️ SurrealDB connection established: ws://localhost:3004/ namespace=ouroboros database=codegraph_experimental
+2026-01-14T15:51:25.658436Z  INFO 826: 🧭 Embedding dimension override: CODEGRAPH_EMBEDDING_DIMENSION=768 → Surreal column embedding_768
+2026-01-14T15:51:25.658517Z  INFO 38: PID file written: "/home/heefoo/Documents/code/OmniLisp/.codegraph/daemon.pid" (PID: 1122269)
+2026-01-14T15:51:25.658540Z  INFO 103: Adding watch directory: "/home/heefoo/Documents/code/OmniLisp"
+2026-01-14T15:51:25.732689Z  INFO 57: Watch session initialized: 631 files tracked in "/home/heefoo/Documents/code/OmniLisp"
+2026-01-14T15:51:25.732806Z  INFO 107: Daemon started: watching "/home/heefoo/Documents/code/OmniLisp" (631 files)
+2026-01-14T15:51:28.918851Z  INFO serve_inner: 618: input stream terminated
+2026-01-14T15:51:28.918900Z  INFO serve_inner: 844: serve finished quit_reason=Closed
+2026-01-14T15:51:28.919063Z  INFO 183: Received shutdown signal
+2026-01-14T15:51:28.919073Z  INFO 122: Initiating graceful shutdown...
+2026-01-14T15:51:28.919075Z  INFO 248: Watch session stopped for "/home/heefoo/Documents/code/OmniLisp"
+2026-01-14T15:51:28.919121Z  INFO 65: PID file removed: "/home/heefoo/Documents/code/OmniLisp/.codegraph/daemon.pid"
+2026-01-14T15:51:28.919126Z  INFO 136: Graceful shutdown complete
+2026-01-14T15:51:28.921110Z  INFO 104: Daemon stopped gracefully project=/home/heefoo/Documents/code/OmniLisp
+2026-01-14T15:51:28.921470Z  INFO 213: Daemon stopped gracefully
+2026-01-14T15:51:45.664579Z  INFO 599: 🔧 Loading CodeGraph configuration...
+2026-01-14T15:51:45.664658Z  WARN 958: ⚠️  Using legacy Chat Completions API. Consider upgrading to Responses API for better performance. Set CODEGRAPH_USE_COMPLETIONS_API=false or remove the variable.
+2026-01-14T15:51:45.664660Z  INFO 613: ✅ Configuration loaded successfully
+2026-01-14T15:51:45.664661Z  INFO 615:    📄 Config file: /home/heefoo/.codegraph/config.toml
+2026-01-14T15:51:45.664662Z  INFO 619:    🤖 Embedding provider: ollama
+2026-01-14T15:51:45.664662Z  INFO 620:    🔧 Embedding model: Some("nomic-embed-text")
+2026-01-14T15:51:45.664668Z  INFO 621:    📐 Embedding dimension: 768
+2026-01-14T15:51:45.664668Z  INFO 622:    🌐 Ollama URL: http://localhost:11434
+2026-01-14T15:51:45.664669Z  INFO 623:    💬 LLM insights: enabled
+2026-01-14T15:51:45.664703Z  INFO 128: Background daemon started project=/home/heefoo/Documents/code/OmniLisp
+2026-01-14T15:51:45.668455Z  INFO 239: client initialized
+2026-01-14T15:51:45.668469Z  INFO serve_inner: 562: Service initialized as server peer_info=Some(InitializeRequestParam { protocol_version: ProtocolVersion("2025-11-25"), capabilities: ClientCapabilities { experimental: None, roots: Some(RootsCapabilities { list_changed: None }), sampling: None, elicitation: None }, client_info: Implementation { name: "claude-code", title: None, version: "2.1.7", icons: None, website_url: None } })
+2026-01-14T15:51:45.669774Z  INFO 670: 🔧 Rayon threads capped to 4 (workers/env)
+2026-01-14T15:51:45.670045Z  INFO 3776: 🗄️ Connecting to SurrealDB: ws://localhost:3004/ namespace=ouroboros database=codegraph_experimental
+2026-01-14T15:51:45.670053Z  INFO 105: Initializing SurrealDB storage with connection: ws://localhost:3004
+2026-01-14T15:51:45.690244Z  INFO 150: SurrealDB storage initialized successfully (schema management disabled)
+2026-01-14T15:51:45.690278Z  INFO 3811: 🗄️ SurrealDB connection established: ws://localhost:3004/ namespace=ouroboros database=codegraph_experimental
+2026-01-14T15:51:45.690295Z  INFO 826: 🧭 Embedding dimension override: CODEGRAPH_EMBEDDING_DIMENSION=768 → Surreal column embedding_768
+2026-01-14T15:51:45.690403Z  INFO 38: PID file written: "/home/heefoo/Documents/code/OmniLisp/.codegraph/daemon.pid" (PID: 1124304)
+2026-01-14T15:51:45.690426Z  INFO 103: Adding watch directory: "/home/heefoo/Documents/code/OmniLisp"
+2026-01-14T15:51:45.752033Z  INFO 57: Watch session initialized: 631 files tracked in "/home/heefoo/Documents/code/OmniLisp"
+2026-01-14T15:51:45.752122Z  INFO 107: Daemon started: watching "/home/heefoo/Documents/code/OmniLisp" (631 files)
+2026-01-14T21:12:31.873099Z  INFO 599: 🔧 Loading CodeGraph configuration...
+2026-01-14T21:12:31.873188Z  WARN 958: ⚠️  Using legacy Chat Completions API. Consider upgrading to Responses API for better performance. Set CODEGRAPH_USE_COMPLETIONS_API=false or remove the variable.
+2026-01-14T21:12:31.873190Z  INFO 613: ✅ Configuration loaded successfully
+2026-01-14T21:12:31.873191Z  INFO 615:    📄 Config file: /home/heefoo/.codegraph/config.toml
+2026-01-14T21:12:31.873191Z  INFO 619:    🤖 Embedding provider: ollama
+2026-01-14T21:12:31.873192Z  INFO 620:    🔧 Embedding model: Some("nomic-embed-text")
+2026-01-14T21:12:31.873196Z  INFO 621:    📐 Embedding dimension: 768
+2026-01-14T21:12:31.873196Z  INFO 622:    🌐 Ollama URL: http://localhost:11434
+2026-01-14T21:12:31.873197Z  INFO 623:    💬 LLM insights: enabled
+2026-01-14T21:12:31.873264Z  INFO 128: Background daemon started project=/home/heefoo/Documents/code/OmniLisp
+2026-01-14T21:12:31.877644Z  INFO 670: 🔧 Rayon threads capped to 4 (workers/env)
+2026-01-14T21:12:31.877930Z  INFO 3776: 🗄️ Connecting to SurrealDB: ws://localhost:3004/ namespace=ouroboros database=codegraph_experimental
+2026-01-14T21:12:31.877950Z  INFO 105: Initializing SurrealDB storage with connection: ws://localhost:3004
+2026-01-14T21:12:31.880365Z  INFO 239: client initialized
+2026-01-14T21:12:31.880381Z  INFO serve_inner: 562: Service initialized as server peer_info=Some(InitializeRequestParam { protocol_version: ProtocolVersion("2025-11-25"), capabilities: ClientCapabilities { experimental: None, roots: Some(RootsCapabilities { list_changed: Some(true) }), sampling: None, elicitation: None }, client_info: Implementation { name: "gemini-cli-mcp-client", title: None, version: "0.0.1", icons: None, website_url: None } })
+2026-01-14T21:12:31.900250Z  INFO 150: SurrealDB storage initialized successfully (schema management disabled)
+2026-01-14T21:12:31.900279Z  INFO 3811: 🗄️ SurrealDB connection established: ws://localhost:3004/ namespace=ouroboros database=codegraph_experimental
+2026-01-14T21:12:31.900297Z  INFO 826: 🧭 Embedding dimension override: CODEGRAPH_EMBEDDING_DIMENSION=768 → Surreal column embedding_768
+2026-01-14T21:12:31.903373Z ERROR 113: Daemon failed project=/home/heefoo/Documents/code/OmniLisp error=Daemon already running (PID file: "/home/heefoo/Documents/code/OmniLisp/.codegraph/daemon.pid")

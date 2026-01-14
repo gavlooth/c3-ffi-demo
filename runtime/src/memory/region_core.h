@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <pthread.h>
-#include "../../../third_party/arena/arena.h"
+#include "../../../third_party/arena/arena_config.h"
 
 // OPTIMIZATION: Inline allocation buffer for small objects (< 64 bytes)
 // This avoids arena_alloc overhead for frequently allocated small objects
@@ -100,6 +100,9 @@ size_t get_merge_threshold(void);
 
 /* Issue 2 P5: Safe merge function */
 int region_merge_safe(Region* src, Region* dst);
+
+/* Issue 15 P3: O(1) region lookup from encoded pointer */
+Region* region_of(const void* encoded_ptr);
 
 // Tethering
 void region_tether_start(Region* r);

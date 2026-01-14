@@ -32,8 +32,8 @@ static int boxed_scalars_ptr_in_region(const Region* r, const void* p) {
 
     /* Arena chunk ranges */
     for (ArenaChunk* c = r->arena.begin; c; c = c->next) {
-        uintptr_t start = (uintptr_t)c->data;
-        uintptr_t end = start + (c->capacity * sizeof(uintptr_t));
+        uintptr_t start = (uintptr_t)ARENA_CHUNK_DATA(c);
+        uintptr_t end = start + (ARENA_CHUNK_CAPACITY(c) * sizeof(uintptr_t));
         if (addr >= start && addr < end) return 1;
     }
 

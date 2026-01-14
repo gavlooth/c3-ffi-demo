@@ -17,7 +17,7 @@
 
 /* OmniLisp runtime uses the third-party arena implementation as its Arena type.
  * Include it here so the public API sees a single canonical Arena definition. */
-#include "../../third_party/arena/arena.h"
+#include "../../third_party/arena/arena_config.h"
 
 #ifdef __cplusplus
 extern "C" {

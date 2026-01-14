@@ -95,6 +95,8 @@ enum {
     R_ARRAY_INNER, R_ARRAY_SEQ,
     R_ARRAY,
 
+    R_DICT,
+
     R_TYPE_INNER, R_TYPE,
     R_PATH_SEGMENT, R_PATH_TAIL_ITEM, R_PATH_TAIL, R_PATH,
     R_METADATA,
@@ -293,6 +295,53 @@ static OmniValue* act_array(PikaState* state, size_t pos, PikaMatch match) {
 static OmniValue* act_array_inner(PikaState* state, size_t pos, PikaMatch match) {
     /* Same as list_inner, just builds a list */
     return act_list_inner(state, pos, match);
+}
+
+static OmniValue* act_dict(PikaState* state, size_t pos, PikaMatch match) {
+    /* Get inner content (which is an ARRAY_INNER list), convert to dict */
+    /* Pattern: #{ WS INNER } */
+    size_t current = pos;
+
+    /* Skip # */
+    PikaMatch* hash_m = pika_get_match(state, current, R_HASH);
+    if (!hash_m || !hash_m->matched) return omni_new_dict();
+    current += hash_m->len;
+
+    /* Skip { */
+    PikaMatch* brace_m = pika_get_match(state, current, R_LBRACE);
+    if (!brace_m || !brace_m->matched) return omni_new_dict();
+    current += brace_m->len;
+
+    /* Skip WS */
+    PikaMatch* ws_m = pika_get_match(state, current, R_WS);
+    if (ws_m && ws_m->matched) current += ws_m->len;
+
+    /* Get inner list */
+    PikaMatch* inner_m = pika_get_match(state, current, R_ARRAY_INNER);
+    if (inner_m && inner_m->matched && inner_m->val) {
+        OmniValue* list = inner_m->val;
+        OmniValue* dict = omni_new_dict();
+
+        /* Iterate list in pairs */
+        OmniValue* p = list;
+        while (!omni_is_nil(p) && omni_is_cell(p)) {
+            OmniValue* key = omni_car(p);
+            OmniValue* val = omni_nil;
+            
+            OmniValue* next_node = omni_cdr(p);
+            if (!omni_is_nil(next_node) && omni_is_cell(next_node)) {
+                val = omni_car(next_node);
+                p = omni_cdr(next_node);
+            } else {
+                /* Odd number of items: key with nil value */
+                val = omni_nil;
+                p = omni_nil;
+            }
+            omni_dict_set(dict, key, val);
+        }
+        return dict;
+    }
+    return omni_new_dict();
 }
 
 static OmniValue* act_quoted(PikaState* state, size_t pos, PikaMatch match) {
@@ -862,7 +911,11 @@ void omni_grammar_init(void) {
     g_rules[R_INT] = (PikaRule){ PIKA_POS, .data.children = { g_rule_ids[R_INT], 1 }, .action = act_int };
 
     /* Signed integer */
-    g_rules[R_SIGNED_INT] = g_rules[R_INT];
+    g_rule_ids[R_SIGN] = ids(2, R_SYM_PLUS, R_SYM_MINUS);
+    g_rules[R_SIGN] = (PikaRule){ PIKA_ALT, .data.children = { g_rule_ids[R_SIGN], 2 } };
+
+    g_rule_ids[R_SIGNED_INT] = ids(2, R_SIGN, R_INT);
+    g_rules[R_SIGNED_INT] = (PikaRule){ PIKA_SEQ, .data.children = { g_rule_ids[R_SIGNED_INT], 2 }, .action = act_int };
 
     /* Float literal: <INT> "." <INT> (e.g., 1.5, 3.14, 0.5)
      * IMPORTANT: This must come BEFORE R_PATH in EXPR alternatives
@@ -968,8 +1021,8 @@ void omni_grammar_init(void) {
      *   We include R_META_KEY so metadata markers can appear as standalone items
      *   in special forms (define/let), without weakening normal symbol rules.
      */
-    g_rule_ids[R_ATOM] = ids(3, R_INT, R_META_KEY, R_SYM);
-    g_rules[R_ATOM] = (PikaRule){ PIKA_ALT, .data.children = { g_rule_ids[R_ATOM], 3 } };
+    g_rule_ids[R_ATOM] = ids(4, R_SIGNED_INT, R_INT, R_META_KEY, R_SYM);
+    g_rules[R_ATOM] = (PikaRule){ PIKA_ALT, .data.children = { g_rule_ids[R_ATOM], 4 } };
 
     /*
      * PATH_ROOT:
@@ -1002,6 +1055,11 @@ void omni_grammar_init(void) {
     /* ARRAY = [ WS ARRAY_INNER ] */
     g_rule_ids[R_ARRAY] = ids(4, R_LBRACKET, R_WS, R_ARRAY_INNER, R_RBRACKET);
     g_rules[R_ARRAY] = (PikaRule){ PIKA_SEQ, .data.children = { g_rule_ids[R_ARRAY], 4 }, .action = act_array };
+
+    /* DICT = #{ WS ARRAY_INNER } */
+    /* We reuse ARRAY_INNER since it parses a sequence of expressions */
+    g_rule_ids[R_DICT] = ids(5, R_HASH, R_LBRACE, R_WS, R_ARRAY_INNER, R_RBRACE);
+    g_rules[R_DICT] = (PikaRule){ PIKA_SEQ, .data.children = { g_rule_ids[R_DICT], 5 }, .action = act_dict };
 
     /* TYPE_INNER = LIST_INNER */
     g_rules[R_TYPE_INNER] = g_rules[R_LIST_INNER];
@@ -1102,8 +1160,8 @@ void omni_grammar_init(void) {
      * IMPORTANT: FLOAT must come BEFORE PATH so that "1.5" is parsed as a float literal,
      * not as a path expression "1 . 5" (integer 1, dot, integer 5)
      */
-    g_rule_ids[R_EXPR] = ids(14, R_FLOAT, R_PATH, R_LIST, R_ARRAY, R_TYPE, R_METADATA, R_QUOTED, R_COLON_QUOTED_SYMBOL, R_STRING, R_FMT_STRING, R_CLF_STRING, R_NAMED_CHAR, R_HASH_VAL, R_ATOM);
-    g_rules[R_EXPR] = (PikaRule){ PIKA_ALT, .data.children = { g_rule_ids[R_EXPR], 14 } };
+    g_rule_ids[R_EXPR] = ids(15, R_FLOAT, R_PATH, R_LIST, R_ARRAY, R_DICT, R_TYPE, R_METADATA, R_QUOTED, R_COLON_QUOTED_SYMBOL, R_STRING, R_FMT_STRING, R_CLF_STRING, R_NAMED_CHAR, R_HASH_VAL, R_ATOM);
+    g_rules[R_EXPR] = (PikaRule){ PIKA_ALT, .data.children = { g_rule_ids[R_EXPR], 15 } };
 
     /* PROGRAM_SEQ = EXPR WS PROGRAM_INNER */
     g_rule_ids[R_PROGRAM_SEQ] = ids(3, R_EXPR, R_WS, R_PROGRAM_INNER);

@@ -62,6 +62,14 @@ typedef struct  {
     size_t count;
 } Arena_Mark;
 
+/*
+ * Compatibility accessors (same API as vmem_arena.h)
+ * These allow code to work with either arena implementation.
+ */
+#define ARENA_CHUNK_DATA(c)     ((c)->data)
+#define ARENA_CHUNK_CAPACITY(c) ((c)->capacity)
+#define ARENA_CHUNK_COUNT(c)    ((c)->count)
+
 #ifndef ARENA_CHUNK_DEFAULT_CAPACITY
 #define ARENA_CHUNK_DEFAULT_CAPACITY (8*1024)
 #endif // ARENA_CHUNK_DEFAULT_CAPACITY
@@ -444,13 +452,17 @@ void arena_free(Arena *a)
 }
 
 void arena_trim(Arena *a){
+    if (!a->end)
+        return;
+
     ArenaChunk *r = a->end->next;
+    a->end->next = NULL;
+
     while (r) {
         ArenaChunk *r0 = r;
         r = r->next;
         free_chunk(r0);
     }
-    a->end->next = NULL;
 }
 
 void arena_promote(Arena *dest, Arena *src) {
