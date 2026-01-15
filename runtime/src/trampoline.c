@@ -5,16 +5,21 @@
  * This allows functions that would normally cause stack overflow to
  * execute safely by using an iterative loop with explicit thunks.
  *
- * ARCHITECTURE NOTE (2026-01-14):
- * This module now uses the CEK machine from continuation.c for trampolining.
- * The old "bounce" mechanism using mark field hacks is deprecated.
- * Instead, thunks are represented as FRAME_APP_DONE frames.
+ * ARCHITECTURE NOTE (2026-01-15):
+ * Trampolines are INTENTIONALLY SEPARATE from the continuation infrastructure.
+ * They are a simple tail-call optimization mechanism that does not require
+ * continuation semantics. The CEK machine in continuation.c is used for
+ * effects, generators, and fibers - not for basic trampolining.
+ *
+ * The bounce mechanism uses a mark field hack to store function pointers.
+ * This is a legacy approach but works fine for its purpose. There is no
+ * plan to unify trampolines with CEK - they solve different problems.
  *
  * API:
- *   - bounce: Create a thunk for delayed computation (deprecated)
+ *   - bounce: Create a thunk for delayed computation
  *   - trampoline: Execute thunks until final result
  *   - is_bounce: Check if value is a thunk
- *   - cek_trampoline: New CEK-based trampoline (preferred)
+ *   - cek_trampoline: Delegates to CEK for closure-based thunks
  */
 
 #include <stdlib.h>

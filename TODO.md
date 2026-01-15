@@ -355,15 +355,19 @@ Before beginning ANY implementation subtask:
 
 **Objective:** Wire the existing continuation/effect infrastructure into the compiler and runtime.
 
-**DESIGN PRINCIPLE:** Continuations are the **foundational primitive**. Everything else
-(effects, generators, async, trampolines) builds on top of continuations. The correct
-integration order is: continuations → regions → trampolines → effects → higher abstractions.
+**DESIGN PRINCIPLE:** Continuations are the **foundational primitive** for control flow
+abstractions. Effects, generators, and async/fibers build on continuations. The correct
+integration order is: continuations → regions → effects → higher abstractions.
+
+**ARCHITECTURE NOTE:** Trampolines are **intentionally separate** from the continuation
+infrastructure. They are a simple tail-call optimization mechanism that predates the CEK
+machine and do not require continuation semantics. The two systems coexist independently.
 
 **Analysis (2026-01-14):** The runtime has comprehensive infrastructure that is NOT connected:
 - CEK machine with continuation frames exists but codegen doesn't use it
 - Effect system exists but no primitives are registered
 - Region system doesn't connect to continuation prompts as designed
-- Duplicate systems: conditions/restarts vs effects, trampoline vs CEK
+- Conditions/restarts now unified with effects (P3 DONE)
 
 **Reference (read first):**
 - `runtime/src/memory/continuation.h` (CEK machine, fibers, generators, promises)
@@ -386,28 +390,7 @@ integration order is: continuations → regions → trampolines → effects → 
     - Region-Continuation boundary is fully integrated
     - Continuation system uses CTRR for memory safety
 
-### P1: Trampoline-CEK Unification [OPTIONAL] (DEFERRED)
-
-- [OPTIONAL] Label: I14-p1-trampoline-use-cek
-  Objective: Reimplement trampoline using CEK machine.
-  Where: `runtime/src/trampoline.c`
-  Status: DEFERRED - Internal refactoring, not essential functionality.
-
-  Rationale for deferral:
-    - Trampoline already works for tail call optimization
-    - CEK machine exists and is used by effects/generators
-    - Two systems coexist fine - no functional issues
-    - P1 is cleanup work with high regression risk, low user impact
-    - Can be done later if debugging/inspection needs arise
-
-  What would change if implemented:
-    1. Replace bounce objects with CEK APP frames
-    2. Use `omni_cek_step` instead of manual trampoline loop
-    3. Bounce thunks become proper continuation frames
-    4. Remove manual mark-field hack for function pointers
-  Verification: Mutual recursion tests pass with CEK backend.
-
-### P2: Wire Effect Primitives [DONE] (Review Needed) (BUILD ON CONTINUATIONS)
+### P1: Wire Effect Primitives [DONE] (Review Needed) (BUILD ON CONTINUATIONS)
 
 - [DONE] (Review Needed) Label: I14-p2-register-effect-primitives
   Objective: Register effect primitives for use from Lisp code.
@@ -437,9 +420,9 @@ integration order is: continuations → regions → trampolines → effects → 
     - Test 6: Payload use (5*2=10)
     - Test 7: Nested expr (2*(3+5)=16)
 
-### P3: Unify Condition/Restart with Effects [DONE] (Review Needed)
+### P2: Unify Condition/Restart with Effects [DONE] (Review Needed)
 
-- [DONE] (Review Needed) Label: I14-p3-unify-conditions-effects
+- [DONE] (Review Needed) Label: I14-p2-unify-conditions-effects
   Objective: Reimplement conditions/restarts on top of effect system.
   Where: `runtime/src/condition.c`, `runtime/src/condition.h`, `runtime/src/effect.c`
   What was done:
@@ -454,9 +437,9 @@ integration order is: continuations → regions → trampolines → effects → 
          for signaling. Handlers using `handle` form can catch condition effects.
   Note: Lisp-level `signal`, `handler-case`, `restart-case` require separate codegen work.
 
-### P4: Iterator-Generator Integration [DONE] (Review Needed)
+### P3: Iterator-Generator Integration [DONE] (Review Needed)
 
-- [DONE] (Review Needed) Label: I14-p4-iterator-generator
+- [DONE] (Review Needed) Label: I14-p3-iterator-generator
   Objective: Implement iterators using generator continuations.
   Where: `runtime/src/iterator.c`, `runtime/src/memory/continuation.c`
   What was done:
@@ -703,7 +686,7 @@ integration order is: continuations → regions → trampolines → effects → 
 | 9 | TODO | Algebraic effects, continuations, typed arrays |
 | 10 | TODO | IPGE integration, region realloc |
 | 11 | TODO | Build/test consolidation |
-| 14 | DONE (Review) | **Continuation infrastructure** (P0, P2, P3, P4 DONE; P1 OPTIONAL/deferred) |
+| 14 | DONE (Review) | **Continuation infrastructure** (P0-P3 DONE; trampolines intentionally separate) |
 | 15 | TODO | **Arena & memory system enhancements** |
 | 16 | DONE (Review) | **Region-RC dynamic closure integration** |
 | 17 | DONE (Review) | **Remaining integration tasks (array growth, print functions)** |

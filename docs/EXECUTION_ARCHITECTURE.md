@@ -39,7 +39,57 @@ OmniLisp supports two levels of concurrency:
 
 ---
 
-## 4. Portability & Compliance
+## 4. Control Flow Architecture
+
+OmniLisp has two **intentionally separate** control flow mechanisms:
+
+### 4.1 Trampolines (Tail Call Optimization)
+
+**Location:** `runtime/src/trampoline.c`
+
+Trampolines provide stack-safe mutual recursion via explicit thunks ("bounce" objects).
+They are a simple, self-contained mechanism that does NOT use continuations.
+
+```text
+func() → bounce(next_func, args) → trampoline loop → func() → ... → result
+```
+
+- **Purpose:** Prevent stack overflow in tail-recursive code
+- **Implementation:** Mark field hack to store function pointers in bounce objects
+- **Scope:** Local optimization, no control flow capture
+
+### 4.2 Continuations & CEK Machine (Advanced Control Flow)
+
+**Location:** `runtime/src/memory/continuation.c`
+
+The CEK machine provides delimited continuations for advanced control flow abstractions:
+
+```text
+prompt → computation → effect/yield → capture continuation → handler → resume
+```
+
+- **Algebraic Effects:** `handle`/`perform`/`resume` for composable error handling
+- **Generators:** `yield` suspends computation, returns continuation
+- **Fibers:** Cooperative multitasking via continuation switching
+
+**Key Design Decision:** Trampolines and continuations are **not unified** because:
+1. Trampolines solve a simpler problem (tail calls) with minimal overhead
+2. Continuations require heap-allocated frames and region integration
+3. Mixing them would add complexity without benefit
+4. They serve different abstraction levels
+
+### 4.3 Region-Continuation Integration
+
+Continuation prompts are integrated with CTRR regions:
+- Each `prompt` creates a child region
+- `capture` transmigrates frame contents to parent region
+- `prompt_exit` reclaims the prompt's region
+
+This ensures memory safety for captured continuations without GC.
+
+---
+
+## 5. Portability & Compliance
 
 - **Core**: ANSI C99.
 - **Synchronization**: POSIX pthreads.
