@@ -357,4 +357,10 @@ void effect_trace_record(Effect* eff);
 /* Clear effect trace */
 void effect_trace_clear(void);
 
+/* Mark a trace entry as handled (called when handler catches effect) */
+void effect_trace_mark_handled(int index);
+
+/* Get index of last recorded trace entry (-1 if empty) */
+int effect_trace_last_index(void);
+
 #endif /* OMNI_EFFECT_H */

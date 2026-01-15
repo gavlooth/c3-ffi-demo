@@ -239,14 +239,19 @@ Before beginning ANY implementation subtask:
 - `try`/`catch` syntax is explicitly NOT supported
 - Must satisfy existing test stubs in `runtime/tests`
 
-### P0: Effect Tracing & Fiber Callbacks [TODO]
+### P0: Effect Tracing & Fiber Callbacks [IN_PROGRESS]
 
-- [TODO] Label: I9-t4-effect-tracing
+- [DONE] (Review Needed) Label: I9-t4-effect-tracing
   Objective: Implement effect trace printing, recording, and clearing.
   Where: `runtime/src/effect.c`
-  Why: 4 TODOs currently block effect system observability.
-  What to change: Implement `omni_effect_trace_print`, `omni_effect_trace_record`, etc.
-  Verification: New test `runtime/tests/test_effect_tracing.c` passes.
+  What was done:
+    1. Added TraceEntry struct and ring buffer (256 entries)
+    2. Implemented `effect_trace_print()` - prints trace to stdout
+    3. Implemented `effect_trace_to_string()` - returns trace as malloc'd string
+    4. Implemented `effect_trace_record()` - records effect with timestamp
+    5. Implemented `effect_trace_clear()` - clears trace buffer
+    6. Added `effect_trace_mark_handled()` and `effect_trace_last_index()` helpers
+  Verification: `runtime/tests/test_effect_tracing.c` passes (10 tests).
 
 - [TODO] Label: I9-t5-continuation-repair
   Objective: Complete fiber callback execution (on_fulfill, on_reject) and error handling.

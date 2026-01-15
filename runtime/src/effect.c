@@ -36,6 +36,21 @@ static pthread_once_t handler_key_once = PTHREAD_ONCE_INIT;
 /* Effect tracing */
 static bool trace_enabled = false;
 
+/* Trace buffer for effect events */
+#define TRACE_BUFFER_SIZE 256
+
+typedef struct {
+    const char* effect_name;    /* Effect type name (borrowed, not owned) */
+    const char* source_file;    /* Source file (borrowed) */
+    int source_line;            /* Source line */
+    uint64_t timestamp;         /* Monotonic timestamp (for ordering) */
+    bool was_handled;           /* Was this effect handled? */
+} TraceEntry;
+
+static TraceEntry trace_buffer[TRACE_BUFFER_SIZE];
+static int trace_count = 0;
+static uint64_t trace_timestamp = 0;
+
 /* Built-in effect types */
 EffectType* EFFECT_FAIL = NULL;
 EffectType* EFFECT_ASK = NULL;
@@ -605,13 +620,54 @@ void handler_stack_print(void) {
 }
 
 void effect_trace_print(void) {
-    /* TODO: Implement effect trace printing */
-    printf("(effect trace not yet implemented)\n");
+    if (trace_count == 0) {
+        printf("(effect trace empty)\n");
+        return;
+    }
+    printf("Effect trace (%d events):\n", trace_count);
+    for (int i = 0; i < trace_count; i++) {
+        TraceEntry* e = &trace_buffer[i];
+        printf("  [%d] %s", i, e->effect_name ? e->effect_name : "(unknown)");
+        if (e->source_file) {
+            printf(" at %s:%d", e->source_file, e->source_line);
+        }
+        printf(" %s\n", e->was_handled ? "(handled)" : "(unhandled)");
+    }
 }
 
 char* effect_trace_to_string(void) {
-    /* TODO: Implement effect trace to string */
-    return strdup("(effect trace not yet implemented)");
+    if (trace_count == 0) {
+        return strdup("(effect trace empty)");
+    }
+
+    /* Estimate buffer size: ~100 chars per entry */
+    size_t buf_size = 64 + (trace_count * 128);
+    char* buf = malloc(buf_size);
+    if (!buf) return strdup("(allocation failed)");
+
+    char* p = buf;
+    int remaining = (int)buf_size;
+    int written = snprintf(p, remaining, "Effect trace (%d events):\n", trace_count);
+    p += written;
+    remaining -= written;
+
+    for (int i = 0; i < trace_count && remaining > 0; i++) {
+        TraceEntry* e = &trace_buffer[i];
+        if (e->source_file) {
+            written = snprintf(p, remaining, "  [%d] %s at %s:%d %s\n",
+                i, e->effect_name ? e->effect_name : "(unknown)",
+                e->source_file, e->source_line,
+                e->was_handled ? "(handled)" : "(unhandled)");
+        } else {
+            written = snprintf(p, remaining, "  [%d] %s %s\n",
+                i, e->effect_name ? e->effect_name : "(unknown)",
+                e->was_handled ? "(handled)" : "(unhandled)");
+        }
+        p += written;
+        remaining -= written;
+    }
+
+    return buf;
 }
 
 /* ============================================================
@@ -627,12 +683,38 @@ bool effect_trace_is_enabled(void) {
 }
 
 void effect_trace_record(Effect* eff) {
-    /* TODO: Implement effect trace recording */
-    if (trace_enabled && eff && eff->type) {
-        printf("[trace] perform %s\n", eff->type->name);
+    if (!trace_enabled || !eff) return;
+
+    /* Ring buffer: overwrite oldest if full */
+    int idx = trace_count;
+    if (trace_count >= TRACE_BUFFER_SIZE) {
+        /* Shift buffer left by 1 (discard oldest) */
+        memmove(&trace_buffer[0], &trace_buffer[1],
+                (TRACE_BUFFER_SIZE - 1) * sizeof(TraceEntry));
+        idx = TRACE_BUFFER_SIZE - 1;
+    } else {
+        trace_count++;
+    }
+
+    TraceEntry* e = &trace_buffer[idx];
+    e->effect_name = eff->type ? eff->type->name : NULL;
+    e->source_file = eff->source_file;
+    e->source_line = eff->source_line;
+    e->timestamp = trace_timestamp++;
+    e->was_handled = false;  /* Will be updated when handled */
+}
+
+void effect_trace_mark_handled(int index) {
+    if (index >= 0 && index < trace_count) {
+        trace_buffer[index].was_handled = true;
     }
 }
 
+int effect_trace_last_index(void) {
+    return trace_count > 0 ? trace_count - 1 : -1;
+}
+
 void effect_trace_clear(void) {
-    /* TODO: Implement effect trace clearing */
+    trace_count = 0;
+    trace_timestamp = 0;
 }
