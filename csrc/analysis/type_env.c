@@ -117,6 +117,7 @@ ConcreteType* concrete_type_union(ConcreteType** member_types, int member_count)
 
     type->kind = TYPE_KIND_UNION;
 
+    // REVIEWED:NAIVE
     /* Copy and deduplicate member types */
     type->type_union.member_types = malloc(sizeof(ConcreteType*) * member_count);
     if (!type->type_union.member_types) {
@@ -238,6 +239,7 @@ bool concrete_type_equals(ConcreteType* a, ConcreteType* b) {
             }
             return true;
 
+// REVIEWED:NAIVE
         case TYPE_KIND_UNION:
             if (a->type_union.member_count != b->type_union.member_count) {
                 return false;
@@ -380,6 +382,8 @@ void type_env_bind(TypeEnv* env, const char* var_name, ConcreteType* type) {
     env->bindings = binding;
 }
 
+/* TESTED */
+// REVIEWED:NAIVE
 ConcreteType* type_env_lookup(TypeEnv* env, const char* var_name) {
     if (!env || !var_name) return NULL;
 

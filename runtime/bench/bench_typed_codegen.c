@@ -227,7 +227,7 @@ void bench_typed_codegen_symbol_new(void) {
 
             Obj* sym = alloc_obj_typed(r, TYPE_ID_SYMBOL);
             sym->tag = TAG_SYM;
-            sym->ptr = strdup(sym_name);  // Symbols need string storage (uses ptr field)
+            sym->ptr = region_strdup(r, sym_name);  // Use region allocation, not heap strdup
             (void)sym;
         }
 

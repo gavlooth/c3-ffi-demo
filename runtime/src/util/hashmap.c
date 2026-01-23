@@ -1,4 +1,5 @@
 #include "hashmap.h"
+#include "wyhash.h"
 #include "../memory/region_core.h"
 #include <stdlib.h>
 #include <string.h>
@@ -7,27 +8,19 @@
 #define MAX_LOAD_FACTOR 0.75f
 
 /*
- * Hash function for pointer keys.
+ * Hash function for pointer keys using wyhash64.
  *
  * CRITICAL: This MUST match the inline fast-path hash in
  * `runtime/src/util/hashmap.h` (`hashmap_get`), otherwise lookups
  * will fail (put uses one hash, get uses another).
  *
- * The project uses a small "FNV-like" mixing sequence for pointer keys:
- *   hash = (size_t)key;
- *   hash ^= hash >> 7;
- *   hash *= 0x100000001b3;
- *   hash ^= hash >> 11;
+ * Uses wyhash64 - a high-quality 64-bit mixer that passes BigCrush/PractRand.
+ * Much better avalanche than the previous FNV-like sequence.
+ * See: https://github.com/wangyi-fudan/wyhash (public domain)
  */
 static size_t hash_ptr(void* ptr)
 {
-    size_t hash = (size_t)ptr;
-
-    hash ^= hash >> 7;
-    hash *= 0x100000001b3;
-    hash ^= hash >> 11;
-
-    return hash;
+    return (size_t)wyhash64((uint64_t)(uintptr_t)ptr, 0x9E3779B97F4A7C15ULL);
 }
 
 // Create with default capacity
@@ -63,17 +56,16 @@ void hashmap_free(HashMap* map) {
     free(map);
 }
 
-// Free all entries
+// Free all entries (logical clear only)
+// Note: Does NOT free individual entries - in region-based memory management,
+// entries may be allocated from regions (via hashmap_put_region) and
+// calling free() on them would corrupt the heap. Memory is reclaimed
+// when the owning region is destroyed.
 void hashmap_free_entries(HashMap* map) {
     if (!map) return;
 
     for (size_t i = 0; i < map->bucket_count; i++) {
-        HashEntry* entry = map->buckets[i];
-        while (entry) {
-            HashEntry* next = entry->next;
-            free(entry);
-            entry = next;
-        }
+        /* Just clear the bucket pointer - don't free entries */
         map->buckets[i] = NULL;
     }
     map->entry_count = 0;
@@ -216,6 +208,10 @@ void hashmap_put(HashMap* map, void* key, void* value) {
 }
 
 // Remove key
+// Note: Does NOT free the entry - in region-based memory management,
+// entries may be allocated from regions (via hashmap_put_region) and
+// calling free() on them would corrupt the heap. Memory is reclaimed
+// when the owning region is destroyed.
 void* hashmap_remove(HashMap* map, void* key) {
     if (!map) return NULL;
 
@@ -227,7 +223,7 @@ void* hashmap_remove(HashMap* map, void* key) {
         if (entry->key == key) {
             void* value = entry->value;
             *prev = entry->next;
-            free(entry);
+            /* Don't free(entry) - may be region-allocated */
             map->entry_count--;
             return value;
         }

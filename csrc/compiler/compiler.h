@@ -26,6 +26,10 @@ typedef struct CompilerOptions {
     bool emit_c_only;             /* Just emit C code, don't compile */
     bool verbose;                 /* Verbose output */
 
+    /* Module/shared library mode */
+    bool shared_mode;             /* Compile as shared library module */
+    const char* module_name;      /* Module name for shared library */
+
     /* Runtime options */
     const char* runtime_path;     /* Path to runtime library */
     bool use_embedded_runtime;    /* Use embedded runtime */
@@ -116,6 +120,11 @@ void omni_compiler_cleanup(void);
 
 /* Get compiler version string */
 const char* omni_compiler_version(void);
+
+/* Desugar syntactic sugar to core forms (for REPL inspection)
+ * Returns a newly allocated string that must be freed by caller.
+ * Desugars: if->match, and->if, or->let+if, cond->if chain */
+char* omni_compiler_desugar(const char* source);
 
 #ifdef __cplusplus
 }

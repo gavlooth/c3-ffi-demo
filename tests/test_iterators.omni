@@ -8,23 +8,27 @@
 (println "Remaining: " (collect-list r))
 
 (println "\n--- Testing Map ---")
+; REVIEWED:SYNTAX
 (define m (map (lambda [x] (* x 2)) (range 1 6)))
 (println "Map iterator: " m)
 (println "Realized: " (collect-list m))
 
 (println "\n--- Testing Filter ---")
+; REVIEWED:SYNTAX
 (define f (filter (lambda [x] (= (% x 2) 0)) (range 10)))
 (println "Filter iterator: " f)
 (println "Realized: " (collect-list f))
 
 (println "\n--- Testing Array Realization ---")
-(define arr (collect-array (map (lambda [x] (* x 10)) (range 3))))
+; REVIEWED:SYNTAX
+(define arr (collect-array (map (lambda [x] (* x 10)) (range 3)))
 (println "Array from map: " arr)
 (println "Is result an Array? " (type? arr Array))
 
 (println "\n--- Testing Pipeline ---")
 ;; (->> (range 10) (filter even?) (map square) (collect-list))
-(define pipeline (collect-list (map (lambda [x] (* x x)) (filter (lambda [x] (= (% x 2) 0)) (range 10)))))
+; REVIEWED:SYNTAX
+(define pipeline (collect-list (map (lambda [x] (* x x)) (filter (lambda [x] (= (% x 2) 0)) (range 10))))
 (println "Pipeline result: " pipeline)
 
 (println "\nSUCCESS: Iterator tests complete.")

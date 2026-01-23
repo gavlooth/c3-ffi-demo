@@ -1,0 +1,308 @@
+;; test_iterators_piping.omni - High-level tests for iterator and piping features
+;;
+;; Tests for functions in runtime/src/iterator.c and runtime/src/piping.c
+;; that were previously untested or had minimal tests.
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+(define test-num [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (= expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+(define test-bool [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (equal? expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+(define test-eq [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (equal? expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+;; ============================================================
+;; Basic Iterator Operations
+;; ============================================================
+
+(print "")
+(print "=== Basic Iterator Operations ===")
+
+;; Test 1: first on list
+(test-num "first on list"
+  1
+  (first '(1 2 3)))
+
+;; Test 2: first on single element
+(test-num "first on single element"
+  42
+  (first '(42)))
+
+;; Test 3: rest on list
+(test-eq "rest on list"
+  '(2 3)
+  (rest '(1 2 3)))
+
+;; Test 4: rest on single element
+(test-eq "rest on single element"
+  ()
+  (rest '(42)))
+
+;; Test 5: has-next on non-empty list
+(test-bool "has-next on non-empty list"
+  true
+  (has-next? '(1 2 3)))
+
+;; Test 6: has-next on empty list
+(test-bool "has-next on empty list"
+  false
+  (has-next? ()))
+
+;; ============================================================
+;; Take Operation
+;; ============================================================
+
+(print "")
+(print "=== Take Operation ===")
+
+;; Test 7: take from list
+(test-eq "take 3 from list"
+  '(1 2 3)
+  (take 3 '(1 2 3 4 5)))
+
+;; Test 8: take 0 elements
+(test-eq "take 0 elements"
+  ()
+  (take 0 '(1 2 3)))
+
+;; Test 9: take more than list length
+(test-eq "take more than list"
+  '(1 2 3)
+  (take 10 '(1 2 3)))
+
+;; Test 10: take from single element
+(test-eq "take from single element"
+  '(1)
+  (take 1 '(1)))
+
+;; ============================================================
+;; Range Operation
+;; ============================================================
+
+(print "")
+(print "=== Range Operation ===")
+
+;; Test 11: range 5
+(test-eq "range 5"
+  '(0 1 2 3 4)
+  (range 5))
+
+;; Test 12: range 0
+(test-eq "range 0"
+  ()
+  (range 0))
+
+;; Test 13: range 1
+(test-eq "range 1"
+  '(0)
+  (range 1))
+
+;; Test 14: range 10
+(test-eq "range 10"
+  '(0 1 2 3 4 5 6 7 8 9)
+  (range 10))
+
+;; ============================================================
+;; Collect Operation
+;; ============================================================
+
+(print "")
+(print "=== Collect Operation ===")
+
+;; Test 15: collect to array (default)
+(test-eq "collect to array"
+  [1 2 3]
+  (collect '(1 2 3)))
+
+;; Test 16: collect to list
+(test-eq "collect to list"
+  '(1 2 3)
+  (collect '(1 2 3) 'list))
+
+;; Test 17: collect range to array
+(test-eq "collect range"
+  [0 1 2 3 4]
+  (collect (range 5)))
+
+;; Test 18: collect empty sequence
+(test-eq "collect empty"
+  []
+  (collect ()))
+
+;; ============================================================
+;; Pipe Operator
+;; ============================================================
+
+(print "")
+(print "=== Pipe Operator ===")
+
+;; Define helper functions for testing
+(define inc [x] (+ x 1))
+(define square [x] (* x x))
+(define double [x] (* x 2))
+
+;; Test 19: basic pipe
+(test-num "basic pipe"
+  6
+  (5 |> inc))
+
+;; Test 20: pipe with square
+(test-num "pipe with square"
+  25
+  (5 |> square))
+
+;; Test 21: chain two pipes
+(test-num "chain two pipes"
+  36
+  (5 |> inc |> square))
+
+;; Test 22: chain three pipes
+(test-num "chain three pipes"
+  52
+  (5 |> inc |> double |> inc))
+
+;; Test 23: pipe with double
+(test-num "pipe with double"
+  10
+  (5 |> double))
+
+;; ============================================================
+;; Method Chaining
+;; ============================================================
+
+(print "")
+(print "=== Method Chaining ===")
+
+;; Test 24: simple method chain via pipe
+;; Note: prim_method_chain is low-level, we test via pipe
+(test-num "method chain via pipe"
+  4
+  (3 |> inc |> inc))
+
+;; Test 25: multiple operations
+(test-num "multiple operations"
+  10
+  (0 |> inc |> inc |> inc |> inc |> inc |> inc |> inc |> inc |> inc |> inc))
+
+;; ============================================================
+;; Function Composition
+;; ============================================================
+
+(print "")
+(print "=== Function Composition ===")
+
+;; Test 26: basic compose (via manual chaining)
+(test-num "compose via pipes"
+  36
+  (5 |> inc |> square))
+
+;; Test 27: compose with double
+(test-num "compose with double"
+  12
+  (5 |> inc |> double))
+
+;; ============================================================
+;; Iterator and Take Combined
+;; ============================================================
+
+(print "")
+(print "=== Iterator and Take Combined ===")
+
+;; Test 28: take from range
+(test-eq "take from range"
+  '(0 1 2)
+  (take 3 (range 10)))
+
+;; Test 29: take from range then collect
+(test-eq "take then collect"
+  [0 1 2 3 4]
+  (collect (take 5 (range 20))))
+
+;; Test 30: nested take
+(test-eq "nested take"
+  '(0 1 2)
+  (take 3 (take 5 (range 10))))
+
+;; ============================================================
+;; Edge Cases and Error Handling
+;; ============================================================
+
+(print "")
+(print "=== Edge Cases ===")
+
+;; Test 31: first on empty list
+;; This might return NULL or error, testing behavior
+(define result-first-empty (first ()))
+(if (equal? result-first-empty ())
+    (print "PASS: first on empty list returns ()")
+    (print "FAIL: first on empty list did not return ()"))
+
+;; Test 32: rest on empty list
+(define result-rest-empty (rest ()))
+(if (equal? result-rest-empty ())
+    (print "PASS: rest on empty list returns ()")
+    (print "FAIL: rest on empty list did not return ()"))
+
+; REVIEWED:SYNTAX
+;; Test 33: pipe with identity
+(test-num "pipe identity"
+  42
+  (42 |> (fn (x) x)))
+
+;; Test 34: take -1 (edge case)
+(test-eq "take negative"
+  ()
+  (take -1 '(1 2 3)))
+
+;; ============================================================
+;; Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

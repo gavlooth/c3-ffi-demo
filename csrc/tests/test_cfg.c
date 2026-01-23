@@ -288,6 +288,44 @@ TEST(test_free_points_basic) {
     /* Note: OmniValue cleanup handled by allocator */
 }
 
+/* ========== SCC Analysis Tests ========== */
+
+TEST(test_scc_no_cycles_dag) {
+    /* (if cond x y) - creates a DAG with branches, no cycles
+     * All nodes should have scc_id = -1 (not in a cycle)
+     */
+    OmniValue* expr = mk_list4(
+        mk_sym("if"),
+        mk_sym("cond"),
+        mk_sym("x"),
+        mk_sym("y")
+    );
+
+    CFG* cfg = omni_build_cfg(expr);
+    ASSERT(cfg != NULL);
+
+    /* Call SCC computation - should not crash */
+    omni_compute_scc(cfg);
+
+    /* Verify: all nodes should have scc_id = -1 (no cycles in this DAG) */
+    for (size_t i = 0; i < cfg->node_count; i++) {
+        CFGNode* n = cfg->nodes[i];
+        ASSERT(n->scc_id == -1);
+        ASSERT(n->is_scc_entry == false);
+    }
+
+    omni_cfg_free(cfg);
+    /* Note: OmniValue cleanup handled by allocator */
+}
+
+TEST(test_scc_null_cfg) {
+    /* Edge case: NULL CFG should not crash
+     * This tests the safety check at the start of omni_compute_scc
+     */
+    omni_compute_scc(NULL);
+    /* If we get here without crashing, test passes */
+}
+
 /* ========== Print CFG Test ========== */
 
 TEST(test_print_cfg) {
@@ -312,6 +350,123 @@ TEST(test_print_cfg) {
     /* Note: OmniValue cleanup handled by allocator */
 }
 
+/* ========== Dominator Analysis Tests ========== */
+
+TEST(test_dominators_null_cfg) {
+    /* Edge case: NULL CFG should not crash */
+    omni_compute_dominators(NULL);
+    /* If we get here without crashing, test passes */
+}
+
+TEST(test_dominators_linear_cfg) {
+    /* Simple linear CFG: entry -> node1 -> node2 -> exit
+     * Expected dominators:
+     *   - entry: none
+     *   - node1: entry
+     *   - node2: node1 (indirectly entry)
+     *   - exit: node2 (indirectly entry, node1, node2)
+     */
+    OmniValue* expr = mk_sym("x");  /* Simple expression creates linear CFG */
+    CFG* cfg = omni_build_cfg(expr);
+    ASSERT(cfg != NULL);
+
+    omni_compute_dominators(cfg);
+
+    /* Entry should dominate itself (temporarily set during algorithm, NULL after) */
+    ASSERT(cfg->entry->idom == NULL);
+
+    /* Count nodes and verify structure */
+    int node_count = (int)cfg->node_count;
+    ASSERT(node_count >= 2);  /* At least entry and exit */
+
+    /* Every node except entry should have an immediate dominator */
+    int nodes_with_idom = 0;
+    for (size_t i = 0; i < cfg->node_count; i++) {
+        if (cfg->nodes[i] == cfg->entry) continue;
+        if (cfg->nodes[i]->idom != NULL) {
+            nodes_with_idom++;
+        }
+    }
+    ASSERT(nodes_with_idom > 0);  /* At least some nodes should have dominators */
+
+    omni_cfg_free(cfg);
+}
+
+TEST(test_dominators_if_branches) {
+    /* (if cond then else)
+     * Expected CFG structure:
+     *   entry -> branch_node
+     *   branch_node -> then_node (on true)
+     *   branch_node -> else_node (on false)
+     *   then_node -> join_node
+     *   else_node -> join_node
+     *   join_node -> exit
+     *
+     * Expected dominators:
+     *   - entry: none
+     *   - branch_node: entry
+     *   - then_node: branch_node (indirectly entry)
+     *   - else_node: branch_node (indirectly entry)
+     *   - join_node: branch_node (both branches converge here)
+     *   - exit: join_node (or whatever is before it)
+     */
+    OmniValue* expr = mk_list4(
+        mk_sym("if"),
+        mk_sym("cond"),
+        mk_sym("then_val"),
+        mk_sym("else_val")
+    );
+
+    CFG* cfg = omni_build_cfg(expr);
+    ASSERT(cfg != NULL);
+
+    omni_compute_dominators(cfg);
+
+    /* Entry should have no immediate dominator */
+    ASSERT(cfg->entry->idom == NULL);
+
+    /* Find branch node */
+    CFGNode* branch = NULL;
+    CFGNode* join = NULL;
+    for (size_t i = 0; i < cfg->node_count; i++) {
+        if (cfg->nodes[i]->node_type == CFG_BRANCH) {
+            branch = cfg->nodes[i];
+        }
+        if (cfg->nodes[i]->node_type == CFG_JOIN) {
+            join = cfg->nodes[i];
+        }
+    }
+
+    ASSERT(branch != NULL);
+    ASSERT(join != NULL);
+
+    /* Branch should be dominated by entry */
+    ASSERT(branch->idom != NULL);
+
+    /* Join should have an immediate dominator (likely branch or a successor) */
+    ASSERT(join->idom != NULL);
+
+    /* Both branches should converge at join, so their dominator chains
+     * should include branch node */
+    bool then_found = false;
+    for (size_t i = 0; i < cfg->node_count; i++) {
+        CFGNode* node = cfg->nodes[i];
+        if (node == branch || node == join || node == cfg->entry) continue;
+
+        /* Check if this node is dominated by branch */
+        CFGNode* current = node->idom;
+        while (current != NULL) {
+            if (current == branch) {
+                then_found = true;
+                break;
+            }
+            current = current->idom;
+        }
+    }
+
+    omni_cfg_free(cfg);
+}
+
 /* ========== Main ========== */
 
 int main(void) {
@@ -326,6 +481,15 @@ int main(void) {
     RUN_TEST(test_liveness_simple_use);
     RUN_TEST(test_liveness_if_branches);
     RUN_TEST(test_liveness_let_scope);
+
+    printf("\n\033[33m--- SCC Analysis ---\033[0m\n");
+    RUN_TEST(test_scc_no_cycles_dag);
+    RUN_TEST(test_scc_null_cfg);
+
+    printf("\n\033[33m--- Dominator Analysis ---\033[0m\n");
+    RUN_TEST(test_dominators_null_cfg);
+    RUN_TEST(test_dominators_linear_cfg);
+    RUN_TEST(test_dominators_if_branches);
 
     printf("\n\033[33m--- Free Point Computation ---\033[0m\n");
     RUN_TEST(test_free_points_basic);

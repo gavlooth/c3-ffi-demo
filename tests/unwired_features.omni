@@ -5,14 +5,14 @@
 
 (println "--- 1. Testing Multiple Dispatch (UNWIRED) ---")
 ;; Type Specialization - uncomment when dispatch is wired
-;; (define (describe-val x {Int}) "It's an integer")
-;; (define (describe-val x {String}) "It's a string")
+;; (define describe-val [x {Int}] "It's an integer")
+;; (define describe-val [x {String}] "It's a string")
 ;; (println "Dispatch (Int): " (describe-val 42))
 ;; (println "Dispatch (String): " (describe-val "hi"))
 
 ;; Multi-arity - uncomment when multi-arity is wired
-;; (define (area) 0)
-;; (define (area r) (* 3.14 (* r r)))
+;; (define area [] 0)
+;; (define area [r] (* 3.14 (* r r)))
 ;; (println "Arity 0: " (area))
 ;; (println "Arity 1: " (area 5))
 (println "SKIPPED: Multiple dispatch / Multi-arity not yet implemented")

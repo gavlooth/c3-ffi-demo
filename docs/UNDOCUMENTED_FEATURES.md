@@ -37,38 +37,64 @@ The module system provides namespace isolation with explicit exports.
 
 ## 2. Macro System
 
-**Status:** Implemented in `src/runtime/eval/omni_eval.c`.
+**Status:** Not yet implemented. Design documented here.
 
-OmniLisp supports hygienic macros using `syntax-rules` style pattern matching.
+OmniLisp will support Scheme-style hygienic macros with pattern-based transformation rules.
 
 ### Syntax Transformers
 
-```lisp
-(define-syntax name
-  (syntax-rules (literal1 literal2 ...)
-    ((name pattern1) template1)
-    ((name pattern2) template2)))
-```
-
-**Example:**
-```lisp
-(define-syntax when
-  (syntax-rules ()
-    ((when test stmt1 stmt2 ...)
-     (if test
-         (begin stmt1 stmt2 ...)
-         nothing))))
-```
-
-### `define [syntax ...]` (Alternative)
-
-There is also a `define` format for syntax transformers:
+Using OmniLisp's unified `define` with slot syntax:
 
 ```lisp
-(define [syntax my-macro]
-  [literals (else)]
-  [(my-macro pattern) template])
+(define [syntax name]
+  [literals symbol1 symbol2 ...]    ;; symbols that match literally (not as pattern vars)
+  [(name pattern1) template1]
+  [(name pattern2) template2])
 ```
+
+**Note:** Keywords (`:foo`) desugar to quoted symbols (`'foo`). In OmniLisp, `:else` and `'else` are equivalent—both are just the symbol `else`. Use whichever is clearer in context.
+
+### Examples
+
+```lisp
+;; Simple macro - no literals needed
+(define [syntax when]
+  [(when test body ...)
+   (if test (do body ...) nil)])
+
+;; Macro with literal keywords
+;; 'else' matches the symbol literally, not as a pattern variable
+(define [syntax cond]
+  [literals else]
+  [(cond (else result))
+   result]
+  [(cond (test result) clause ...)
+   (if test result (cond clause ...))])
+
+;; Multiple literals
+(define [syntax case]
+  [literals else =>]
+  [(case val (else result))
+   result]
+  [(case val (datum => proc) clause ...)
+   (if (eqv? val 'datum) (proc val) (case val clause ...))]
+  [(case val (datum result) clause ...)
+   (if (eqv? val 'datum) result (case val clause ...))])
+```
+
+### Pattern Syntax
+
+| Pattern | Matches |
+|---------|---------|
+| `symbol` | Binds any expression to `symbol` |
+| `literal` | Matches the literal symbol exactly (if in `[literals ...]`) |
+| `(p1 p2 ...)` | Matches a list with elements matching p1, p2, etc. |
+| `(p1 ... pN)` | `...` matches zero or more of the preceding pattern |
+| `[p1 p2 ...]` | Matches an array/vector |
+
+### Hygiene
+
+Macros are hygienic by default—identifiers introduced by the macro cannot capture or be captured by identifiers in the macro use site. This prevents accidental variable shadowing without requiring manual `gensym`.
 
 ---
 
@@ -76,18 +102,45 @@ There is also a `define` format for syntax transformers:
 
 **Status:** Partially implemented in compiler analysis (`csrc/analysis/`) and runtime registry.
 
-### `deftype` and `defstruct`
+### Type Definitions (Julia-style via `define`)
 
-Used to define new data types and structures.
+Types are defined using the unified `define` form with Kind `{}` syntax, following Julia's type system conventions.
 
 ```lisp
-;; Define a product type (struct)
-(defstruct Point (x Int) (y Int))
+;; Abstract type (cannot be instantiated)
+(define {abstract Number})
+(define ^:parent {Number} {abstract Integer})
 
-;; Define a sum type (tagged union)
-(deftype Option
-  (Some value)
-  (None))
+;; Struct (product type) - immutable by default
+(define {struct Point}
+  [x {Int}]
+  [y {Int}])
+
+;; Struct with parent type
+(define ^:parent {Shape} {struct Circle}
+  [center {Point}]
+  [radius {Float}])
+
+;; Parametric struct (generics)
+(define {struct [Pair T]}
+  [first {T}]
+  [second {T}])
+
+;; Mutable struct
+(define ^:mutable {struct Player}
+  [hp {Int}]
+  [name {String}])
+
+;; Enum (sum type)
+(define {enum Color} Red Green Blue)
+
+;; Parametric enum
+(define {enum [Option T]}
+  (Some [value {T}])
+  None)
+
+;; Union type
+(define {IntOrString} (union [{Int} {String}]))
 ```
 
 ### `define [grammar ...]` (Pika Parser)

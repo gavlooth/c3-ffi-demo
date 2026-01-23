@@ -45,58 +45,79 @@ All 5 backlog items from ARCHITECTURE.md have been implemented with full test co
 
 ## Part 1: Future Optimizations
 
-### O.1 Compile-Time RC Elimination (High Impact)
+### O.1 Compile-Time RC Elimination (High Impact) ✅ INTEGRATED
 
 **Source**: Lobster language, Perceus (PLDI 2021)
 
 **Problem**: Many `region_retain`/`region_release` pairs are provably unnecessary.
 
-**Current State**: Uniqueness analysis in `csrc/analysis/` tracks variables but doesn't eliminate all redundant ops.
+**Status**: ✅ **INTEGRATED** (2026-01-18)
 
-**Proposed Enhancement**:
-```
-Before:  region_retain(r); use(x); region_release(r);
-After:   use(x);  // Proven unique, skip RC entirely
+**Implementation**: `csrc/codegen/codegen.c` (Perceus Reuse & Lobster RC Elision section)
+- `codegen_can_elide_inc()` / `codegen_can_elide_dec()` - query elision analysis
+- `codegen_emit_dec_ref()` / `codegen_emit_inc_ref()` - emit with elision
+- `emit_ownership_free()` - RC cases check elision before emitting dec_ref
+- `omni_codegen_emit_cfg_frees()` - CFG-aware frees with elision
+
+**Elision Classes** (from `csrc/analysis/analysis.h`):
+- `RC_ELIDE_BOTH` - Variable is unique or stack-allocated (skip both inc/dec)
+- `RC_ELIDE_DEC` - Variable is arena/pool-allocated (bulk free, skip dec)
+- `RC_ELIDE_INC` - Variable is borrowed (don't own it, skip inc)
+- `RC_REQUIRED` - Must use RC (shared heap reference)
+
+**Generated Code**:
+```c
+// Before (no elision)
+dec_ref(x);
+
+// After (elision enabled)
+/* RC_ELIDED: dec_ref(x) - unique */
 ```
 
-| Task | Description | Effort |
+| Task | Description | Status |
 |------|-------------|--------|
-| O.1.1 | Extend uniqueness analysis to handle more patterns | Medium |
-| O.1.2 | Track borrowed references through function calls | Medium |
-| O.1.3 | Eliminate retain/release pairs for provably-unique paths | Small |
-| O.1.4 | Add statistics: "X% of RC operations eliminated" | Small |
+| O.1.1 | Extend uniqueness analysis to handle more patterns | ✅ Done |
+| O.1.2 | Track borrowed references through function calls | ✅ Done |
+| O.1.3 | Eliminate retain/release pairs for provably-unique paths | ✅ Done |
+| O.1.4 | Add statistics: "X% of RC operations eliminated" | TODO |
 
 **Expected Impact**: 30-50% reduction in RC operations for typical code.
 
 ---
 
-### O.2 Active Reuse Transformation (High Impact)
+### O.2 Active Reuse Transformation (High Impact) ✅ INTEGRATED
 
 **Source**: Perceus FBIP (Functional But In-Place)
 
 **Problem**: Reuse analysis exists but codegen doesn't actively transform code.
 
-**Current State**: `analysis_reuse.c` finds candidates, `codegen_alloc` helper exists.
+**Status**: ✅ **INTEGRATED** (2026-01-18)
 
-**Proposed Enhancement**:
-```scheme
-;; Before (two allocations)
-(let [x (cons 1 2)]
-  (let [y (cons 3 4)]  ;; x is dead here
-    y))
+**Implementation**: `csrc/codegen/codegen.c` (Perceus Reuse & Lobster RC Elision section)
+- `codegen_get_reuse()` - query reuse candidates from analysis
+- `codegen_emit_reuse_int()` - emit REUSE_OR_NEW_INT if candidate found
+- `codegen_emit_reuse_float()` - emit REUSE_OR_NEW_FLOAT if candidate found
+- `codegen_emit_reuse_cell()` - emit REUSE_OR_NEW_CELL if candidate found
+- `codegen_int()` / `codegen_float()` - integrated with reuse check
 
-;; After (reuse x's memory for y)
-(let [x (cons 1 2)]
-  (let [y (reuse-as-pair x 3 4)]
-    y))
+**Generated Code**:
+```c
+// Before (fresh allocation)
+Obj* y = mk_int(42);
+
+// After (reusing x's memory)
+Obj* y = REUSE_OR_NEW_INT(_local_region, x, 42);
 ```
 
-| Task | Description | Effort |
+The `REUSE_OR_NEW_*` macros (defined in runtime preamble) check at runtime if
+the old object has rc==1, and if so, reuse its memory instead of allocating.
+
+| Task | Description | Status |
 |------|-------------|--------|
-| O.2.1 | Integrate reuse analysis into `codegen_let` | Medium |
-| O.2.2 | Track allocation sizes at compile time | Small |
-| O.2.3 | Generate `reuse_as_*` calls instead of `mk_*` | Medium |
-| O.2.4 | Handle partial reuse (larger block → smaller allocation) | Medium |
+| O.2.1 | Integrate reuse analysis into `codegen_let` | ✅ Done |
+| O.2.2 | Track allocation sizes at compile time | ✅ Done |
+| O.2.3 | Generate `reuse_as_*` calls instead of `mk_*` | ✅ Done |
+| O.2.4 | Handle partial reuse (larger block → smaller allocation) | TODO |
 
 **Expected Impact**: Near-zero allocation for many functional patterns.
 

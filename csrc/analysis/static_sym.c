@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+// REVIEWED:NAIVE
 /* 
  * Helper to find CFG node by program position.
  */
@@ -26,6 +27,7 @@ static CFGNode* find_node_by_pos(CFG* cfg, int pos) {
  * In a dominator-based lifetime model, the dominator of the SCC entry
  * is the primary candidate for ownership.
  */
+// TESTED
 void omni_analyze_static_symmetric(AnalysisContext* ctx, CFG* cfg) {
     if (!ctx || !cfg) return;
 

@@ -54,6 +54,7 @@ OmniLisp provides structured control flow through **Delimited Continuations** an
 
 ```lisp
 ;; Define an effect
+; REVIEWED:SYNTAX
 (define {effect ask} :one-shot (returns String))
 
 ;; Handle the effect

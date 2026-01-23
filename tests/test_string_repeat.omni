@@ -1,0 +1,260 @@
+;; test_string_repeat.omni - Comprehensive tests for string-repeat primitive
+;;
+;; Tests prim_string_repeat function (exposed as string-repeat in OmniLisp)
+;; which repeats a string a specified number of times.
+;;
+;; Run with: ./omni tests/test_string_repeat.omni
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+(define test-string [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (= expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+;; ============================================================
+;; Basic Repetition Tests
+;; ============================================================
+
+(print "")
+(print "=== Basic Repetition Tests ===")
+
+;; Test 1: Repeat string 2 times
+(test-string "repeat 2 times"
+  "hellohello"
+  (string-repeat "hello" 2))
+
+;; Test 2: Repeat string 3 times
+(test-string "repeat 3 times"
+  "abcabcabc"
+  (string-repeat "abc" 3))
+
+;; Test 3: Repeat string 5 times
+(test-string "repeat 5 times"
+  "XXXXX"
+  (string-repeat "X" 5))
+
+;; Test 4: Repeat with spaces
+(test-string "repeat with spaces"
+  "hello world hello world"
+  (string-repeat "hello world " 2))
+
+;; ============================================================
+;; Single Character Tests
+;; ============================================================
+
+(print "")
+(print "=== Single Character Tests ===")
+
+;; Test 5: Repeat single character
+(test-string "repeat single char"
+  "aaaaa"
+  (string-repeat "a" 5))
+
+;; Test 6: Repeat digit
+(test-string "repeat digit"
+  "111111"
+  (string-repeat "1" 6))
+
+;; Test 7: Repeat special character
+(test-string "repeat special char"
+  "!!!"
+  (string-repeat "!" 3))
+
+;; ============================================================
+;; Zero and Negative Count Tests
+;; ============================================================
+
+(print "")
+(print "=== Zero and Negative Count Tests ===")
+
+;; Test 8: Count of 0 returns empty string
+(test-string "count 0"
+  ""
+  (string-repeat "hello" 0))
+
+;; Test 9: Negative count returns empty string
+(test-string "negative count"
+  ""
+  (string-repeat "hello" -1))
+
+;; Test 10: Large negative count
+(test-string "large negative count"
+  ""
+  (string-repeat "abc" -100))
+
+;; ============================================================
+;; Count of 1 Tests
+;; ============================================================
+
+(print "")
+(print "=== Count of 1 Tests ===")
+
+;; Test 11: Count of 1 returns same string
+(test-string "count 1"
+  "hello"
+  (string-repeat "hello" 1))
+
+;; Test 12: Count of 1 with single char
+(test-string "count 1 single char"
+  "X"
+  (string-repeat "X" 1))
+
+;; ============================================================
+;; Empty String Tests
+;; ============================================================
+
+(print "")
+(print "=== Empty String Tests ===")
+
+;; Test 13: Repeat empty string
+(test-string "empty string repeated"
+  ""
+  (string-repeat "" 5))
+
+;; Test 14: Repeat empty string with large count
+(test-string "empty string large count"
+  ""
+  (string-repeat "" 100))
+
+;; ============================================================
+;; Multi-Character String Tests
+;; ============================================================
+
+(print "")
+(print "=== Multi-Character String Tests ===")
+
+;; Test 15: Repeat multi-character string
+(test-string "multi-char string"
+  "testtesttest"
+  (string-repeat "test" 3))
+
+;; Test 16: Repeat longer string
+(test-string "longer string"
+  "omnilispomnilisp"
+  (string-repeat "omnilisp" 2))
+
+;; Test 17: Repeat with punctuation
+(test-string "string with punctuation"
+  "hello,world!hello,world!"
+  (string-repeat "hello,world!" 2))
+
+;; ============================================================
+;; Special Character Tests
+;; ============================================================
+
+(print "")
+(print "=== Special Character Tests ===")
+
+;; Test 18: Repeat with newline
+(test-string "newline repetition"
+  "line1\nline1\n"
+  (string-repeat "line1\n" 2))
+
+;; Test 19: Repeat with tab
+(test-string "tab repetition"
+  "col1\tcol2\t"
+  (string-repeat "col1\t" 2))
+
+;; Test 20: Repeat with mixed special chars
+(test-string "mixed special chars"
+  "a\tb\nc\ta\tb\nc\t"
+  (string-repeat "a\tb\nc\t" 2))
+
+;; ============================================================
+;; Large Count Tests
+;; ============================================================
+
+(print "")
+(print "=== Large Count Tests ===")
+
+;; Test 21: Large count of single char
+(test-string "large count single char"
+  "xxxxxxxxxxxxxxx"
+  (string-repeat "x" 15))
+
+;; Test 22: Moderate count of string
+(test-string "moderate count"
+  "abababababababababab"
+  (string-repeat "ab" 10))
+
+;; ============================================================
+;; Whitespace Tests
+;; ============================================================
+
+(print "")
+(print "=== Whitespace Tests ===")
+
+;; Test 23: Repeat space
+(test-string "repeat space"
+  "     "
+  (string-repeat " " 5))
+
+;; Test 24: Repeat multiple spaces
+(test-string "multiple spaces"
+  "  test  test  test  "
+  (string-repeat "  test  " 3))
+
+;; ============================================================
+;; Numeric String Tests
+;; ============================================================
+
+(print "")
+(print "=== Numeric String Tests ===")
+
+;; Test 25: Repeat numeric string
+(test-string "numeric string"
+  "123123123"
+  (string-repeat "123" 3))
+
+;; Test 26: Repeat with numbers and letters
+(test-string "alphanumeric"
+  "test123test123"
+  (string-repeat "test123" 2))
+
+;; ============================================================
+;; Boundary Conditions
+;; ============================================================
+
+(print "")
+(print "=== Boundary Conditions ===")
+
+;; Test 27: Repeat very long string
+(test-string "long string repeat"
+  "verylongstringverylongstring"
+  (string-repeat "verylongstring" 2))
+
+;; Test 28: Single char repeated many times
+(test-string "single char many times"
+  "aaaaaaaaaa"
+  (string-repeat "a" 10))
+
+;; ============================================================
+;; Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

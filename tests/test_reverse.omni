@@ -1,0 +1,203 @@
+;; test_reverse.omni - Comprehensive tests for reverse primitive
+;;
+;; Tests prim_reverse function (exposed as reverse in OmniLisp)
+;; which reverses lists and arrays non-destructively.
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+(define test-eq [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (equal? expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+;; ============================================================
+;; List Reverse Tests
+;; ============================================================
+
+(print "")
+(print "=== List Reverse Tests ===")
+
+;; Test 1: Empty list
+(test-eq "empty list"
+  ()
+  (reverse ()))
+
+;; Test 2: Single element list
+(test-eq "single element list"
+  '(1)
+  (reverse '(1)))
+
+;; Test 3: Multiple elements list
+(test-eq "multiple elements list"
+  '(3 2 1)
+  (reverse '(1 2 3)))
+
+;; Test 4: Already reversed list
+(test-eq "already reversed list"
+  '(1 2 3)
+  (reverse '(3 2 1)))
+
+;; Test 5: List with strings
+(test-eq "list with strings"
+  '("c" "b" "a")
+  (reverse '("a" "b" "c")))
+
+;; Test 6: List with mixed types
+(test-eq "list with mixed types"
+  '(3.0 "two" 1)
+  (reverse '(1 "two" 3.0)))
+
+;; Test 7: Long list
+(test-eq "long list"
+  '(5 4 3 2 1)
+  (reverse '(1 2 3 4 5)))
+
+;; Test 8: List with duplicate elements
+(test-eq "list with duplicates"
+  '(1 1 2 2)
+  (reverse '(2 2 1 1)))
+
+;; ============================================================
+;; Array Reverse Tests
+;; ============================================================
+
+(print "")
+(print "=== Array Reverse Tests ===")
+
+;; Test 9: Empty array
+(test-eq "empty array"
+  []
+  (reverse []))
+
+;; Test 10: Single element array
+(test-eq "single element array"
+  [1]
+  (reverse [1]))
+
+;; Test 11: Multiple elements array
+(test-eq "multiple elements array"
+  [3 2 1]
+  (reverse [1 2 3]))
+
+;; Test 12: Already reversed array
+(test-eq "already reversed array"
+  [1 2 3]
+  (reverse [3 2 1]))
+
+;; Test 13: Array with strings
+(test-eq "array with strings"
+  ["c" "b" "a"]
+  (reverse ["a" "b" "c"]))
+
+;; Test 14: Array with mixed types
+(test-eq "array with mixed types"
+  [3.0 "two" 1]
+  (reverse [1 "two" 3.0]))
+
+;; Test 15: Long array
+(test-eq "long array"
+  [5 4 3 2 1]
+  (reverse [1 2 3 4 5]))
+
+;; Test 16: Array with duplicate elements
+(test-eq "array with duplicates"
+  [1 1 2 2]
+  (reverse [2 2 1 1]))
+
+;; ============================================================
+;; Nested Collection Tests
+;; ============================================================
+
+(print "")
+(print "=== Nested Collection Tests ===")
+
+;; Test 17: Nested lists
+(test-eq "nested lists"
+  '([3 2] [1])
+  (reverse '([1] [2 3])))
+
+;; Test 18: Nested arrays
+(test-eq "nested arrays"
+  [[3 2] [1]]
+  (reverse [[1] [2 3]]))
+
+;; ============================================================
+;; Edge Case Tests
+;; ============================================================
+
+(print "")
+(print "=== Edge Case Tests ===")
+
+;; Test 19: Palindrome (same forward and backward)
+(test-eq "palindrome list"
+  '(1 2 1)
+  (reverse '(1 2 1)))
+
+;; Test 20: Two element swap
+(test-eq "two element swap"
+  '(b a)
+  (reverse '(a b)))
+
+;; Test 21: List with symbols
+(test-eq "list with symbols"
+  '(c b a)
+  (reverse '(a b c)))
+
+;; Test 22: List with booleans
+(test-eq "list with booleans"
+  '(false true)
+  (reverse '(true false)))
+
+;; Test 23: List with nothings
+(test-eq "list with nothings"
+  '(nothing nothing)
+  (reverse '(nothing nothing)))
+
+;; ============================================================
+;; Idempotence Tests
+;; ============================================================
+
+(print "")
+(print "=== Idempotence Tests ===")
+
+;; Test 24: Double reverse returns original
+(define test-list '(1 2 3 4 5))
+(test-eq "double reverse list"
+  test-list
+  (reverse (reverse test-list)))
+
+;; Test 25: Double reverse array
+(define test-arr [1 2 3 4 5])
+(test-eq "double reverse array"
+  test-arr
+  (reverse (reverse test-arr)))
+
+;; ============================================================
+;; Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

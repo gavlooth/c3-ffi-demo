@@ -331,6 +331,42 @@ OmniValue* omni_new_dict(void) {
     return v;
 }
 
+/* Issue 24: Set data structure */
+OmniValue* omni_new_set(void) {
+    OmniValue* v = omni_alloc_value();
+    if (!v) return NULL;
+    v->tag = OMNI_SET;
+    v->set.len = 0;
+    v->set.cap = 8;
+    v->set.data = omni_arena_alloc(omni_ast_arena_get(), 8 * sizeof(OmniValue*));
+    return v;
+}
+
+// TESTED - test_ast_collections.c
+void omni_set_add(OmniValue* set, OmniValue* elem) {
+    if (!set || set->tag != OMNI_SET || !elem) return;
+
+    /* Check if element already exists (simple linear scan for AST set) */
+    for (size_t i = 0; i < set->set.len; i++) {
+        /* Simple pointer equality for AST values */
+        if (set->set.data[i] == elem) return;
+    }
+
+    /* Grow if needed */
+    if (set->set.len >= set->set.cap) {
+        size_t new_cap = set->set.cap * 2;
+        OmniValue** new_data = omni_arena_alloc(omni_ast_arena_get(), new_cap * sizeof(OmniValue*));
+        if (!new_data) return;
+        for (size_t i = 0; i < set->set.len; i++) {
+            new_data[i] = set->set.data[i];
+        }
+        set->set.data = new_data;
+        set->set.cap = new_cap;
+    }
+
+    set->set.data[set->set.len++] = elem;
+}
+
 OmniValue* omni_new_tuple(OmniValue** elements, size_t len) {
     OmniValue* v = omni_alloc_value();
     if (!v) return NULL;
@@ -357,6 +393,14 @@ OmniValue* omni_new_type_lit(const char* name, OmniValue** params, size_t param_
             v->type_lit.params[i] = params[i];
         }
     }
+    return v;
+}
+
+OmniValue* omni_new_kind_splice(OmniValue* expr) {
+    OmniValue* v = omni_alloc_value();
+    if (!v) return NULL;
+    v->tag = OMNI_KIND_SPLICE;
+    v->kind_splice.expr = expr;
     return v;
 }
 
@@ -490,6 +534,7 @@ void omni_array_set(OmniValue* arr, size_t idx, OmniValue* val) {
     }
 }
 
+// TESTED
 void omni_array_push(OmniValue* arr, OmniValue* val) {
     if (!arr || arr->tag != OMNI_ARRAY) return;
     if (arr->array.len >= arr->array.cap) {
@@ -514,6 +559,7 @@ size_t omni_dict_len(OmniValue* dict) {
     return dict->dict.len;
 }
 
+// REVIEWED:NAIVE
 OmniValue* omni_dict_get(OmniValue* dict, OmniValue* key) {
     if (!dict || dict->tag != OMNI_DICT) return omni_nil;
     for (size_t i = 0; i < dict->dict.len; i++) {
@@ -552,6 +598,7 @@ void omni_dict_set(OmniValue* dict, OmniValue* key, OmniValue* val) {
     dict->dict.len++;
 }
 
+// REVIEWED:NAIVE
 bool omni_dict_has(OmniValue* dict, OmniValue* key) {
     if (!dict || dict->tag != OMNI_DICT) return false;
     for (size_t i = 0; i < dict->dict.len; i++) {
@@ -576,6 +623,7 @@ OmniValue* omni_tuple_get(OmniValue* tuple, size_t idx) {
 
 /* ============== User Type Operations ============== */
 
+// REVIEWED:NAIVE
 OmniValue* omni_user_type_get_field(OmniValue* v, const char* field_name) {
     if (!v || v->tag != OMNI_USER_TYPE || !field_name) return omni_nil;
     for (size_t i = 0; i < v->user_type.field_count; i++) {
@@ -586,6 +634,7 @@ OmniValue* omni_user_type_get_field(OmniValue* v, const char* field_name) {
     return omni_nil;
 }
 
+// REVIEWED:NAIVE
 void omni_user_type_set_field(OmniValue* v, const char* field_name, OmniValue* val) {
     if (!v || v->tag != OMNI_USER_TYPE || !field_name) return;
     for (size_t i = 0; i < v->user_type.field_count; i++) {
@@ -803,6 +852,17 @@ static char* value_to_string_impl(OmniValue* v) {
         string_builder_append_char(&buf, &cap, &len, '}');
         return buf;
 
+    case OMNI_KIND_SPLICE:
+        string_builder_init(&buf, &cap, &len);
+        string_builder_append(&buf, &cap, &len, "{#kind ");
+        if (v->kind_splice.expr) {
+            char* expr_str = value_to_string_impl(v->kind_splice.expr);
+            string_builder_append(&buf, &cap, &len, expr_str);
+            free(expr_str);
+        }
+        string_builder_append_char(&buf, &cap, &len, '}');
+        return buf;
+
     case OMNI_KEYWORD:
         string_builder_init(&buf, &cap, &len);
         string_builder_append_char(&buf, &cap, &len, ':');
@@ -871,6 +931,7 @@ const char* omni_tag_name(OmniTag tag) {
     case OMNI_TUPLE: return "TUPLE";
     case OMNI_NOTHING: return "NOTHING";
     case OMNI_TYPE_LIT: return "TYPE_LIT";
+    case OMNI_KIND_SPLICE: return "KIND_SPLICE";
     case OMNI_KEYWORD: return "KEYWORD";
     default: return "UNKNOWN";
     }

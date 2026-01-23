@@ -2,6 +2,7 @@
 ; NOTE: Don't use built-in effect names like 'Fail' which is RECOVERY_ABORT mode.
 ; Use custom effect names for resumable effects.
 
+; REVIEWED:SYNTAX
 ; Test 1: Handle without effect (body just returns)
 (define test1
   (handle

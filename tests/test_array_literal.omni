@@ -12,5 +12,6 @@
 ;; Array with mixed expressions
 (println "Test 3: Array with expressions")
 (define x 42)
+;; REVIEWED:SYNTAX
 (define arr3 [x (+ 1 2) "hello"])
 (println arr3)

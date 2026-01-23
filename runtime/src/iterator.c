@@ -26,6 +26,7 @@
 
 /* ============== Basic Sequence Operations ============== */
 
+// TESTED
 /*
  * prim_first: Get first element of a sequence
  *
@@ -47,6 +48,7 @@ Obj* prim_first(Obj* seq) {
     return NULL;
 }
 
+// TESTED
 /*
  * prim_rest: Get rest of a sequence (tail)
  *
@@ -68,6 +70,7 @@ Obj* prim_rest(Obj* seq) {
     return NULL;
 }
 
+// TESTED
 /*
  * prim_has_next: Check if iterator has more elements
  *
@@ -96,6 +99,7 @@ Obj* prim_has_next(Obj* iter_obj) {
 
 /* ============== Lazy Iteration ============== */
 
+// TESTED
 /*
  * prim_iterate: Create an infinite lazy sequence from a function and seed
  *
@@ -115,6 +119,7 @@ Obj* prim_iterate(Obj* fn, Obj* seed) {
     /* The iter_next function will update this pair */
     return mk_pair(seed, fn);
 }
+// TESTED
 
 /*
  * prim_iter_next: Get the next value from an iterator
@@ -162,6 +167,7 @@ Obj* prim_iter_next(Obj* iter_obj) {
 
 /* ============== Sequence Operations ============== */
 
+// TESTED
 /*
  * prim_take: Take n elements from a sequence/iterator
  *

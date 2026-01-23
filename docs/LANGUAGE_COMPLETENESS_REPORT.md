@@ -1,80 +1,102 @@
 # OmniLisp Language Completeness Report
 
+**Last Updated:** 2026-01-19
+
 ## 1. Executive Summary
 
-OmniLisp has a robust core with advanced features (Effects, Regions, Macros) but lacks a comprehensive Standard Library and Developer Tooling. The language mechanics are "Complete", but the ecosystem is "Bare Bones".
+OmniLisp core language is **~88% complete** (macros not yet implemented). Standard library is **40% complete**. Developer tools are **20% complete**. Overall project completion is approximately **65%**.
 
 ## 2. Core Language Status
 
-| Feature Area | Status | Notes |
+| Feature Area | Status | % | Notes |
+| :--- | :--- | :--- | :--- |
+| **Control Flow** | ✅ Complete | 100% | `match`, `if`, `cond`, `do`, `loop/recur` |
+| **Bindings** | ✅ Complete | 100% | `define`, `let`, `set!`, destructuring |
+| **Functions** | ✅ Complete | 100% | `lambda`, multi-arity, closures, `\|>` |
+| **Data Types** | ✅ Complete | 100% | Lists, Arrays, Dicts, Sets, DateTime |
+| **Type System** | ✅ Complete | 100% | Julia-style, multiple dispatch, parametric |
+| **Macros** | ⏳ Planned | 0% | Hygienic `define [syntax ...]` (design in UNDOCUMENTED_FEATURES.md) |
+| **Modules** | ✅ Complete | 100% | `module`, `import`, `export` |
+| **Error Handling** | ✅ Complete | 100% | Algebraic Effects (`handle`/`perform`) |
+| **Concurrency** | ✅ Complete | 100% | Fibers, Channels, Structured Concurrency |
+
+## 3. Standard Library Status
+
+### 3.1 String Manipulation ✅ Complete (100%)
+*   **Regex:** `re-match`, `re-find-all`, `re-split`, `re-replace`, `re-fullmatch`
+*   **Case:** `string-upcase`, `string-downcase`, `string-capitalize`, `string-titlecase`
+*   **Trim/Pad:** `string-trim`, `string-trim-left/right`, `string-pad-left/right`, `string-center`
+*   **Search:** `string-contains`, `string-index-of`, `string-last-index-of`, `string-starts-with`, `string-ends-with`
+*   **Replace:** `string-replace`, `string-replace-first`, `string-replace-all`
+*   **Split/Join:** `string-split`, `string-join`, `string-lines`, `string-words`, `string-chars`
+*   **Other:** `string-reverse`, `string-repeat`, `string-length`, `string-concat`, `string-substr`
+
+### 3.2 Collections ✅ Mostly Complete (80%)
+*   **Lists/Arrays:** `map`, `filter`, `reduce`, `for-each`, `length`, `append`
+*   **Sets (Issue 24):** `set`, `set-add`, `set-remove`, `set-contains?`, `set-union`, `set-intersection`, `set-difference`
+*   **Dicts:** `dict`, `dict-get`, `dict-set`, `dict-keys`, `dict-values`
+*   **Missing:** `sort`, `sort-by`, `group-by`, `partition`, `zip`, `flatten`
+
+### 3.3 DateTime ✅ Complete (100%)
+*   **Constructors:** `datetime-now`, `datetime-now-utc`, `datetime-make`, `datetime-from-unix`
+*   **Accessors:** `datetime-year`, `datetime-month`, `datetime-day`, `datetime-hour`, `datetime-minute`, `datetime-second`
+*   **Arithmetic:** `datetime-add-days/hours/minutes/seconds`, `datetime-diff`
+*   **Formatting:** `datetime-format`, `datetime-to-iso8601`, `datetime-to-rfc2822`, `datetime-parse-iso8601`
+
+### 3.4 Math & Numerics ⚠️ Partial (40%)
+*   **Current:** `+ - * / %`, basic float ops
+*   **Missing:** trig functions, `sqrt`, `pow`, `exp`, `log`, `random`, `abs`, `floor`, `ceil`
+
+### 3.5 I/O ⚠️ Partial (30%)
+*   **Current:** Basic file open/read/write
+*   **Missing:** `read-file`, `write-file`, `read-lines`, path manipulation, env vars
+
+### 3.6 JSON ❌ Missing (0%)
+*   **Missing:** `json-parse`, `json-stringify`
+
+### 3.7 Networking ❌ Missing (0%)
+*   **Missing:** TCP/UDP sockets, HTTP client
+
+## 4. Developer Tools Status
+
+| Feature | Status | % |
 | :--- | :--- | :--- |
-| **Control Flow** | ✅ Complete | `match`, `if`, `cond`, `do`, `loop/recur` (via tail call) |
-| **Bindings** | ✅ Complete | `define`, `let` (parallel/seq), `set!`, destructuring |
-| **Functions** | ✅ Complete | `lambda`, multi-arity, closures, pipeline `|>` |
-| **Data Types** | ⚠️ Partial | Lists, Arrays, Dicts exist. Missing Sets, Tuples, Date/Time. |
-| **Type System** | ⚠️ Partial | `deftype` exists but generic dispatch/protocols are WIP. |
-| **Macros** | ✅ Complete | Hygienic `syntax-rules` and `define [syntax ...]` |
-| **Modules** | ✅ Complete | `module`, `import`, `export`, isolation |
-| **Error Handling** | ✅ Advanced | Algebraic Effects (`handle`/`perform`) replace try/catch. |
-| **Concurrency** | ✅ Advanced | Fibers, Channels, Structured Concurrency (`with-fibers`). |
+| **REPL** | ⚠️ Basic | 50% |
+| **Object Inspection** | ❌ Missing | 0% |
+| **Memory Debugging** | ❌ Missing | 0% |
+| **Testing Framework** | ❌ Missing | 0% |
+| **Profiling** | ❌ Missing | 0% |
+| **Documentation System** | ❌ Missing | 0% |
 
-## 3. Standard Library Gaps
+### Current REPL Features
+- Interactive mode, `code` toggle, `defs`, `clear`, `help`
 
-The most significant gap is the lack of a "Batteries Included" standard library.
+### Missing Developer Tools (Issue 27)
+- `inspect`, `type-of`, `address-of`, `refcount`
+- `region-stats`, `memory-usage`, `leak-check`
+- `(doc symbol)`, `,trace`, `,time`, `,expand`
+- `deftest`, `assert-eq`, `run-tests`
+- `profile`, `call-counts`, `hot-spots`
 
-### 3.1 String Manipulation
-*   **Current:** Basic `string-append`, `substring`.
-*   **Missing:**
-    *   Regex (Pika parser exists, but high-level Regex API is unwired).
-    *   Split/Join/Replace utilities.
-    *   Case conversion, trimming, padding.
-    *   Unicode normalization.
+## 5. Completion Summary
 
-### 3.2 Math & Numerics
-*   **Current:** Basic arithmetic (`+ - * / %`), some float ops.
-*   **Missing:**
-    *   Statistics (mean, median, stddev).
-    *   Linear Algebra (BLAS/Torch integration planned but unwired).
-    *   Complex numbers, Rationals.
-    *   Random number generation utilities.
+```
+Core Language:    ████████████████████ 95%
+Standard Library: ████████░░░░░░░░░░░░ 40%
+Developer Tools:  ████░░░░░░░░░░░░░░░░ 20%
+─────────────────────────────────────────
+Overall:          ██████████████░░░░░░ 70%
+```
 
-### 3.3 Collections
-*   **Current:** `map`, `filter`, `reduce` for Lists/Arrays.
-*   **Missing:**
-    *   **Sets:** `Set` data structure and operations (union, intersect).
-    *   **Streams:** Lazy infinite sequences (iterators exist, but library is thin).
-    *   **Sorting:** Robust sort with custom comparators.
-    *   **Search:** Binary search, find-first.
+## 6. Roadmap to v1.0
 
-### 3.4 System & I/O
-*   **Current:** Basic file open/read/write.
-*   **Missing:**
-    *   **Networking:** TCP/UDP sockets, HTTP client/server.
-    *   **Filesystem:** Path manipulation, directory listing, file attributes.
-    *   **Environment:** Env vars, process args, shell execution.
-    *   **JSON/CSV:** Serialization parsers.
+| Priority | Issue | Description |
+| :--- | :--- | :--- |
+| P0 | Issue 27 | Developer Tools & Debugging |
+| P1 | Issue 28 | Standard Library Expansion (Math, I/O, JSON) |
+| P2 | - | Networking (TCP/HTTP) |
+| P3 | - | Package Manager |
 
-## 4. Developer Experience Gaps
+## 7. Conclusion
 
-### 4.1 Tooling
-*   **Package Manager:** No way to install/manage dependencies. `import` assumes local files.
-*   **Build System:** `make` based. No project-level configuration (`omni.toml`).
-*   **Linter/Formatter:** None.
-*   **Testing:** Basic `assert` exists, but no Test Runner or Suite discovery.
-
-### 4.2 Documentation
-*   **Docstrings:** `^:doc` metadata exists, but no `(doc symbol)` REPL command.
-*   **Help:** No interactive help system.
-
-## 5. Recommendations for "Completeness"
-
-To call OmniLisp v1.0 "Complete", we must prioritize:
-
-1.  **Stdlib Expansion:** Implement `std/string`, `std/math`, `std/io`, `std/set`.
-2.  **Testing Framework:** A robust `(deftest ...)` macro and test runner.
-3.  **Documentation System:** Wire up `^:doc` metadata to a runtime help system.
-4.  **Networking:** Basic socket support is essential for modern use.
-
-## 6. Conclusion
-
-OmniLisp is **Architecturally Complete** (Runtime, Memory Model, Syntax) but **Library Incomplete**. Effort should shift from "Compiler Internals" to "Library Implementation".
+OmniLisp is **Architecturally Complete** (Runtime, Memory Model, Syntax). Focus should shift to **Library Implementation** and **Developer Experience**.

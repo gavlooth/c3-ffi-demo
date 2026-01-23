@@ -89,7 +89,7 @@ typedef enum {
     TYPE_ID_THREAD,
     TYPE_ID_ERROR,
     TYPE_ID_ATOM,
-    TYPE_ID_RESERVED_14,      /* Was TYPE_ID_TUPLE - REMOVED 2026-01-15 */
+    TYPE_ID_SET,              /* Set data structure (Issue 24) */
     TYPE_ID_RESERVED_15,      /* Was TYPE_ID_NAMED_TUPLE - REMOVED 2026-01-15 */
     TYPE_ID_GENERIC,
     TYPE_ID_KIND,
@@ -143,6 +143,7 @@ struct Closure {
     int capture_count;      /* Number of captures */
     int arity;              /* Expected number of arguments */
     const char* name;       /* Function name (for debugging) */
+    const char* source_text; /* Original source code (for REPL introspection) */
     unsigned char region_aware; /* 1 if using fn_region, 0 if using fn */
 };
 
@@ -203,8 +204,8 @@ typedef enum {
     TAG_DICT,
     TAG_STRING,
     TAG_KEYWORD,
-    TAG_RESERVED_16,          /* Was TAG_TUPLE - REMOVED 2026-01-15 */
-    TAG_RESERVED_17,          /* Was TAG_NAMED_TUPLE - REMOVED 2026-01-15 */
+    TAG_SET,                  /* Set data structure (Issue 24) */
+    TAG_DATETIME,             /* DateTime type (Issue 25) */
     TAG_GENERIC,
     TAG_KIND,
     TAG_NOTHING,
@@ -215,7 +216,9 @@ typedef enum {
     /* Condition system tag (Issue 14 P3) */
     TAG_CONDITION,
     /* Generator tag (Issue 14 P4: Iterator-Generator Integration) */
-    TAG_GENERATOR
+    TAG_GENERATOR,
+    /* FFI C pointer tag (Issue 19: FFI Implementation) */
+    TAG_CPTR
 } ObjTag;
 
 #define TAG_USER_BASE 1000
@@ -590,7 +593,29 @@ static inline double obj_to_cdouble(Obj* o) {
     return obj_to_float(o);
 }
 
-/* Extract const char* from Obj* string */
+/* Extract const char* from Obj* string
+ *
+ * WARNING: UNSAFE LIFETIME SEMANTICS
+ * This function returns a pointer directly into the OmniLisp string object's
+ * internal buffer. The pointer is only valid for the lifetime of the Obj*.
+ *
+ * SAFE USAGE:
+ * - Pass to C functions that use the string immediately and do NOT store it
+ * - Examples: printf, strlen, strcmp, strchr, strstr, write(), etc.
+ *
+ * UNSAFE USAGE (will cause use-after-free):
+ * - C functions that store the pointer for later use
+ * - C functions that pass the pointer to async callbacks
+ * - Storing the returned pointer in global/static variables
+ * - Using the pointer after the OmniLisp object may have been GC'd/freed
+ *
+ * For C functions that need to retain the string, copy it first:
+ *   const char* s = obj_to_cstring(o);
+ *   char* owned = strdup(s);  // Caller owns this copy
+ *
+ * Issue 19: This is a known limitation. Future work may add region pinning
+ * or reference counting for FFI string lifetimes.
+ */
 static inline const char* obj_to_cstring(Obj* o) {
     if (!o || IS_IMMEDIATE(o)) return "";
     if (o->tag == TAG_STRING || o->tag == TAG_SYM) {
@@ -599,10 +624,19 @@ static inline const char* obj_to_cstring(Obj* o) {
     return "";
 }
 
-/* Extract void* from Obj* (pointer stored in ptr field) */
+/* Extract void* from Obj* (pointer stored in ptr field)
+ * Only extracts from objects with TAG_CPTR tag for type safety.
+ * Returns NULL for non-CPtr objects instead of arbitrary data.
+ *
+ * Issue 19 Fix: Added type verification to prevent returning
+ * arbitrary data from non-CPtr objects.
+ */
 static inline void* obj_to_cptr(Obj* o) {
     if (!o || IS_IMMEDIATE(o)) return NULL;
-    /* CPtr objects store raw pointer in ptr field */
+    /* Verify object is actually a CPtr before accessing ptr field */
+    if (o->tag != TAG_CPTR) {
+        return NULL;  /* Type mismatch - not a CPtr */
+    }
     return o->ptr;
 }
 
@@ -615,16 +649,33 @@ static inline size_t obj_to_csize(Obj* o) {
  * C type -> Obj* conversions for FFI ccall return values
  */
 
-/* Wrap void* as Obj* (CPtr type) */
+/* Wrap void* as Obj* (CPtr type)
+ * Creates a dedicated CPtr object with TAG_CPTR tag.
+ * The pointer is stored in the ptr field and can be retrieved with obj_to_cptr().
+ *
+ * WARNING: The runtime does NOT track the lifetime of the C pointer.
+ * The caller is responsible for ensuring the pointer remains valid.
+ */
 static inline Obj* mk_cptr(void* p) {
-    /* Use BOX tag to wrap raw pointer */
+    /* Allocate object and set dedicated TAG_CPTR */
     Obj* o = mk_box(NULL);
     if (o) {
         o->ptr = p;
-        o->tag = TAG_BOX;  /* Reuse BOX for CPtr storage */
+        o->tag = TAG_CPTR;  /* Dedicated CPtr tag (Issue 19: FFI safety) */
     }
     return o;
 }
+
+/*
+ * FFI Error Reporting (Issue 19: ccall error handling)
+ *
+ * Creates an FFI error condition wrapped as an Obj* that can be returned
+ * from ccall when dlopen/dlsym fails. This allows Lisp code to detect
+ * FFI failures instead of silently receiving NOTHING.
+ *
+ * Returns: Obj* with TAG_CONDITION containing the FFI error
+ */
+Obj* mk_ffi_load_error(const char* library, const char* function);
 
 /* ========== Specialization Box/Unbox Functions ========== */
 /*
@@ -753,6 +804,7 @@ Obj* prim_gt(Obj* a, Obj* b);
 Obj* prim_le(Obj* a, Obj* b);
 Obj* prim_ge(Obj* a, Obj* b);
 Obj* prim_eq(Obj* a, Obj* b);
+Obj* prim_kind_eq(Obj* a, Obj* b);
 Obj* prim_not(Obj* a);
 
 /* ========== Type Predicates ========== */
@@ -1256,6 +1308,84 @@ Obj* prim_update_bang(Obj* coll, Obj* key, Obj* val); /* In-place update */
 Obj* prim_update_in(Obj* coll, Obj* path, Obj* val);  /* Nested path COW update */
 Obj* prim_update_in_bang(Obj* coll, Obj* path, Obj* val); /* Nested path in-place */
 
+/* ========== Set Data Structure (Issue 24) ========== */
+
+/* Set constructors */
+Obj* mk_set_region(struct Region* r);
+Obj* mk_set(void);
+
+/* Set operations */
+void set_add(Obj* set, Obj* elem);              /* Add element to set */
+Obj* set_remove(Obj* set, Obj* elem);           /* Remove element, return removed or NULL */
+Obj* set_contains(Obj* set, Obj* elem);         /* Check membership, return bool */
+int set_size(Obj* set);                         /* Number of elements */
+Obj* set_empty_p(Obj* set);                     /* Check if empty, return bool */
+
+/* Set algebra (Issue 24 P2) */
+Obj* set_union(Obj* a, Obj* b);                 /* A ∪ B */
+Obj* set_intersection(Obj* a, Obj* b);          /* A ∩ B */
+Obj* set_difference(Obj* a, Obj* b);            /* A \ B */
+Obj* set_symmetric_difference(Obj* a, Obj* b);  /* A △ B */
+Obj* set_subset_p(Obj* a, Obj* b);              /* A ⊆ B */
+Obj* set_superset_p(Obj* a, Obj* b);            /* A ⊇ B */
+
+/* Set conversion */
+Obj* set_to_list(Obj* set);                     /* Convert set to list */
+Obj* list_to_set(Obj* list);                    /* Convert list to set */
+Obj* set_to_array(Obj* set);                    /* Convert set to array */
+Obj* array_to_set(Obj* arr);                    /* Convert array to set */
+
+/* Set iteration & HOFs (Issue 24 P3) */
+Obj* set_foreach(Obj* set, Obj* fn);            /* Apply fn to each element */
+Obj* set_map(Obj* set, Obj* fn);                /* Map fn over set, return new set */
+Obj* set_filter(Obj* set, Obj* pred);           /* Filter set by predicate */
+Obj* set_reduce(Obj* set, Obj* fn, Obj* init);  /* Reduce set to single value */
+
+/* ========== DateTime (Issue 25) ========== */
+
+/* DateTime constructors */
+Obj* mk_datetime(int64_t timestamp, int32_t tz_offset);  /* Create DateTime with timestamp and timezone */
+Obj* datetime_now(void);                         /* Current local time */
+Obj* datetime_now_utc(void);                     /* Current UTC time */
+Obj* datetime_from_unix(Obj* timestamp);         /* Create from Unix timestamp (UTC) */
+Obj* datetime_from_unix_tz(Obj* timestamp, Obj* tz_offset);  /* Create with timezone */
+
+/* DateTime accessors */
+Obj* datetime_to_unix(Obj* dt);                  /* Get Unix timestamp */
+Obj* datetime_tz_offset(Obj* dt);                /* Get timezone offset in seconds */
+
+/* DateTime component constructors (Issue 25 P1) */
+Obj* datetime_make(Obj* year, Obj* month, Obj* day, Obj* hour, Obj* minute, Obj* second);  /* UTC */
+Obj* datetime_make_local(Obj* year, Obj* month, Obj* day, Obj* hour, Obj* minute, Obj* second);  /* Local TZ */
+
+/* DateTime component accessors (Issue 25 P1) */
+Obj* datetime_year(Obj* dt);                     /* Get year (e.g., 2026) */
+Obj* datetime_month(Obj* dt);                    /* Get month (1-12) */
+Obj* datetime_day(Obj* dt);                      /* Get day of month (1-31) */
+Obj* datetime_hour(Obj* dt);                     /* Get hour (0-23) */
+Obj* datetime_minute(Obj* dt);                   /* Get minute (0-59) */
+Obj* datetime_second(Obj* dt);                   /* Get second (0-59) */
+Obj* datetime_weekday(Obj* dt);                  /* Get day of week (0=Sun, 6=Sat) */
+Obj* datetime_yearday(Obj* dt);                  /* Get day of year (1-366) */
+
+/* DateTime arithmetic (Issue 25 P2) */
+Obj* datetime_add_seconds(Obj* dt, Obj* seconds);   /* Add seconds */
+Obj* datetime_add_minutes(Obj* dt, Obj* minutes);   /* Add minutes */
+Obj* datetime_add_hours(Obj* dt, Obj* hours);       /* Add hours */
+Obj* datetime_add_days(Obj* dt, Obj* days);         /* Add days */
+Obj* datetime_diff(Obj* dt1, Obj* dt2);             /* Difference in seconds */
+Obj* datetime_lt(Obj* dt1, Obj* dt2);               /* dt1 < dt2 */
+Obj* datetime_gt(Obj* dt1, Obj* dt2);               /* dt1 > dt2 */
+Obj* datetime_eq(Obj* dt1, Obj* dt2);               /* dt1 == dt2 */
+Obj* datetime_le(Obj* dt1, Obj* dt2);               /* dt1 <= dt2 */
+Obj* datetime_ge(Obj* dt1, Obj* dt2);               /* dt1 >= dt2 */
+
+/* DateTime formatting (Issue 25 P3) */
+Obj* datetime_format(Obj* dt, Obj* format);         /* Format with strftime specifiers */
+Obj* datetime_to_iso8601(Obj* dt);                  /* "2026-01-18T12:30:00Z" */
+Obj* datetime_to_rfc2822(Obj* dt);                  /* "Sun, 18 Jan 2026 12:30:00 +0000" */
+Obj* datetime_parse_iso8601(Obj* str);              /* Parse ISO 8601 string */
+
 Obj* mk_keyword(const char* name);
 
 /* mk_tuple, tuple_get, tuple_length REMOVED 2026-01-15 - use mk_array */
@@ -1327,9 +1457,17 @@ Obj* prim_string_trim(Obj* str_obj);
 Obj* prim_string_trim_left(Obj* str_obj);
 Obj* prim_string_trim_right(Obj* str_obj);
 
+/* Padding functions (Issue 26 P1) */
+Obj* prim_string_pad_left(Obj* str_obj, Obj* width_obj, Obj* pad_obj);
+Obj* prim_string_pad_right(Obj* str_obj, Obj* width_obj, Obj* pad_obj);
+Obj* prim_string_center(Obj* str_obj, Obj* width_obj, Obj* pad_obj);
+
 /* Convert to uppercase/lowercase */
 Obj* prim_string_upcase(Obj* str_obj);
 Obj* prim_string_lowcase(Obj* str_obj);
+Obj* prim_string_downcase(Obj* str_obj);       /* Alias for lowcase (Issue 26 P0) */
+Obj* prim_string_capitalize(Obj* str_obj);     /* Capitalize first letter (Issue 26 P0) */
+Obj* prim_string_titlecase(Obj* str_obj);      /* Capitalize each word (Issue 26 P0) */
 
 /* Concatenate two strings */
 Obj* prim_string_concat(Obj* str1_obj, Obj* str2_obj);
@@ -1348,6 +1486,24 @@ Obj* prim_string_equals(Obj* str1_obj, Obj* str2_obj);
 
 /* Compare strings (returns <0, 0, >0) */
 Obj* prim_string_compare(Obj* str1_obj, Obj* str2_obj);
+
+/* Search functions (Issue 26 P2) */
+Obj* prim_string_last_index_of(Obj* str_obj, Obj* substr_obj);
+Obj* prim_string_starts_with(Obj* str_obj, Obj* prefix_obj);
+Obj* prim_string_ends_with(Obj* str_obj, Obj* suffix_obj);
+
+/* Replace functions (Issue 26 P2) */
+Obj* prim_string_replace_first(Obj* old_obj, Obj* new_obj, Obj* str_obj);
+Obj* prim_string_replace_all(Obj* old_obj, Obj* new_obj, Obj* str_obj);
+
+/* Split functions (Issue 26 P3) */
+Obj* prim_string_lines(Obj* str_obj);
+Obj* prim_string_words(Obj* str_obj);
+Obj* prim_string_chars(Obj* str_obj);
+
+/* Additional string utilities (Issue 26 P3) */
+Obj* prim_string_reverse(Obj* str_obj);
+Obj* prim_string_repeat(Obj* str_obj, Obj* count_obj);
 
 /* ========== Phase 19: Flow Constructors (Type Algebra) ========== */
 
@@ -1488,6 +1644,7 @@ Obj* prim_partial(Obj* func, Obj* fixed_args);
 Obj* prim_module_begin(Obj* name_obj);
 Obj* prim_module_end(void);
 Obj* prim_module_get(Obj* name_obj);
+Obj* prim_module_ref(Obj* module_name, Obj* symbol_name);
 Obj* prim_module_exports(Obj* name_obj);
 Obj* prim_module_list(void);
 
@@ -1627,6 +1784,133 @@ bool omni_region_outlives(struct Region* a, struct Region* b);
  * @return: The value that should actually be stored (may be repaired/transmigrated)
  */
 Obj* omni_store_repair(Obj* container, Obj** slot, Obj* new_value);
+
+/* ========== Issue 27: Developer Tools & Debugging ========== */
+
+/* P0: Object Inspection (debug.c) */
+Obj* prim_inspect(Obj* obj);               /* Print detailed object info */
+Obj* prim_type_of(Obj* obj);               /* Return type as keyword */
+Obj* prim_address_of(Obj* obj);            /* Return memory address as int */
+Obj* prim_refcount_of(Obj* obj);           /* Return reference count */
+Obj* prim_region_of_debug(Obj* obj);       /* Return owning region info */
+Obj* prim_sizeof_obj(Obj* obj);            /* Return object size in bytes */
+
+/* P2: REPL Documentation & Introspection (debug.c) */
+Obj* prim_doc(Obj* symbol);                /* Return documentation for symbol */
+Obj* prim_source(Obj* obj);                /* Return source code for closure */
+
+/* P1: Memory Debugging (debug.c) */
+Obj* prim_region_stats(void);              /* Print region allocation stats */
+Obj* prim_memory_usage(void);              /* Return total memory allocated */
+Obj* prim_gc_info(void);                   /* Show RC statistics */
+Obj* prim_allocation_trace(Obj* enable);   /* Toggle allocation tracing */
+Obj* prim_leak_check(void);                /* Scan for potential leaks */
+
+/* P3: Testing Framework (testing.c) */
+Obj* prim_deftest(Obj* name, Obj* test_fn);    /* Register a test case */
+Obj* prim_clear_tests(void);                   /* Clear all registered tests */
+Obj* prim_assert_eq(Obj* expected, Obj* actual);   /* Assert equality */
+Obj* prim_assert_true(Obj* value);             /* Assert truthy */
+Obj* prim_assert_false(Obj* value);            /* Assert falsy */
+Obj* prim_assert_near(Obj* expected, Obj* actual, Obj* epsilon);  /* Assert float near */
+Obj* prim_assert_throws(Obj* thunk);           /* Assert throws error */
+Obj* prim_assert_not_eq(Obj* val1, Obj* val2); /* Assert not equal */
+Obj* prim_assert_nil(Obj* value);              /* Assert nil/nothing */
+Obj* prim_assert_not_nil(Obj* value);          /* Assert not nil */
+Obj* prim_run_tests(void);                     /* Run all tests */
+Obj* prim_run_tests_matching(Obj* pattern);    /* Run tests matching pattern */
+Obj* prim_test_report(void);                   /* Generate test report */
+Obj* prim_list_tests(void);                    /* List all test names */
+Obj* prim_test_count(void);                    /* Return test count */
+
+/* P4: Profiling (profile.c) */
+Obj* prim_profile_enable(void);                /* Enable profiling */
+Obj* prim_profile_disable(void);               /* Disable profiling */
+Obj* prim_profile_reset(void);                 /* Reset profiling data */
+Obj* prim_profile(Obj* name, Obj* thunk);      /* Profile expression */
+Obj* prim_time(Obj* thunk);                    /* Time expression execution */
+Obj* prim_call_counts(void);                   /* Get function call counts */
+Obj* prim_hot_spots(Obj* limit);               /* Find slow functions */
+Obj* prim_profile_report(void);                /* Generate profile report */
+Obj* prim_profile_entry(Obj* name);            /* Get entry for function */
+Obj* prim_benchmark(Obj* iterations, Obj* thunk);  /* Benchmark function */
+Obj* prim_profile_memory(Obj* thunk);          /* Profile memory usage */
+Obj* prim_profiling_enabled_p(void);           /* Check if profiling enabled */
+Obj* prim_profile_count(void);                 /* Return profiled entry count */
+
+/* ========== Issue 28: Standard Library Expansion ========== */
+
+/* P0: Random Numbers (math_numerics.c) */
+Obj* prim_seed_random(Obj* seed);              /* Set RNG seed */
+Obj* prim_random(void);                        /* Random float [0,1) */
+Obj* prim_random_int(Obj* n);                  /* Random int [0,n) */
+Obj* prim_random_range(Obj* min, Obj* max);    /* Random int in range */
+Obj* prim_random_float_range(Obj* min, Obj* max);  /* Random float in range */
+Obj* prim_random_choice(Obj* coll);            /* Random element from collection */
+Obj* prim_shuffle(Obj* coll);                  /* Shuffle collection */
+
+/* P1: Collection Utilities (collections.c) */
+Obj* prim_sort(Obj* coll);                     /* Sort list/array */
+Obj* prim_sort_by(Obj* key_fn, Obj* coll);     /* Sort by key function */
+Obj* prim_sort_with(Obj* cmp_fn, Obj* coll);   /* Sort with comparator */
+Obj* prim_reverse(Obj* coll);                  /* Reverse list/array */
+Obj* prim_group_by(Obj* key_fn, Obj* coll);    /* Group by key */
+Obj* prim_partition(Obj* pred, Obj* coll);     /* Split by predicate */
+Obj* prim_coll_take(Obj* n, Obj* coll);        /* First n elements */
+Obj* prim_coll_drop(Obj* n, Obj* coll);        /* Skip first n elements */
+Obj* prim_take_while(Obj* pred, Obj* coll);    /* Take while predicate */
+Obj* prim_drop_while(Obj* pred, Obj* coll);    /* Drop while predicate */
+Obj* prim_flatten(Obj* coll);                  /* Flatten one level */
+Obj* prim_flatten_deep(Obj* coll);             /* Flatten all levels */
+Obj* prim_zip(Obj* a, Obj* b);                 /* Pair elements */
+Obj* prim_unzip(Obj* pairs);                   /* Unpair to lists */
+Obj* prim_frequencies(Obj* coll);              /* Count occurrences */
+Obj* prim_distinct(Obj* coll);                 /* Remove duplicates */
+Obj* prim_interleave(Obj* a, Obj* b);          /* Interleave elements */
+Obj* prim_interpose(Obj* sep, Obj* coll);      /* Insert separator */
+
+/* P2: I/O Utilities (io.c) */
+Obj* prim_io_read_file(Obj* path);             /* Read file as string */
+Obj* prim_io_write_file(Obj* path, Obj* content);  /* Write string to file */
+Obj* prim_read_lines(Obj* path);               /* Read file as lines */
+Obj* prim_write_lines(Obj* path, Obj* lines);  /* Write lines to file */
+Obj* prim_read_bytes(Obj* path);               /* Read file as bytes */
+Obj* prim_write_bytes(Obj* path, Obj* bytes);  /* Write bytes to file */
+Obj* prim_file_exists_p(Obj* path);            /* Check if path exists */
+Obj* prim_file_p(Obj* path);                   /* Check if regular file */
+Obj* prim_directory_p(Obj* path);              /* Check if directory */
+Obj* prim_readable_p(Obj* path);               /* Check if readable */
+Obj* prim_writable_p(Obj* path);               /* Check if writable */
+Obj* prim_list_directory(Obj* path);           /* List directory contents */
+Obj* prim_make_directory(Obj* path);           /* Create directory */
+Obj* prim_make_directories(Obj* path);         /* Create nested dirs */
+Obj* prim_io_delete_file(Obj* path);           /* Delete file */
+Obj* prim_delete_directory(Obj* path);         /* Delete empty directory */
+Obj* prim_io_rename(Obj* old_path, Obj* new_path);  /* Rename/move */
+Obj* prim_copy_file(Obj* src, Obj* dst);       /* Copy file */
+Obj* prim_path_join(Obj* parts);               /* Join path components */
+Obj* prim_path_join2(Obj* a, Obj* b);          /* Join two paths */
+Obj* prim_path_dirname(Obj* path);             /* Get directory part */
+Obj* prim_path_basename(Obj* path);            /* Get filename part */
+Obj* prim_path_extension(Obj* path);           /* Get extension */
+Obj* prim_path_absolute(Obj* path);            /* Get absolute path */
+Obj* prim_current_directory(void);             /* Get cwd */
+Obj* prim_change_directory(Obj* path);         /* Change cwd */
+Obj* prim_io_file_size(Obj* path);             /* Get file size */
+Obj* prim_io_file_mtime(Obj* path);            /* Get modification time */
+Obj* prim_io_getenv(Obj* name);                /* Get env variable */
+Obj* prim_io_setenv(Obj* name, Obj* value);    /* Set env variable */
+Obj* prim_io_unsetenv(Obj* name);              /* Unset env variable */
+Obj* prim_io_environ(void);                    /* Get all env vars */
+
+/* P3: JSON Support (json.c) */
+Obj* prim_json_parse(Obj* json_str);           /* Parse JSON string */
+Obj* prim_json_stringify(Obj* value);          /* Convert to JSON string */
+Obj* prim_json_pretty(Obj* value);             /* Pretty-print JSON */
+Obj* prim_json_read(Obj* path);                /* Read and parse JSON file */
+Obj* prim_json_write(Obj* path, Obj* value);   /* Stringify and write JSON */
+Obj* prim_json_get(Obj* json, Obj* path);      /* Get nested value by path */
+Obj* prim_json_valid_p(Obj* json_str);         /* Check if valid JSON */
 
 #ifdef __cplusplus
 }

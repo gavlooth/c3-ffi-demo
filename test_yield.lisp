@@ -1,8 +1,10 @@
 ;; Test true yield with ucontext-based fibers
 
+; REVIEWED:SYNTAX
 (println "Test 1: Basic fiber")
 (println (resume (fiber (lambda () (+ 1 2)))))
 
+; REVIEWED:SYNTAX
 (println "Test 2: Generator with yield")
 (define counter
   (fiber (lambda ()

@@ -1,0 +1,466 @@
+;; test_json_parse.omni - Comprehensive tests for json-parse primitive
+;;
+;; Tests prim_json_parse function (exposed as json-parse in OmniLisp)
+;; which parses JSON strings into OmniLisp data structures.
+;;
+;; Supported types:
+;;   null -> nothing
+;;   true/false -> true/false
+;;   numbers -> integers or floats
+;;   strings -> strings
+;;   arrays -> arrays []
+;;   objects -> dicts #{}
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+(define test-nothing [name] [actual]
+  (set! test-count (+ test-count 1))
+  (if (nothing? actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected: nothing")
+        (print "  Got:" actual))))
+
+(define test-bool [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (= expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+(define test-num [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (= expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+(define test-string [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (= expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+(define test-dict [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (equal? expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+(define test-array [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (equal? expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+(define test-error [name] [actual]
+  (set! test-count (+ test-count 1))
+  (if (error? actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected: error")
+        (print "  Got:" actual))))
+
+;; ============================================================
+;; Basic Type Parsing Tests
+;; ============================================================
+
+(print "")
+(print "=== Basic Type Parsing Tests ===")
+
+;; Test 1: Null literal
+(test-nothing "parse null literal"
+  (json-parse "null"))
+
+;; Test 2: Boolean true
+(test-bool "parse boolean true"
+  true
+  (json-parse "true"))
+
+;; Test 3: Boolean false
+(test-bool "parse boolean false"
+  false
+  (json-parse "false"))
+
+;; Test 4: Simple integer
+(test-num "parse integer"
+  42
+  (json-parse "42"))
+
+;; Test 5: Negative integer
+(test-num "parse negative integer"
+  -123
+  (json-parse "-123"))
+
+;; Test 6: Float
+(test-num "parse float"
+  3.14
+  (json-parse "3.14"))
+
+;; Test 7: Negative float
+(test-num "parse negative float"
+  -0.5
+  (json-parse "-0.5"))
+
+;; Test 8: Float with exponent
+(test-num "parse float with exponent"
+  1.5e10
+  (json-parse "1.5e10"))
+
+;; Test 9: Negative float with exponent
+(test-num "parse negative float with exponent"
+  -1.5e-10
+  (json-parse "-1.5e-10"))
+
+;; Test 10: Empty string
+(test-string "parse empty string"
+  ""
+  (json-parse "\"\""))
+
+;; Test 11: Simple string
+(test-string "parse simple string"
+  "hello"
+  (json-parse "\"hello\""))
+
+;; Test 12: String with spaces
+(test-string "parse string with spaces"
+  "hello world"
+  (json-parse "\"hello world\""))
+
+;; Test 13: String with escape sequence
+(test-string "parse string with newline escape"
+  "hello\nworld"
+  (json-parse "\"hello\\nworld\""))
+
+;; Test 14: String with tab escape
+(test-string "parse string with tab escape"
+  "hello\tworld"
+  (json-parse "\"hello\\tworld\""))
+
+;; Test 15: String with backslash escape
+(test-string "parse string with backslash escape"
+  "C:\\path\\to\\file"
+  (json-parse "\"C:\\\\path\\\\to\\\\file\""))
+
+;; Test 16: String with quote escape
+(test-string "parse string with quote escape"
+  "say \"hello\""
+  (json-parse "\"say \\\"hello\\\"\""))
+
+;; ============================================================
+;; Array Parsing Tests
+;; ============================================================
+
+(print "")
+(print "=== Array Parsing Tests ===")
+
+;; Test 17: Empty array
+(test-array "parse empty array"
+  []
+  (json-parse "[]"))
+
+;; Test 18: Array of numbers
+(test-array "parse array of numbers"
+  [1 2 3 4 5]
+  (json-parse "[1, 2, 3, 4, 5]"))
+
+;; Test 19: Array of strings
+(test-array "parse array of strings"
+  ["a" "b" "c"]
+  (json-parse "[\"a\", \"b\", \"c\"]"))
+
+;; Test 20: Array of mixed types
+(test-array "parse array of mixed types"
+  [1 "two" true nothing]
+  (json-parse "[1, \"two\", true, null]"))
+
+;; Test 21: Nested arrays
+(test-array "parse nested arrays"
+  [[1 2] [3 4]]
+  (json-parse "[[1, 2], [3, 4]]"))
+
+;; Test 22: Deeply nested arrays
+(test-array "parse deeply nested arrays"
+  [[[1]]]
+  (json-parse "[[[1]]]"))
+
+;; ============================================================
+;; Object/Dict Parsing Tests
+;; ============================================================
+
+(print "")
+(print "=== Object/Dict Parsing Tests ===")
+
+;; Test 23: Empty object
+(test-dict "parse empty object"
+  #{}
+  (json-parse "{}"))
+
+;; Test 24: Object with string value
+(test-dict "parse object with string value"
+  #{:name "Alice"}
+  (json-parse "{\"name\": \"Alice\"}"))
+
+;; Test 25: Object with number value
+(test-dict "parse object with number value"
+  #{:age 30}
+  (json-parse "{\"age\": 30}"))
+
+;; Test 26: Object with boolean value
+(test-dict "parse object with boolean true"
+  #{:active true}
+  (json-parse "{\"active\": true}"))
+
+;; Test 27: Object with null value
+(test-dict "parse object with null value"
+  #{:value nothing}
+  (json-parse "{\"value\": null}"))
+
+;; Test 28: Object with multiple keys
+(test-dict "parse object with multiple keys"
+  #{:name "Bob" :age 25 :active true}
+  (json-parse "{\"name\": \"Bob\", \"age\": 25, \"active\": true}"))
+
+;; Test 29: Nested objects
+(test-dict "parse nested objects"
+  #{:user #{:name "Charlie" :age 35}}
+  (json-parse "{\"user\": {\"name\": \"Charlie\", \"age\": 35}}"))
+
+;; Test 30: Deeply nested objects
+(test-dict "parse deeply nested objects"
+  #{:a #{:b #{:c 42}}}
+  (json-parse "{\"a\": {\"b\": {\"c\": 42}}}"))
+
+;; ============================================================
+;; Complex Structure Tests
+;; ============================================================
+
+(print "")
+(print "=== Complex Structure Tests ===")
+
+;; Test 31: Array of objects
+(test-array "parse array of objects"
+  [#{:name "Alice" :id 1} #{:name "Bob" :id 2}]
+  (json-parse "[{\"name\": \"Alice\", \"id\": 1}, {\"name\": \"Bob\", \"id\": 2}]"))
+
+;; Test 32: Object with array value
+(test-dict "parse object with array value"
+  #{:items [1 2 3]}
+  (json-parse "{\"items\": [1, 2, 3]}"))
+
+;; Test 33: Mixed nested structure
+(test-dict "parse mixed nested structure"
+  #{:users [#{:name "Alice" :id 1}] :count 1}
+  (json-parse "{\"users\": [{\"name\": \"Alice\", \"id\": 1}], \"count\": 1}"))
+
+;; REVIEWED:SYNTAX
+;; Test 34: Complex real-world structure
+(test-dict "parse complex real-world structure"
+  #{:name "Test" :version "1.0"
+    :features #["feature1" "feature2"]
+    :settings #{:enabled true :count 5}}
+  (json-parse "{\"name\": \"Test\", \"version\": \"1.0\", \"features\": [\"feature1\", \"feature2\"], \"settings\": {\"enabled\": true, \"count\": 5}}"))
+
+;; ============================================================
+;; Whitespace Handling Tests
+;; ============================================================
+
+(print "")
+(print "=== Whitespace Handling Tests ===")
+
+;; Test 35: JSON with leading/trailing spaces
+(test-num "parse JSON with leading spaces"
+  42
+  (json-parse "   42   "))
+
+;; Test 36: Object with spaces
+(test-dict "parse object with spaces"
+  #{:name "Alice"}
+  (json-parse "{  \"name\"  :  \"Alice\"  }"))
+
+;; Test 37: Array with spaces
+(test-array "parse array with spaces"
+  [1 2 3]
+  (json-parse "[  1  ,  2  ,  3  ]"))
+
+;; Test 38: Newlines in JSON
+(test-dict "parse JSON with newlines"
+  #{:name "Alice" :age 30}
+  (json-parse "{\"name\": \"Alice\",\n\"age\": 30}"))
+
+;; ============================================================
+;; Number Edge Cases
+;; ============================================================
+
+(print "")
+(print "=== Number Edge Cases ===")
+
+;; Test 39: Zero
+(test-num "parse zero"
+  0
+  (json-parse "0"))
+
+;; Test 40: Negative zero
+(test-num "parse negative zero"
+  -0.0
+  (json-parse "-0"))
+
+;; Test 41: Large number
+(test-num "parse large number"
+  1000000
+  (json-parse "1000000"))
+
+;; Test 42: Float with decimal point only
+(test-num "parse 0.5"
+  0.5
+  (json-parse "0.5"))
+
+;; Test 43: Float starting with decimal
+(test-num "parse .5"
+  0.5
+  (json-parse ".5"))
+
+;; Test 44: Integer ending with decimal
+(test-num "parse 3."
+  3.0
+  (json-parse "3."))
+
+;; Test 45: Scientific notation with capital E
+(test-num "parse capital E exponent"
+  1.5e10
+  (json-parse "1.5E10"))
+
+;; Test 46: Scientific notation with plus sign
+(test-num "parse exponent with plus"
+  1.5e10
+  (json-parse "1.5e+10"))
+
+;; ============================================================
+;; Error Handling Tests
+;; ============================================================
+
+(print "")
+(print "=== Error Handling Tests ===")
+
+;; Test 47: Unclosed string
+(test-error "parse unclosed string returns error"
+  (json-parse "\"hello"))
+
+;; Test 48: Unclosed array
+(test-error "parse unclosed array returns error"
+  (json-parse "[1, 2, 3"))
+
+;; Test 49: Unclosed object
+(test-error "parse unclosed object returns error"
+  (json-parse "{\"name\": \"Alice\""))
+
+;; Test 50: Missing comma in array
+(test-error "parse array without comma returns error"
+  (json-parse "[1 2 3]"))
+
+;; Test 51: Trailing comma in array
+(test-error "parse trailing comma in array returns error"
+  (json-parse "[1, 2, 3,]"))
+
+;; Test 52: Missing comma in object
+(test-error "parse object without comma returns error"
+  (json-parse "{\"name\" \"Alice\"}"))
+
+;; Test 53: Trailing comma in object
+(test-error "parse trailing comma in object returns error"
+  (json-parse "{\"name\": \"Alice\",}"))
+
+;; Test 54: Missing value in object
+(test-error "parse object missing value returns error"
+  (json-parse "{\"name\":}"))
+
+;; Test 55: Missing key in object
+(test-error "parse object missing key returns error"
+  (json-parse "{: \"value\"}"))
+
+;; Test 56: Unquoted string (invalid in JSON)
+(test-error "parse unquoted string returns error"
+  (json-parse "hello"))
+
+;; Test 57: Undefined literal
+(test-error "parse undefined literal returns error"
+  (json-parse "undefined"))
+
+;; Test 58: NaN (not valid JSON)
+(test-error "parse NaN returns error"
+  (json-parse "NaN"))
+
+;; Test 59: Infinity (not valid JSON)
+(test-error "parse Infinity returns error"
+  (json-parse "Infinity"))
+
+;; Test 60: Single quote strings
+(test-error "parse single quote string returns error"
+  (json-parse "'hello'"))
+
+;; Test 61: Trailing garbage
+(test-error "parse trailing garbage returns error"
+  (json-parse "true garbage"))
+
+;; Test 62: Multiple values
+(test-error "parse multiple values returns error"
+  (json-parse "true false"))
+
+;; ============================================================
+;; Test Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

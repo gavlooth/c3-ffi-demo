@@ -1,0 +1,240 @@
+;; test_string_contains.omni - Comprehensive tests for string-contains? primitive
+;;
+;; Tests prim_string_contains function (exposed as string-contains? in OmniLisp)
+;; which returns true if a string contains a substring.
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+(define test-bool name expected actual
+  (do
+    (set! test-count (+ test-count 1))
+    (if (= expected actual)
+        (do
+          (set! pass-count (+ pass-count 1))
+          (print "PASS:" name))
+        (do
+          (set! fail-count (+ fail-count 1))
+          (print "FAIL:" name)
+          (print "  Expected:" expected)
+          (print "  Got:" actual)))))
+
+;; ============================================================
+;; Basic Contains Tests
+;; ============================================================
+
+(print "")
+(print "=== Basic Contains Tests ===")
+
+;; Test 1: String contains substring at start
+(test-bool "contains at start"
+  1
+  (string-contains? "hello world" "hello"))
+
+;; Test 2: String contains substring in middle
+(test-bool "contains in middle"
+  1
+  (string-contains? "hello world" "lo wo"))
+
+;; Test 3: String contains substring at end
+(test-bool "contains at end"
+  1
+  (string-contains? "hello world" "world"))
+
+;; Test 4: String equals substring
+(test-bool "string equals substring"
+  1
+  (string-contains? "hello" "hello"))
+
+;; Test 5: String does not contain substring
+(test-bool "does not contain"
+  0
+  (string-contains? "hello world" "xyz"))
+
+;; ============================================================
+;; Empty String Tests
+;; ============================================================
+
+(print "")
+(print "=== Empty String Tests ===")
+
+;; Test 6: Empty substring is found
+(test-bool "empty substring"
+  1
+  (string-contains? "hello" ""))
+
+;; Test 7: Non-empty substring in empty string
+(test-bool "substring not in empty string"
+  0
+  (string-contains? "" "hello"))
+
+;; Test 8: Empty string contains empty string
+(test-bool "both empty"
+  1
+  (string-contains? "" ""))
+
+;; ============================================================
+;; Single Character Tests
+;; ============================================================
+
+(print "")
+(print "=== Single Character Tests ===")
+
+;; Test 9: Contains single character
+(test-bool "contains single char"
+  1
+  (string-contains? "hello" "e"))
+
+;; Test 10: Does not contain character
+(test-bool "does not contain char"
+  0
+  (string-contains? "hello" "x"))
+
+;; Test 11: Single char string contains itself
+(test-bool "single char contains itself"
+  1
+  (string-contains? "a" "a"))
+
+;; ============================================================
+;; Special Character Tests
+;; ============================================================
+
+(print "")
+(print "=== Special Character Tests ===")
+
+;; Test 12: Contains space
+(test-bool "contains space"
+  1
+  (string-contains? "hello world" " "))
+
+;; Test 13: Contains newline
+(test-bool "contains newline"
+  1
+  (string-contains? "line1\nline2" "\n"))
+
+;; Test 14: Contains tab
+(test-bool "contains tab"
+  1
+  (string-contains? "col1\tcol2" "\t"))
+
+;; Test 15: Contains punctuation
+(test-bool "contains punctuation"
+  1
+  (string-contains? "hello, world!" ","))
+
+;; ============================================================
+;; Case Sensitivity Tests
+;; ============================================================
+
+(print "")
+(print "=== Case Sensitivity Tests ===")
+
+;; Test 16: Case sensitive match
+(test-bool "case sensitive - lowercase"
+  1
+  (string-contains? "Hello World" "Hello"))
+
+;; Test 17: Case sensitive - no match
+(test-bool "case sensitive - no match"
+  0
+  (string-contains? "Hello World" "hello"))
+
+;; Test 18: Mixed case contains lowercase
+(test-bool "mixed case contains lowercase"
+  1
+  (string-contains? "HeLLo" "eL"))
+
+;; ============================================================
+;; Repeated Substring Tests
+;; ============================================================
+
+(print "")
+(print "=== Repeated Substring Tests ===")
+
+;; Test 19: Contains repeated pattern
+(test-bool "contains repeated pattern"
+  1
+  (string-contains? "abcabcabc" "abc"))
+
+;; Test 20: Contains single char in repeated pattern
+(test-bool "contains char in repeated pattern"
+  1
+  (string-contains? "aaaaa" "a"))
+
+;; ============================================================
+;; Numeric String Tests
+;; ============================================================
+
+(print "")
+(print "=== Numeric String Tests ===")
+
+;; Test 21: Contains numeric substring
+(test-bool "contains numeric"
+  1
+  (string-contains? "test123" "123"))
+
+;; Test 22: Contains single digit
+(test-bool "contains single digit"
+  1
+  (string-contains? "value: 42" "4"))
+
+;; ============================================================
+;; Edge Case Tests
+;; ============================================================
+
+(print "")
+(print "=== Edge Case Tests ===")
+
+;; Test 23: Contains entire string
+(test-bool "contains entire string"
+  1
+  (string-contains? "a very long string" "a very long string"))
+
+;; Test 24: Substring longer than string
+(test-bool "substring longer than string"
+  0
+  (string-contains? "short" "much longer substring"))
+
+;; Test 25: Special chars - contains
+(test-bool "contains special chars"
+  1
+  (string-contains? "@#$%^&*" "$%"))
+
+;; ============================================================
+;; Whitespace Tests
+;; ============================================================
+
+(print "")
+(print "=== Whitespace Tests ===")
+
+;; Test 26: Contains multiple spaces
+(test-bool "contains multiple spaces"
+  1
+  (string-contains? "a  b" "  "))
+
+;; Test 27: Contains leading/trailing whitespace
+(test-bool "contains leading whitespace"
+  1
+  (string-contains? "  hello" "  "))
+
+;; ============================================================
+;; Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

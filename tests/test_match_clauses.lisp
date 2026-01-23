@@ -39,6 +39,7 @@
 
 ; Test 6: Legacy syntax (alternating pattern result)
 ; This should still work for backward compatibility
+; REVIEWED:SYNTAX
 (define test6
   (match 100
     100 "hundred"

@@ -1,20 +1,20 @@
 /*
- * regex_compile.c - Pika-style Regex Engine Implementation
+ * regex_compile.c - Pika-based Regex Engine Implementation
  *
- * Self-contained regex engine using Pika-style PEG matching.
- * Compiles regex to AST and matches directly against the AST.
+ * Compiles regex patterns to PikaClause trees and uses the Pika
+ * parsing infrastructure for matching.
  *
  * Pipeline:
  *   1. Tokenizer: regex string -> token stream
- *   2. Parser: token stream -> AST (respecting precedence)
- *   3. Matcher: AST + input -> match result
+ *   2. Parser: token stream -> PikaClause tree (via pika_clause_* API)
+ *   3. Matcher: Uses Pika's pika_grammar_parse() for matching
  *
  * Supported Features:
  *   - Literals: abc
  *   - Character classes: [abc], [a-z], [^abc]
  *   - Any character: .
  *   - Quantifiers: *, +, ?, {n}, {n,}, {n,m}
- *   - Possessive quantifiers: *+, ++, ?+ (no backtracking)
+ *   - Possessive quantifiers: *+, ++, ?+ (no backtracking - PEG native)
  *   - Alternation: a|b
  *   - Grouping: (ab)+
  *   - Non-capturing groups: (?:...)
@@ -25,69 +25,20 @@
 
 #include "regex_compile.h"
 #include "internal_types.h"
+#include "../../csrc/parser/pika_c/pika.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <ctype.h>
 
-/* ============== AST Node Types ============== */
+/* ============== Compiled Regex Structure ============== */
 
-typedef enum {
-    AST_LITERAL,     /* Single character */
-    AST_CHAR_CLASS,  /* Character class */
-    AST_DOT,         /* Any character */
-    AST_SEQ,         /* Sequence of nodes */
-    AST_ALT,         /* Alternation */
-    AST_REP,         /* Repetition (*, +, ?) */
-    AST_GROUP,       /* Grouping (just for structure) */
-    AST_ANCHOR,      /* Anchor: ^, $, \b */
-    AST_LOOKAHEAD    /* Lookahead: (?=...) or (?!...) */
-} ASTNodeType;
-
-/* Anchor types */
-typedef enum {
-    ANCHOR_START,    /* ^ - start of string */
-    ANCHOR_END,      /* $ - end of string */
-    ANCHOR_WORD_BOUNDARY  /* \b - word boundary */
-} AnchorType;
-
-/* Character class: stores ranges and individual chars */
-typedef struct {
-    char ranges[64][2];  /* Start-end pairs for ranges */
-    int num_ranges;
-    char chars[64];      /* Individual characters */
-    int num_chars;
-    bool negated;        /* [^...] negation */
-} CharClass;
-
-typedef struct ASTNode {
-    ASTNodeType type;
-    union {
-        char ch;              /* AST_LITERAL */
-        CharClass* cclass;    /* AST_CHAR_CLASS */
-        struct {              /* AST_SEQ, AST_ALT */
-            struct ASTNode** children;
-            int num_children;
-        } list;
-        struct {              /* AST_REP */
-            struct ASTNode* child;
-            int min;          /* 0 for *, 1 for +, 0 for ? */
-            int max;          /* -1 for unlimited, 1 for ? */
-            bool possessive;  /* true for *+, ++, ?+ */
-        } rep;
-        struct ASTNode* group; /* AST_GROUP */
-        AnchorType anchor;    /* AST_ANCHOR */
-        struct {              /* AST_LOOKAHEAD */
-            struct ASTNode* child;
-            bool positive;    /* true for (?=...), false for (?!...) */
-        } lookahead;
-    } data;
-} ASTNode;
-
-/* Compiled regex structure */
 struct PikaRegexCompiled {
-    ASTNode* ast;      /* Root of AST */
-    char* error;       /* Error message if compilation failed */
+    PikaClause* pattern;       /* Root clause of the pattern */
+    PikaGrammar* grammar;      /* Grammar wrapping the pattern */
+    bool anchored_start;       /* Pattern starts with ^ */
+    bool anchored_end;         /* Pattern ends with $ */
+    bool has_word_boundary;    /* Pattern contains \b */
+    char* error;               /* Error message if compilation failed */
 };
 
 /* ============== Token Types ============== */
@@ -115,14 +66,23 @@ typedef enum {
     TOK_END          /* End of pattern */
 } TokenType;
 
+/* Character class representation for tokenizer */
+typedef struct {
+    char ranges[64][2];  /* Start-end pairs for ranges */
+    int num_ranges;
+    char chars[64];      /* Individual characters */
+    int num_chars;
+    bool negated;        /* [^...] negation */
+} CharClassData;
+
 typedef struct {
     TokenType type;
     union {
-        char ch;           /* For TOK_LITERAL */
-        CharClass* cclass; /* For TOK_CHAR_CLASS */
-        struct {           /* For TOK_LBRACE (bounded quantifier) */
+        char ch;              /* For TOK_LITERAL */
+        CharClassData* cclass; /* For TOK_CHAR_CLASS */
+        struct {              /* For TOK_LBRACE (bounded quantifier) */
             int min;
-            int max;       /* -1 for unbounded {n,} */
+            int max;          /* -1 for unbounded {n,} */
             bool possessive;
         } bounds;
     } data;
@@ -167,8 +127,8 @@ static char tokenizer_advance(Tokenizer* t) {
     return t->pattern[t->pos++];
 }
 
-static CharClass* parse_char_class(Tokenizer* t) {
-    CharClass* cc = malloc(sizeof(CharClass));
+static CharClassData* parse_char_class_data(Tokenizer* t) {
+    CharClassData* cc = malloc(sizeof(CharClassData));
     cc->num_ranges = 0;
     cc->num_chars = 0;
     cc->negated = false;
@@ -330,7 +290,7 @@ static Token next_token(Tokenizer* t) {
     switch (c) {
         case '[':
             tok.type = TOK_CHAR_CLASS;
-            tok.data.cclass = parse_char_class(t);
+            tok.data.cclass = parse_char_class_data(t);
             return tok;
 
         case '.':
@@ -430,7 +390,7 @@ static Token next_token(Tokenizer* t) {
                 case 'd': {
                     /* \d = [0-9] */
                     tok.type = TOK_CHAR_CLASS;
-                    tok.data.cclass = malloc(sizeof(CharClass));
+                    tok.data.cclass = malloc(sizeof(CharClassData));
                     tok.data.cclass->num_ranges = 1;
                     tok.data.cclass->ranges[0][0] = '0';
                     tok.data.cclass->ranges[0][1] = '9';
@@ -441,7 +401,7 @@ static Token next_token(Tokenizer* t) {
                 case 'D': {
                     /* \D = [^0-9] (negated digits) */
                     tok.type = TOK_CHAR_CLASS;
-                    tok.data.cclass = malloc(sizeof(CharClass));
+                    tok.data.cclass = malloc(sizeof(CharClassData));
                     tok.data.cclass->num_ranges = 1;
                     tok.data.cclass->ranges[0][0] = '0';
                     tok.data.cclass->ranges[0][1] = '9';
@@ -452,7 +412,7 @@ static Token next_token(Tokenizer* t) {
                 case 'w': {
                     /* \w = [a-zA-Z0-9_] */
                     tok.type = TOK_CHAR_CLASS;
-                    tok.data.cclass = malloc(sizeof(CharClass));
+                    tok.data.cclass = malloc(sizeof(CharClassData));
                     tok.data.cclass->num_ranges = 3;
                     tok.data.cclass->ranges[0][0] = 'a';
                     tok.data.cclass->ranges[0][1] = 'z';
@@ -468,7 +428,7 @@ static Token next_token(Tokenizer* t) {
                 case 'W': {
                     /* \W = [^a-zA-Z0-9_] (negated word) */
                     tok.type = TOK_CHAR_CLASS;
-                    tok.data.cclass = malloc(sizeof(CharClass));
+                    tok.data.cclass = malloc(sizeof(CharClassData));
                     tok.data.cclass->num_ranges = 3;
                     tok.data.cclass->ranges[0][0] = 'a';
                     tok.data.cclass->ranges[0][1] = 'z';
@@ -484,7 +444,7 @@ static Token next_token(Tokenizer* t) {
                 case 's': {
                     /* \s = [ \t\n\r] */
                     tok.type = TOK_CHAR_CLASS;
-                    tok.data.cclass = malloc(sizeof(CharClass));
+                    tok.data.cclass = malloc(sizeof(CharClassData));
                     tok.data.cclass->num_ranges = 0;
                     tok.data.cclass->num_chars = 4;
                     tok.data.cclass->chars[0] = ' ';
@@ -497,7 +457,7 @@ static Token next_token(Tokenizer* t) {
                 case 'S': {
                     /* \S = [^ \t\n\r] (negated space) */
                     tok.type = TOK_CHAR_CLASS;
-                    tok.data.cclass = malloc(sizeof(CharClass));
+                    tok.data.cclass = malloc(sizeof(CharClassData));
                     tok.data.cclass->num_ranges = 0;
                     tok.data.cclass->num_chars = 4;
                     tok.data.cclass->chars[0] = ' ';
@@ -523,12 +483,15 @@ static Token next_token(Tokenizer* t) {
     }
 }
 
-/* ============== Parser ============== */
+/* ============== Parser (builds PikaClause trees) ============== */
 
 typedef struct {
     Tokenizer* tokenizer;
     Token current;
     char* error;
+    bool saw_anchor_start;
+    bool saw_anchor_end;
+    bool saw_word_boundary;
 } Parser;
 
 static Parser* parser_new(const char* pattern) {
@@ -536,6 +499,9 @@ static Parser* parser_new(const char* pattern) {
     p->tokenizer = tokenizer_new(pattern);
     p->current = next_token(p->tokenizer);
     p->error = NULL;
+    p->saw_anchor_start = false;
+    p->saw_anchor_end = false;
+    p->saw_word_boundary = false;
     return p;
 }
 
@@ -549,150 +515,159 @@ static void parser_advance(Parser* p) {
     p->current = next_token(p->tokenizer);
 }
 
-static ASTNode* ast_new(ASTNodeType type) {
-    ASTNode* node = malloc(sizeof(ASTNode));
-    node->type = type;
-    return node;
+/* Convert CharClassData to PikaClause */
+static PikaClause* charclass_to_clause(CharClassData* cc) {
+    if (!cc) return NULL;
+
+    /* Build charset clauses for ranges and chars, then union them */
+    PikaClause* charsets[128];
+    int num_charsets = 0;
+
+    /* Add ranges */
+    for (int i = 0; i < cc->num_ranges && num_charsets < 128; i++) {
+        PikaClause* range_clause = pika_clause_charset_from_range(
+            cc->ranges[i][0], cc->ranges[i][1]);
+        if (range_clause) {
+            charsets[num_charsets++] = range_clause;
+        }
+    }
+
+    /* Add individual chars */
+    if (cc->num_chars > 0 && num_charsets < 128) {
+        PikaClause* chars_clause = pika_clause_charset_from_chars(
+            cc->chars, cc->num_chars);
+        if (chars_clause) {
+            charsets[num_charsets++] = chars_clause;
+        }
+    }
+
+    if (num_charsets == 0) {
+        /* Empty character class - create a charset that matches nothing */
+        free(cc);
+        return pika_clause_charset_from_chars("", 0);
+    }
+
+    PikaClause* result;
+    if (num_charsets == 1) {
+        result = charsets[0];
+    } else {
+        /* Union all charsets (consumes inputs) */
+        result = pika_clause_charset_union_take(charsets, num_charsets);
+    }
+
+    /* Apply negation if needed */
+    if (cc->negated && result) {
+        result = pika_clause_charset_invert(result);
+    }
+
+    free(cc);
+    return result;
 }
 
-static void ast_free(ASTNode* node) {
-    if (!node) return;
-    switch (node->type) {
-        case AST_CHAR_CLASS:
-            if (node->data.cclass) free(node->data.cclass);
-            break;
-        case AST_SEQ:
-        case AST_ALT:
-            for (int i = 0; i < node->data.list.num_children; i++) {
-                ast_free(node->data.list.children[i]);
-            }
-            free(node->data.list.children);
-            break;
-        case AST_REP:
-            ast_free(node->data.rep.child);
-            break;
-        case AST_GROUP:
-            ast_free(node->data.group);
-            break;
-        case AST_LOOKAHEAD:
-            ast_free(node->data.lookahead.child);
-            break;
-        case AST_ANCHOR:
-        case AST_LITERAL:
-        case AST_DOT:
-            break;
-    }
-    free(node);
+/* Create "any char" clause (matches any single character) */
+static PikaClause* create_any_char_clause(void) {
+    /* Create charset for all printable ASCII and common control chars */
+    /* Use range 0x01-0xFF (all non-null bytes) */
+    return pika_clause_charset_from_range(0x01, 0x7F);
 }
 
 /* Forward declarations for recursive descent parser */
-static ASTNode* parse_alternation(Parser* p);
-static ASTNode* parse_sequence(Parser* p);
-static ASTNode* parse_quantified(Parser* p);
-static ASTNode* parse_atom(Parser* p);
+static PikaClause* parse_alternation(Parser* p);
+static PikaClause* parse_sequence(Parser* p);
+static PikaClause* parse_quantified(Parser* p);
+static PikaClause* parse_atom(Parser* p);
 
-static ASTNode* parse_atom(Parser* p) {
+static PikaClause* parse_atom(Parser* p) {
     Token tok = p->current;
 
     switch (tok.type) {
         case TOK_LITERAL: {
-            ASTNode* node = ast_new(AST_LITERAL);
-            node->data.ch = tok.data.ch;
+            char s[2] = { tok.data.ch, '\0' };
+            PikaClause* clause = pika_clause_str(s);
             parser_advance(p);
-            return node;
+            return clause;
         }
 
         case TOK_CHAR_CLASS: {
-            ASTNode* node = ast_new(AST_CHAR_CLASS);
-            node->data.cclass = tok.data.cclass;
+            PikaClause* clause = charclass_to_clause(tok.data.cclass);
             parser_advance(p);
-            return node;
+            return clause;
         }
 
         case TOK_DOT: {
-            ASTNode* node = ast_new(AST_DOT);
+            PikaClause* clause = create_any_char_clause();
             parser_advance(p);
-            return node;
+            return clause;
         }
 
         case TOK_ANCHOR_START: {
-            ASTNode* node = ast_new(AST_ANCHOR);
-            node->data.anchor = ANCHOR_START;
+            /* ^ anchor - record it and return pika_clause_start() */
+            p->saw_anchor_start = true;
+            PikaClause* clause = pika_clause_start();
             parser_advance(p);
-            return node;
+            return clause;
         }
 
         case TOK_ANCHOR_END: {
-            ASTNode* node = ast_new(AST_ANCHOR);
-            node->data.anchor = ANCHOR_END;
+            /* $ anchor - record it, match end via negative lookahead of any char */
+            p->saw_anchor_end = true;
             parser_advance(p);
-            return node;
+            /* $ = not followed by any char */
+            return pika_clause_not_followed_by(create_any_char_clause());
         }
 
         case TOK_WORD_BOUND: {
-            ASTNode* node = ast_new(AST_ANCHOR);
-            node->data.anchor = ANCHOR_WORD_BOUNDARY;
+            /* \b word boundary - complex to express in PEG */
+            /* For now, just mark it and return nothing (zero-width) */
+            p->saw_word_boundary = true;
             parser_advance(p);
-            return node;
+            /* Word boundary is hard in PEG - return nothing for now */
+            return pika_clause_nothing();
         }
 
         case TOK_LPAREN: {
             parser_advance(p); /* Skip ( */
-            ASTNode* inner = parse_alternation(p);
+            PikaClause* inner = parse_alternation(p);
             if (p->current.type != TOK_RPAREN) {
                 p->error = strdup("Expected closing parenthesis");
-                ast_free(inner);
                 return NULL;
             }
             parser_advance(p); /* Skip ) */
-            ASTNode* node = ast_new(AST_GROUP);
-            node->data.group = inner;
-            return node;
+            return inner;
         }
 
         case TOK_NONCAP: {
-            /* Non-capturing group (?:...) - same as regular group in our engine */
+            /* Non-capturing group (?:...) - same as regular group */
             parser_advance(p); /* Skip (?: */
-            ASTNode* inner = parse_alternation(p);
+            PikaClause* inner = parse_alternation(p);
             if (p->current.type != TOK_RPAREN) {
                 p->error = strdup("Expected closing parenthesis for non-capturing group");
-                ast_free(inner);
                 return NULL;
             }
             parser_advance(p); /* Skip ) */
-            ASTNode* node = ast_new(AST_GROUP);
-            node->data.group = inner;
-            return node;
+            return inner;
         }
 
         case TOK_LOOKAHEAD_POS: {
             parser_advance(p); /* Skip (?= */
-            ASTNode* inner = parse_alternation(p);
+            PikaClause* inner = parse_alternation(p);
             if (p->current.type != TOK_RPAREN) {
                 p->error = strdup("Expected closing parenthesis for lookahead");
-                ast_free(inner);
                 return NULL;
             }
             parser_advance(p); /* Skip ) */
-            ASTNode* node = ast_new(AST_LOOKAHEAD);
-            node->data.lookahead.child = inner;
-            node->data.lookahead.positive = true;
-            return node;
+            return pika_clause_followed_by(inner);
         }
 
         case TOK_LOOKAHEAD_NEG: {
             parser_advance(p); /* Skip (?! */
-            ASTNode* inner = parse_alternation(p);
+            PikaClause* inner = parse_alternation(p);
             if (p->current.type != TOK_RPAREN) {
                 p->error = strdup("Expected closing parenthesis for negative lookahead");
-                ast_free(inner);
                 return NULL;
             }
             parser_advance(p); /* Skip ) */
-            ASTNode* node = ast_new(AST_LOOKAHEAD);
-            node->data.lookahead.child = inner;
-            node->data.lookahead.positive = false;
-            return node;
+            return pika_clause_not_followed_by(inner);
         }
 
         default:
@@ -700,85 +675,95 @@ static ASTNode* parse_atom(Parser* p) {
     }
 }
 
-static ASTNode* parse_quantified(Parser* p) {
-    ASTNode* atom = parse_atom(p);
+/* Create bounded repetition: a{min,max} */
+static PikaClause* create_bounded_repeat(PikaClause* clause, int min, int max) {
+    if (!clause) return NULL;
+    if (max < 0) {
+        /* Unbounded: a{n,} = a...a (n times) followed by a* */
+        if (min == 0) {
+            return pika_clause_zero_or_more(clause);
+        } else if (min == 1) {
+            return pika_clause_one_or_more(clause);
+        } else {
+            /* a{n,} = a a ... a a* (n required, then zero or more) */
+            PikaClause** parts = malloc((min + 1) * sizeof(PikaClause*));
+            for (int i = 0; i < min; i++) {
+                parts[i] = clause;
+            }
+            parts[min] = pika_clause_zero_or_more(clause);
+            PikaClause* result = pika_clause_seq(parts, min + 1);
+            free(parts);
+            return result;
+        }
+    } else if (max == 0 && min == 0) {
+        /* a{0,0} = nothing */
+        return pika_clause_nothing();
+    } else {
+        /* Bounded: a{min,max} = a...a (min times) a?...a? (max-min times) */
+        int total = max;
+        if (total == 0) return pika_clause_nothing();
+
+        PikaClause** parts = malloc(total * sizeof(PikaClause*));
+        for (int i = 0; i < min; i++) {
+            parts[i] = clause;
+        }
+        for (int i = min; i < max; i++) {
+            parts[i] = pika_clause_optional(clause);
+        }
+
+        PikaClause* result;
+        if (total == 1) {
+            result = parts[0];
+        } else {
+            result = pika_clause_seq(parts, total);
+        }
+        free(parts);
+        return result;
+    }
+}
+
+static PikaClause* parse_quantified(Parser* p) {
+    PikaClause* atom = parse_atom(p);
     if (!atom) return NULL;
 
     /* Check for quantifier */
     Token tok = p->current;
 
-    /* Standard quantifiers */
-    if (tok.type == TOK_STAR || tok.type == TOK_PLUS || tok.type == TOK_QUESTION) {
-        ASTNode* rep = ast_new(AST_REP);
-        rep->data.rep.child = atom;
-        rep->data.rep.possessive = false;
-        switch (tok.type) {
-            case TOK_STAR:
-                rep->data.rep.min = 0;
-                rep->data.rep.max = -1;
-                break;
-            case TOK_PLUS:
-                rep->data.rep.min = 1;
-                rep->data.rep.max = -1;
-                break;
-            case TOK_QUESTION:
-                rep->data.rep.min = 0;
-                rep->data.rep.max = 1;
-                break;
-            default:
-                break;
-        }
+    /* Standard quantifiers (PEG is naturally possessive/greedy) */
+    if (tok.type == TOK_STAR || tok.type == TOK_STAR_POSS) {
         parser_advance(p);
-        return rep;
+        return pika_clause_zero_or_more(atom);
     }
 
-    /* Possessive quantifiers */
-    if (tok.type == TOK_STAR_POSS || tok.type == TOK_PLUS_POSS || tok.type == TOK_QUEST_POSS) {
-        ASTNode* rep = ast_new(AST_REP);
-        rep->data.rep.child = atom;
-        rep->data.rep.possessive = true;
-        switch (tok.type) {
-            case TOK_STAR_POSS:
-                rep->data.rep.min = 0;
-                rep->data.rep.max = -1;
-                break;
-            case TOK_PLUS_POSS:
-                rep->data.rep.min = 1;
-                rep->data.rep.max = -1;
-                break;
-            case TOK_QUEST_POSS:
-                rep->data.rep.min = 0;
-                rep->data.rep.max = 1;
-                break;
-            default:
-                break;
-        }
+    if (tok.type == TOK_PLUS || tok.type == TOK_PLUS_POSS) {
         parser_advance(p);
-        return rep;
+        return pika_clause_one_or_more(atom);
+    }
+
+    if (tok.type == TOK_QUESTION || tok.type == TOK_QUEST_POSS) {
+        parser_advance(p);
+        return pika_clause_optional(atom);
     }
 
     /* Bounded quantifier {n}, {n,}, {n,m} */
     if (tok.type == TOK_LBRACE) {
-        ASTNode* rep = ast_new(AST_REP);
-        rep->data.rep.child = atom;
-        rep->data.rep.min = tok.data.bounds.min;
-        rep->data.rep.max = tok.data.bounds.max;
-        rep->data.rep.possessive = tok.data.bounds.possessive;
+        int min = tok.data.bounds.min;
+        int max = tok.data.bounds.max;
         parser_advance(p);
-        return rep;
+        return create_bounded_repeat(atom, min, max);
     }
 
     return atom;
 }
 
-static ASTNode* parse_sequence(Parser* p) {
-    ASTNode* children[128];
+static PikaClause* parse_sequence(Parser* p) {
+    PikaClause* children[128];
     int num_children = 0;
 
     while (p->current.type != TOK_END &&
            p->current.type != TOK_PIPE &&
            p->current.type != TOK_RPAREN) {
-        ASTNode* child = parse_quantified(p);
+        PikaClause* child = parse_quantified(p);
         if (!child) break;
         if (num_children < 128) {
             children[num_children++] = child;
@@ -786,34 +771,30 @@ static ASTNode* parse_sequence(Parser* p) {
     }
 
     if (num_children == 0) {
-        return NULL;
+        return pika_clause_nothing();
     }
     if (num_children == 1) {
         return children[0];
     }
 
-    ASTNode* seq = ast_new(AST_SEQ);
-    seq->data.list.children = malloc(num_children * sizeof(ASTNode*));
-    seq->data.list.num_children = num_children;
-    memcpy(seq->data.list.children, children, num_children * sizeof(ASTNode*));
-    return seq;
+    return pika_clause_seq(children, num_children);
 }
 
-static ASTNode* parse_alternation(Parser* p) {
-    ASTNode* left = parse_sequence(p);
+static PikaClause* parse_alternation(Parser* p) {
+    PikaClause* left = parse_sequence(p);
 
     if (p->current.type != TOK_PIPE) {
         return left;
     }
 
     /* Collect all alternatives */
-    ASTNode* alternatives[64];
+    PikaClause* alternatives[64];
     int num_alts = 0;
     alternatives[num_alts++] = left;
 
     while (p->current.type == TOK_PIPE) {
         parser_advance(p); /* Skip | */
-        ASTNode* alt = parse_sequence(p);
+        PikaClause* alt = parse_sequence(p);
         if (alt && num_alts < 64) {
             alternatives[num_alts++] = alt;
         }
@@ -823,151 +804,18 @@ static ASTNode* parse_alternation(Parser* p) {
         return alternatives[0];
     }
 
-    ASTNode* node = ast_new(AST_ALT);
-    node->data.list.children = malloc(num_alts * sizeof(ASTNode*));
-    node->data.list.num_children = num_alts;
-    memcpy(node->data.list.children, alternatives, num_alts * sizeof(ASTNode*));
-    return node;
-}
-
-/* ============== Matcher ============== */
-
-/* Match result: -1 means no match, >= 0 is length of match */
-static int match_ast(ASTNode* node, const char* input, int pos, int len);
-
-static bool char_class_contains(CharClass* cc, char c) {
-    /* Check ranges */
-    for (int i = 0; i < cc->num_ranges; i++) {
-        if (c >= cc->ranges[i][0] && c <= cc->ranges[i][1]) {
-            return !cc->negated;
-        }
-    }
-
-    /* Check individual chars */
-    for (int i = 0; i < cc->num_chars; i++) {
-        if (c == cc->chars[i]) {
-            return !cc->negated;
-        }
-    }
-
-    return cc->negated;
-}
-
-/* Check if character is a word character (for \b) */
-static bool is_word_char(char c) {
-    return (c >= 'a' && c <= 'z') ||
-           (c >= 'A' && c <= 'Z') ||
-           (c >= '0' && c <= '9') ||
-           c == '_';
-}
-
-static int match_ast(ASTNode* node, const char* input, int pos, int len) {
-    if (!node) return -1;
-
-    switch (node->type) {
-        case AST_LITERAL: {
-            if (pos >= len) return -1;
-            if (input[pos] == node->data.ch) return 1;
-            return -1;
-        }
-
-        case AST_CHAR_CLASS: {
-            if (pos >= len) return -1;
-            if (char_class_contains(node->data.cclass, input[pos])) return 1;
-            return -1;
-        }
-
-        case AST_DOT: {
-            if (pos >= len) return -1;
-            return 1;  /* Match any character */
-        }
-
-        case AST_ANCHOR: {
-            switch (node->data.anchor) {
-                case ANCHOR_START:
-                    /* ^ matches only at position 0 */
-                    return (pos == 0) ? 0 : -1;
-
-                case ANCHOR_END:
-                    /* $ matches only at end of string */
-                    return (pos == len) ? 0 : -1;
-
-                case ANCHOR_WORD_BOUNDARY: {
-                    /* \b matches at word boundary */
-                    bool prev_is_word = (pos > 0) && is_word_char(input[pos - 1]);
-                    bool curr_is_word = (pos < len) && is_word_char(input[pos]);
-                    /* Word boundary: transition between word and non-word */
-                    return (prev_is_word != curr_is_word) ? 0 : -1;
-                }
-            }
-            return -1;
-        }
-
-        case AST_LOOKAHEAD: {
-            /* Lookahead: check if pattern matches but don't consume */
-            int child_len = match_ast(node->data.lookahead.child, input, pos, len);
-            if (node->data.lookahead.positive) {
-                /* Positive lookahead: succeed if child matches */
-                return (child_len >= 0) ? 0 : -1;
-            } else {
-                /* Negative lookahead: succeed if child doesn't match */
-                return (child_len < 0) ? 0 : -1;
-            }
-        }
-
-        case AST_SEQ: {
-            int total_len = 0;
-            int current_pos = pos;
-            for (int i = 0; i < node->data.list.num_children; i++) {
-                int child_len = match_ast(node->data.list.children[i], input, current_pos, len);
-                if (child_len < 0) return -1;
-                total_len += child_len;
-                current_pos += child_len;
-            }
-            return total_len;
-        }
-
-        case AST_ALT: {
-            /* Try each alternative in order (PEG ordered choice) */
-            for (int i = 0; i < node->data.list.num_children; i++) {
-                int child_len = match_ast(node->data.list.children[i], input, pos, len);
-                if (child_len >= 0) return child_len;
-            }
-            return -1;
-        }
-
-        case AST_REP: {
-            int total_len = 0;
-            int matches = 0;
-            int current_pos = pos;
-
-            /* Match as many as possible (greedy/possessive - PEG doesn't backtrack) */
-            while (node->data.rep.max < 0 || matches < node->data.rep.max) {
-                int child_len = match_ast(node->data.rep.child, input, current_pos, len);
-                if (child_len <= 0) break;  /* No more matches */
-                total_len += child_len;
-                current_pos += child_len;
-                matches++;
-            }
-
-            /* Check minimum requirement */
-            if (matches < node->data.rep.min) return -1;
-            return total_len;
-        }
-
-        case AST_GROUP: {
-            return match_ast(node->data.group, input, pos, len);
-        }
-    }
-
-    return -1;
+    return pika_clause_first(alternatives, num_alts);
 }
 
 /* ============== Public API ============== */
 
 PikaRegexCompiled* pika_regex_compile(const char* pattern) {
     PikaRegexCompiled* compiled = malloc(sizeof(PikaRegexCompiled));
-    compiled->ast = NULL;
+    compiled->pattern = NULL;
+    compiled->grammar = NULL;
+    compiled->anchored_start = false;
+    compiled->anchored_end = false;
+    compiled->has_word_boundary = false;
     compiled->error = NULL;
 
     if (!pattern) {
@@ -975,9 +823,9 @@ PikaRegexCompiled* pika_regex_compile(const char* pattern) {
         return compiled;
     }
 
-    /* Parse pattern to AST */
+    /* Parse pattern to PikaClause tree */
     Parser* p = parser_new(pattern);
-    ASTNode* ast = parse_alternation(p);
+    PikaClause* clause = parse_alternation(p);
 
     if (p->error) {
         compiled->error = strdup(p->error);
@@ -988,17 +836,35 @@ PikaRegexCompiled* pika_regex_compile(const char* pattern) {
     if (p->tokenizer->error) {
         compiled->error = strdup(p->tokenizer->error);
         parser_free(p);
-        ast_free(ast);
         return compiled;
     }
 
-    if (!ast) {
+    if (!clause) {
         compiled->error = strdup("Failed to parse pattern");
         parser_free(p);
         return compiled;
     }
 
-    compiled->ast = ast;
+    compiled->pattern = clause;
+    compiled->anchored_start = p->saw_anchor_start;
+    compiled->anchored_end = p->saw_anchor_end;
+    compiled->has_word_boundary = p->saw_word_boundary;
+
+    /* Create a grammar with a single rule */
+    PikaRule* rule = pika_rule("regex", clause);
+    if (!rule) {
+        compiled->error = strdup("Failed to create rule");
+        parser_free(p);
+        return compiled;
+    }
+
+    PikaRule* rules[1] = { rule };
+    compiled->grammar = pika_grammar_new(rules, 1);
+
+    if (!compiled->grammar) {
+        compiled->error = strdup("Failed to create grammar");
+    }
+
     parser_free(p);
     return compiled;
 }
@@ -1010,7 +876,9 @@ const char* pika_regex_error(PikaRegexCompiled* compiled) {
 
 void pika_regex_free(PikaRegexCompiled* compiled) {
     if (!compiled) return;
-    ast_free(compiled->ast);
+    if (compiled->grammar) {
+        pika_grammar_free(compiled->grammar);
+    }
     if (compiled->error) free(compiled->error);
     free(compiled);
 }
@@ -1018,87 +886,169 @@ void pika_regex_free(PikaRegexCompiled* compiled) {
 /* Helper: Create string Obj from C string */
 static Obj* cstr_to_obj(const char* s) {
     if (!s) return NULL;
-    omni_ensure_global_region();
-    return mk_sym_region(omni_get_global_region(), s);
+    return mk_string(s);
+}
+
+/* Helper: Check if position is at word boundary */
+static bool is_word_char(char c) {
+    return (c >= 'a' && c <= 'z') ||
+           (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') ||
+           c == '_';
+}
+
+static bool is_word_boundary(const char* input, int pos, int len) {
+    bool prev_is_word = (pos > 0) && is_word_char(input[pos - 1]);
+    bool curr_is_word = (pos < len) && is_word_char(input[pos]);
+    return prev_is_word != curr_is_word;
 }
 
 Obj* pika_regex_search(PikaRegexCompiled* compiled, const char* input) {
-    if (!compiled || compiled->error || !compiled->ast || !input) {
+    if (!compiled || compiled->error || !compiled->pattern || !input) {
         return NULL;
     }
 
     int len = strlen(input);
 
-    /* Try matching at each position */
-    for (int pos = 0; pos < len; pos++) {
-        int match_len = match_ast(compiled->ast, input, pos, len);
-        if (match_len > 0) {
-            char* matched_str = malloc(match_len + 1);
-            strncpy(matched_str, input + pos, match_len);
-            matched_str[match_len] = '\0';
-            Obj* ret = cstr_to_obj(matched_str);
-            free(matched_str);
-            return ret;
+    /* Parse the entire input to build memoization table */
+    PikaMemoTable* memo = pika_grammar_parse(compiled->grammar, input);
+    if (!memo) return NULL;
+
+    /* Get all matches for the "regex" rule */
+    size_t match_count = 0;
+    PikaMatch** matches = pika_memo_get_all_matches_for_rule(memo, "regex", &match_count);
+
+    if (!matches || match_count == 0) {
+        free(matches);
+        pika_memo_free(memo);
+        return NULL;
+    }
+
+    /* Find first valid match */
+    PikaMatch* best_match = NULL;
+    int best_start = len + 1;
+
+    for (size_t i = 0; i < match_count; i++) {
+        PikaMatch* m = matches[i];
+        int start = pika_match_start(m);
+        int mlen = pika_match_len(m);
+
+        /* Skip zero-length matches for search */
+        if (mlen == 0) continue;
+
+        /* Check anchored_start constraint */
+        if (compiled->anchored_start && start != 0) continue;
+
+        /* Check word boundary if needed */
+        if (compiled->has_word_boundary && !is_word_boundary(input, start, len)) continue;
+
+        /* Find earliest match */
+        if (start < best_start) {
+            best_start = start;
+            best_match = m;
         }
     }
 
-    return NULL;
+    Obj* result = NULL;
+    if (best_match) {
+        int start = pika_match_start(best_match);
+        int mlen = pika_match_len(best_match);
+        char* matched_str = malloc(mlen + 1);
+        strncpy(matched_str, input + start, mlen);
+        matched_str[mlen] = '\0';
+        result = cstr_to_obj(matched_str);
+        free(matched_str);
+    }
+
+    free(matches);
+    pika_memo_free(memo);
+    return result;
 }
 
 Obj* pika_regex_find_all(PikaRegexCompiled* compiled, const char* input) {
-    if (!compiled || compiled->error || !compiled->ast || !input) {
+    if (!compiled || compiled->error || !compiled->pattern || !input) {
         return NULL;
     }
 
-    Obj* result_list = NULL;
-    Obj* list_tail = NULL;
-    int len = strlen(input);
-    int pos = 0;
+    /* Parse to build memoization table */
+    PikaMemoTable* memo = pika_grammar_parse(compiled->grammar, input);
+    if (!memo) return NULL;
 
-    while (pos < len) {
-        int match_len = match_ast(compiled->ast, input, pos, len);
-        if (match_len > 0) {
-            char* matched_str = malloc(match_len + 1);
-            strncpy(matched_str, input + pos, match_len);
-            matched_str[match_len] = '\0';
+    /* Get non-overlapping matches for the "regex" rule */
+    size_t match_count = 0;
+    PikaMatch** matches = pika_memo_get_non_overlapping_matches_for_rule(memo, "regex", &match_count);
 
-            Obj* matched_obj = cstr_to_obj(matched_str);
-            Obj* new_pair = mk_pair(matched_obj, NULL);
-
-            if (!result_list) {
-                result_list = new_pair;
-            } else {
-                list_tail->b = new_pair;
-            }
-            list_tail = new_pair;
-
-            free(matched_str);
-            pos += match_len;
-        } else {
-            pos++;
-        }
+    if (!matches || match_count == 0) {
+        free(matches);
+        pika_memo_free(memo);
+        return NULL;
     }
 
+    /* Build result list */
+    Obj* result_list = NULL;
+    Obj* list_tail = NULL;
+
+    for (size_t i = 0; i < match_count; i++) {
+        PikaMatch* m = matches[i];
+        int start = pika_match_start(m);
+        int mlen = pika_match_len(m);
+
+        /* Skip zero-length matches */
+        if (mlen == 0) continue;
+
+        char* matched_str = malloc(mlen + 1);
+        strncpy(matched_str, input + start, mlen);
+        matched_str[mlen] = '\0';
+
+        Obj* matched_obj = cstr_to_obj(matched_str);
+        Obj* new_pair = mk_pair(matched_obj, NULL);
+
+        if (!result_list) {
+            result_list = new_pair;
+        } else {
+            list_tail->b = new_pair;
+        }
+        list_tail = new_pair;
+
+        free(matched_str);
+    }
+
+    free(matches);
+    pika_memo_free(memo);
     return result_list;
 }
 
 Obj* pika_regex_split(PikaRegexCompiled* compiled, const char* input) {
-    if (!compiled || compiled->error || !compiled->ast || !input) {
+    if (!compiled || compiled->error || !compiled->pattern || !input) {
         return NULL;
     }
 
+    int len = strlen(input);
+
+    /* Parse to build memoization table */
+    PikaMemoTable* memo = pika_grammar_parse(compiled->grammar, input);
+    if (!memo) return NULL;
+
+    /* Get non-overlapping matches for the "regex" rule */
+    size_t match_count = 0;
+    PikaMatch** matches = pika_memo_get_non_overlapping_matches_for_rule(memo, "regex", &match_count);
+
     Obj* result_list = NULL;
     Obj* list_tail = NULL;
-    int len = strlen(input);
-    int pos = 0;
     int last_end = 0;
 
-    while (pos < len) {
-        int match_len = match_ast(compiled->ast, input, pos, len);
-        if (match_len > 0) {
+    if (matches) {
+        for (size_t i = 0; i < match_count; i++) {
+            PikaMatch* m = matches[i];
+            int start = pika_match_start(m);
+            int mlen = pika_match_len(m);
+
+            /* Skip zero-length matches */
+            if (mlen == 0) continue;
+
             /* Add segment before match */
-            if (pos > last_end) {
-                int seg_len = pos - last_end;
+            if (start > last_end) {
+                int seg_len = start - last_end;
                 char* segment = malloc(seg_len + 1);
                 strncpy(segment, input + last_end, seg_len);
                 segment[seg_len] = '\0';
@@ -1115,11 +1065,9 @@ Obj* pika_regex_split(PikaRegexCompiled* compiled, const char* input) {
                 free(segment);
             }
 
-            last_end = pos + match_len;
-            pos = last_end;
-        } else {
-            pos++;
+            last_end = start + mlen;
         }
+        free(matches);
     }
 
     /* Add remaining segment */
@@ -1136,55 +1084,88 @@ Obj* pika_regex_split(PikaRegexCompiled* compiled, const char* input) {
         free(segment);
     }
 
+    pika_memo_free(memo);
     return result_list;
 }
 
+// REVIEWED:NAIVE
 Obj* pika_regex_replace(PikaRegexCompiled* compiled, const char* replacement,
                         const char* input, bool global) {
-    if (!compiled || compiled->error || !compiled->ast || !input) {
+    if (!compiled || compiled->error || !compiled->pattern || !input) {
         return cstr_to_obj(input);
     }
     if (!replacement) replacement = "";
 
     int len = strlen(input);
     size_t repl_len = strlen(replacement);
+
+    /* Parse to build memoization table */
+    PikaMemoTable* memo = pika_grammar_parse(compiled->grammar, input);
+    if (!memo) return cstr_to_obj(input);
+
+    /* Get non-overlapping matches */
+    size_t match_count = 0;
+    PikaMatch** matches = pika_memo_get_non_overlapping_matches_for_rule(memo, "regex", &match_count);
+
+    if (!matches || match_count == 0) {
+        free(matches);
+        pika_memo_free(memo);
+        return cstr_to_obj(input);
+    }
+
+    /* Build result string */
     size_t result_size = len * 2 + 1;
     char* result = malloc(result_size);
     result[0] = '\0';
     size_t result_len = 0;
+    int last_end = 0;
+    bool first_done = false;
 
-    int pos = 0;
-    bool first_match_done = false;
+    for (size_t i = 0; i < match_count; i++) {
+        if (!global && first_done) break;
 
-    while (pos < len) {
-        if (!global && first_match_done) {
-            /* Append rest of string */
-            strcat(result, input + pos);
-            break;
-        }
+        PikaMatch* m = matches[i];
+        int start = pika_match_start(m);
+        int mlen = pika_match_len(m);
 
-        int match_len = match_ast(compiled->ast, input, pos, len);
-        if (match_len > 0) {
-            /* Append replacement */
-            if (result_len + repl_len >= result_size) {
-                result_size = result_size * 2 + repl_len;
+        /* Skip zero-length matches */
+        if (mlen == 0) continue;
+
+        /* Add segment before match */
+        int seg_len = start - last_end;
+        if (seg_len > 0) {
+            if (result_len + seg_len >= result_size) {
+                result_size = result_size * 2 + seg_len;
                 result = realloc(result, result_size);
             }
-            strcat(result, replacement);
-            result_len += repl_len;
-
-            pos += match_len;
-            first_match_done = true;
-        } else {
-            /* No match at this position - append char */
-            if (result_len + 1 >= result_size) {
-                result_size *= 2;
-                result = realloc(result, result_size);
-            }
-            result[result_len++] = input[pos++];
-            result[result_len] = '\0';
+            strncat(result, input + last_end, seg_len);
+            result_len += seg_len;
         }
+
+        /* Add replacement */
+        if (result_len + repl_len >= result_size) {
+            result_size = result_size * 2 + repl_len;
+            result = realloc(result, result_size);
+        }
+        strcat(result, replacement);
+        result_len += repl_len;
+
+        last_end = start + mlen;
+        first_done = true;
     }
+
+    /* Add remaining part */
+    if (last_end < len) {
+        int seg_len = len - last_end;
+        if (result_len + seg_len >= result_size) {
+            result_size = result_size * 2 + seg_len;
+            result = realloc(result, result_size);
+        }
+        strcat(result, input + last_end);
+    }
+
+    free(matches);
+    pika_memo_free(memo);
 
     Obj* ret = cstr_to_obj(result);
     free(result);
@@ -1192,13 +1173,35 @@ Obj* pika_regex_replace(PikaRegexCompiled* compiled, const char* replacement,
 }
 
 Obj* pika_regex_fullmatch(PikaRegexCompiled* compiled, const char* input) {
-    if (!compiled || compiled->error || !compiled->ast || !input) {
+    if (!compiled || compiled->error || !compiled->pattern || !input) {
         return mk_bool(0);
     }
 
     int len = strlen(input);
-    int match_len = match_ast(compiled->ast, input, 0, len);
 
-    /* Full match requires matching entire string from start */
-    return mk_bool(match_len == len);
+    /* Parse to build memoization table */
+    PikaMemoTable* memo = pika_grammar_parse(compiled->grammar, input);
+    if (!memo) return mk_bool(0);
+
+    /* Check if there's a match at position 0 with length == input length */
+    size_t match_count = 0;
+    PikaMatch** matches = pika_memo_get_all_matches_for_rule(memo, "regex", &match_count);
+
+    bool found_fullmatch = false;
+    if (matches) {
+        for (size_t i = 0; i < match_count; i++) {
+            PikaMatch* m = matches[i];
+            int start = pika_match_start(m);
+            int mlen = pika_match_len(m);
+
+            if (start == 0 && mlen == len) {
+                found_fullmatch = true;
+                break;
+            }
+        }
+        free(matches);
+    }
+
+    pika_memo_free(memo);
+    return mk_bool(found_fullmatch);
 }

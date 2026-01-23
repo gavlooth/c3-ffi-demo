@@ -92,6 +92,9 @@ static inline void region_reset(Region* r) {
     if (!r) return;
     // Free the arena contents
     arena_free(&r->arena);
+    /* Issue 15 P4: Free size-class segregated arenas */
+    arena_free(&r->pair_arena);
+    arena_free(&r->container_arena);
     // Reset inline buffer (OPTIMIZATION: T-opt-inline-allocation)
     r->inline_buf.offset = 0;
     // Reset type metadata (OPTIMIZATION: T-opt-region-metadata)
@@ -157,6 +160,12 @@ Region* region_create(void) {
     // Initialize Arena (zero-init is sufficient for tsoding/arena to start)
     r->arena.begin = NULL;
     r->arena.end = NULL;
+
+    /* Issue 15 P4: Initialize size-class segregated arenas */
+    r->pair_arena.begin = NULL;
+    r->pair_arena.end = NULL;
+    r->container_arena.begin = NULL;
+    r->container_arena.end = NULL;
 
     // Initialize inline buffer (OPTIMIZATION: T-opt-inline-allocation)
     r->inline_buf.offset = 0;
@@ -241,6 +250,9 @@ void region_destroy_if_dead(Region* r) {
 
         // Pool full, actually free (SLOW: requires malloc next time)
         arena_free(&r->arena);
+        /* Issue 15 P4: Free size-class segregated arenas */
+        arena_free(&r->pair_arena);
+        arena_free(&r->container_arena);
 
         // Free type metadata (OPTIMIZATION: T-opt-region-metadata)
         if (r->type_table) {

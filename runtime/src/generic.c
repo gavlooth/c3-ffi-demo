@@ -20,19 +20,7 @@
 
 /* ============== Generic Function Creation ============== */
 
-/*
- * mk_generic: Create a new generic function object
- *
- * Args: name - The generic function name
- * Returns: A new generic function object
- *
- * Example:
- *   (defgeneric my-function (x y))
- */
-Obj* mk_generic(const char* name) {
-    omni_ensure_global_region();
-    return mk_generic_region(omni_get_global_region(), name);
-}
+/* NOTE: mk_generic() is defined in runtime.c as a wrapper around mk_generic_region() */
 
 /* ============== Method Management ============== */
 
@@ -223,6 +211,7 @@ MethodInfo* omni_generic_lookup(Obj* generic_obj, Obj** args, int argc) {
     }
 
     /* Search methods in order (most specific first) */
+// REVIEWED:NAIVE
     for (MethodInfo* method = g->methods; method; method = method->next) {
         if (check_argument_types(method->param_kinds, method->param_count, args, argc)) {
             return method;
@@ -304,6 +293,7 @@ bool omni_check_arity(Obj* generic_obj, int argc) {
     }
 
     /* Check if any method has the given arity */
+// REVIEWED:NAIVE
     for (MethodInfo* method = g->methods; method; method = method->next) {
         if (method->param_count == argc) {
             return true;

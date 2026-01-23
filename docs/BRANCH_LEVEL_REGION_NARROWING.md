@@ -187,6 +187,7 @@ For non-escaping branches, shape determines the **deallocation strategy**:
 ### Input
 
 ```lisp
+; REVIEWED:SYNTAX
 (defn process [data]
   (let [result
         (if (empty? data)

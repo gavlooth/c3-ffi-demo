@@ -1,0 +1,201 @@
+;; test_string_index_of.omni - Tests for string-index-of primitive
+;;
+;; Tests string-index-of function which finds the first occurrence of a substring.
+;; This is important for text parsing, searching, and pattern matching operations.
+;;
+;; Run with: ./omni tests/test_string_index_of.omni
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+(define test-int [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (= expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+;; ============================================================
+;; Test 1: Basic substring search
+;; ============================================================
+
+(print "")
+(print "=== Test 1: Basic Substring Search ===")
+
+(test-int "find 'world' in 'hello world'"
+  6
+  (string-index-of "hello world" "world"))
+
+(test-int "find 'hello' at beginning"
+  0
+  (string-index-of "hello world" "hello"))
+
+;; ============================================================
+;; Test 2: Substring not found
+;; ============================================================
+
+(print "")
+(print "=== Test 2: Substring Not Found ===")
+
+(test-int "substring not present returns -1"
+  -1
+  (string-index-of "hello world" "xyz"))
+
+(test-int "empty pattern not in string"
+  -1
+  (string-index-of "hello" "world"))
+
+;; ============================================================
+;; Test 3: Single character search
+;; ============================================================
+
+(print "")
+(print "=== Test 3: Single Character Search ===")
+
+(test-int "find single character"
+  1
+  (string-index-of "hello" "e"))
+
+(test-int "find first occurrence of repeated character"
+  0
+  (string-index-of "hello" "h"))
+
+(test-int "character at end"
+  4
+  (string-index-of "hello" "o"))
+
+;; ============================================================
+;; Test 4: Multiple occurrences
+;; ============================================================
+
+(print "")
+(print "=== Test 4: Multiple Occurrences ===")
+
+(test-int "find first of multiple occurrences"
+  2
+  (string-index-of "banana" "a"))
+
+(test-int "find first 'll' in 'hello hello'"
+  2
+  (string-index-of "hello hello" "ll"))
+
+;; ============================================================
+;; Test 5: Empty strings
+;; ============================================================
+
+(print "")
+(print "=== Test 5: Empty Strings ===")
+
+(test-int "empty string in non-empty string"
+  0
+  (string-index-of "hello" ""))
+
+(test-int "empty pattern in empty string"
+  0
+  (string-index-of "" ""))
+
+;; ============================================================
+;; Test 6: Pattern equals string
+;; ============================================================
+
+(print "")
+(print "=== Test 6: Pattern Equals String ===")
+
+(test-int "pattern equals entire string"
+  0
+  (string-index-of "hello" "hello"))
+
+(test-int "pattern longer than string not found"
+  -1
+  (string-index-of "hi" "hello"))
+
+;; ============================================================
+;; Test 7: Overlapping patterns
+;; ============================================================
+
+(print "")
+(print "=== Test 7: Overlapping Patterns ===")
+
+(test-int "find first 'aa' in 'aaaa'"
+  0
+  (string-index-of "aaaa" "aa"))
+
+(test-int "find 'aba' in 'ababa'"
+  0
+  (string-index-of "ababa" "aba"))
+
+;; ============================================================
+;; Test 8: Case sensitivity
+;; ============================================================
+
+(print "")
+(print "=== Test 8: Case Sensitivity ===")
+
+(test-int "case sensitive - uppercase not found"
+  -1
+  (string-index-of "Hello" "h"))
+
+(test-int "case sensitive - exact match"
+  0
+  (string-index-of "Hello" "H"))
+
+;; ============================================================
+;; Test 9: Whitespace and special characters
+;; ============================================================
+
+(print "")
+(print "=== Test 9: Whitespace and Special Characters ===")
+
+(test-int "find space character"
+  5
+  (string-index-of "hello world" " "))
+
+(test-int "find tab character"
+  5
+  (string-index-of "hello\tworld" "\t"))
+
+(test-int "find punctuation"
+  5
+  (string-index-of "hello,world" ","))
+
+;; ============================================================
+;; Test 10: Numbers and digits
+;; ============================================================
+
+(print "")
+(print "=== Test 10: Numbers and Digits ===")
+
+(test-int "find digit in string"
+  0
+  (string-index-of "123abc" "1"))
+
+(test-int "find number pattern"
+  3
+  (string-index-of "abc123def" "123"))
+
+;; ============================================================
+;; Test Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

@@ -1,0 +1,186 @@
+;; test_trigonometric.omni - Comprehensive tests for trigonometric functions
+;;
+;; Tests prim_sin, prim_cos, prim_tan functions (exposed as sin, cos, tan in OmniLisp)
+;; which compute trigonometric values for input angles in radians.
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+(define test-name [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (let ((tolerance 1e-10))
+    ; For floats, check if values are close enough
+    (if (or (and (equal? expected actual))
+            (and (number? expected)
+                 (number? actual)
+                 (<= (abs (- expected actual)) tolerance)))
+        (do
+          (set! pass-count (+ pass-count 1))
+          (print "PASS:" name))
+        (do
+          (set! fail-count (+ fail-count 1))
+          (print "FAIL:" name)
+          (print "  Expected:" expected)
+          (print "  Got:" actual)
+          (print "  Diff:" (abs (- expected actual)))))))
+
+(define test-approx [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (let ((tolerance 1e-10))
+    (if (and (number? expected)
+             (number? actual)
+             (<= (abs (- expected actual)) tolerance))
+        (do
+          (set! pass-count (+ pass-count 1))
+          (print "PASS:" name))
+        (do
+          (set! fail-count (+ fail-count 1))
+          (print "FAIL:" name)
+          (print "  Expected:" expected)
+          (print "  Got:" actual)
+          (print "  Diff:" (abs (- expected actual)))))))
+
+;; ============================================================
+;; Sine Function Tests (sin)
+;; ============================================================
+
+(print "")
+(print "=== Sine Function Tests ===")
+
+;; Test 1: sin(0) = 0
+(test-approx "sin(0) = 0"
+  0.0
+  (sin 0))
+
+;; Test 2: sin(π/2) ≈ 1
+(test-approx "sin(π/2) ≈ 1"
+  1.0
+  (sin (/ 3.141592653589793 2)))
+
+;; Test 3: sin(π) ≈ 0
+(test-approx "sin(π) ≈ 0"
+  0.0
+  (sin 3.141592653589793))
+
+;; Test 4: sin(-π/2) ≈ -1
+(test-approx "sin(-π/2) ≈ -1"
+  -1.0
+  (sin (/ -3.141592653589793 2)))
+
+;; Test 5: sin(1) ≈ 0.84147
+(test-approx "sin(1) ≈ 0.84147"
+  0.8414709848078965
+  (sin 1))
+
+;; ============================================================
+;; Cosine Function Tests (cos)
+;; ============================================================
+
+(print "")
+(print "=== Cosine Function Tests ===")
+
+;; Test 6: cos(0) = 1
+(test-approx "cos(0) = 1"
+  1.0
+  (cos 0))
+
+;; Test 7: cos(π/2) ≈ 0
+(test-approx "cos(π/2) ≈ 0"
+  0.0
+  (cos (/ 3.141592653589793 2)))
+
+;; Test 8: cos(π) ≈ -1
+(test-approx "cos(π) ≈ -1"
+  -1.0
+  (cos 3.141592653589793))
+
+;; Test 9: cos(2π) ≈ 1
+(test-approx "cos(2π) ≈ 1"
+  1.0
+  (cos (* 2 3.141592653589793)))
+
+;; Test 10: cos(1) ≈ 0.54030
+(test-approx "cos(1) ≈ 0.54030"
+  0.5403023058681398
+  (cos 1))
+
+;; ============================================================
+;; Tangent Function Tests (tan)
+;; ============================================================
+
+(print "")
+(print "=== Tangent Function Tests ===")
+
+;; Test 11: tan(0) = 0
+(test-approx "tan(0) = 0"
+  0.0
+  (tan 0))
+
+;; Test 12: tan(π/4) ≈ 1
+(test-approx "tan(π/4) ≈ 1"
+  1.0
+  (tan (/ 3.141592653589793 4)))
+
+;; Test 13: tan(1) ≈ 1.55741
+(test-approx "tan(1) ≈ 1.55741"
+  1.5574077246549023
+  (tan 1))
+
+;; Test 14: tan(-1) ≈ -1.55741
+(test-approx "tan(-1) ≈ -1.55741"
+  -1.5574077246549023
+  (tan -1))
+
+;; Test 15: tan(0.1) ≈ 0.10033
+(test-approx "tan(0.1) ≈ 0.10033"
+  0.10033467208545055
+  (tan 0.1))
+
+;; ============================================================
+;; Pythagorean Identity: sin²(x) + cos²(x) = 1
+;; ============================================================
+
+(print "")
+(print "=== Pythagorean Identity Tests ===")
+
+;; Test 16: sin²(0) + cos²(0) = 1
+(test-approx "sin²(0) + cos²(0) = 1"
+  1.0
+  (+ (* (sin 0) (sin 0))
+     (* (cos 0) (cos 0))))
+
+;; Test 17: sin²(1) + cos²(1) = 1
+(test-approx "sin²(1) + cos²(1) = 1"
+  1.0
+  (+ (* (sin 1) (sin 1))
+     (* (cos 1) (cos 1))))
+
+;; Test 18: sin²(π/2) + cos²(π/2) = 1
+(test-approx "sin²(π/2) + cos²(π/2) = 1"
+  1.0
+  (+ (* (sin (/ 3.141592653589793 2))
+        (sin (/ 3.141592653589793 2)))
+     (* (cos (/ 3.141592653589793 2))
+        (cos (/ 3.141592653589793 2)))))
+
+;; ============================================================
+;; Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

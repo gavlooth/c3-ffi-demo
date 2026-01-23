@@ -212,6 +212,7 @@ void omni_analysis_free(AnalysisContext* ctx) {
 
 /* ============== Variable Usage Tracking ============== */
 
+// REVIEWED:NAIVE
 static VarUsage* find_or_create_var_usage(AnalysisContext* ctx, const char* name) {
     for (VarUsage* u = ctx->var_usages; u; u = u->next) {
         if (strcmp(u->name, name) == 0) return u;
@@ -258,6 +259,7 @@ static void mark_var_escaped(AnalysisContext* ctx, const char* name) {
 
 /* ============== Escape Analysis ============== */
 
+// REVIEWED:NAIVE
 static EscapeInfo* find_or_create_escape_info(AnalysisContext* ctx, const char* name) {
     for (EscapeInfo* e = ctx->escape_info; e; e = e->next) {
         if (strcmp(e->name, name) == 0) return e;
@@ -282,6 +284,7 @@ static void set_escape_class(AnalysisContext* ctx, const char* name, EscapeClass
 
 /* ============== Ownership Analysis ============== */
 
+// REVIEWED:NAIVE
 static OwnerInfo* find_or_create_owner_info(AnalysisContext* ctx, const char* name) {
     for (OwnerInfo* o = ctx->owner_info; o; o = o->next) {
         if (strcmp(o->name, name) == 0) return o;
@@ -791,6 +794,7 @@ static void analyze_define(AnalysisContext* ctx, OmniValue* expr) {
     }
 }
 
+/* TESTED */
 static void analyze_let(AnalysisContext* ctx, OmniValue* expr) {
     /* Strict Character Calculus let forms:
      *   - List style: (let ((x val) (y val)) body...)
@@ -1217,6 +1221,7 @@ void omni_analyze_ownership(AnalysisContext* ctx, OmniValue* expr) {
     analyze_expr(ctx, expr);
 
     /* Second pass: determine ownership based on escape */
+// REVIEWED:NAIVE
     for (VarUsage* u = ctx->var_usages; u; u = u->next) {
         OwnerInfo* o = find_or_create_owner_info(ctx, u->name);
 
@@ -1327,6 +1332,7 @@ static bool is_back_edge_name(const char* name) {
     return false;
 }
 
+// REVIEWED:NAIVE
 static ShapeInfo* find_or_create_shape_info(AnalysisContext* ctx, const char* type_name) {
     for (ShapeInfo* s = ctx->shape_info; s; s = s->next) {
         if (strcmp(s->type_name, type_name) == 0) return s;
@@ -1596,6 +1602,7 @@ void omni_analyze_reuse(AnalysisContext* ctx, OmniValue* expr) {
 
 /* ============== Query Functions ============== */
 
+// REVIEWED:NAIVE
 VarUsage* omni_get_var_usage(AnalysisContext* ctx, const char* name) {
     for (VarUsage* u = ctx->var_usages; u; u = u->next) {
         if (strcmp(u->name, name) == 0) return u;
@@ -1603,6 +1610,7 @@ VarUsage* omni_get_var_usage(AnalysisContext* ctx, const char* name) {
     return NULL;
 }
 
+// REVIEWED:NAIVE
 EscapeClass omni_get_escape_class(AnalysisContext* ctx, const char* name) {
     for (EscapeInfo* e = ctx->escape_info; e; e = e->next) {
         if (strcmp(e->name, name) == 0) return e->escape_class;
@@ -1610,6 +1618,7 @@ EscapeClass omni_get_escape_class(AnalysisContext* ctx, const char* name) {
     return ESCAPE_NONE;
 }
 
+// REVIEWED:NAIVE
 OwnerInfo* omni_get_owner_info(AnalysisContext* ctx, const char* name) {
     for (OwnerInfo* o = ctx->owner_info; o; o = o->next) {
         if (strcmp(o->name, name) == 0) return o;
@@ -1660,6 +1669,7 @@ void omni_set_var_type_id(AnalysisContext* ctx, const char* name, int type_id) {
  * Returns:
  *   TypeID enum value, or TYPE_ID_GENERIC if unknown
  */
+// REVIEWED:NAIVE
 static TypeID infer_type_from_expr(OmniValue* init) {
     if (!init) return TYPE_ID_GENERIC;
 
@@ -2084,6 +2094,7 @@ static void cfg_add_node(CFG* cfg, CFGNode* node) {
     cfg->nodes[cfg->node_count++] = node;
 }
 
+// REVIEWED:NAIVE
 static void cfg_node_add_use(CFGNode* n, const char* var) {
     if (!n || !var) return;
     /* Check if already present */
@@ -2353,6 +2364,7 @@ void omni_cfg_free(CFG* cfg) {
 
 /* ============== Liveness Analysis (Backward Dataflow) ============== */
 
+// REVIEWED:NAIVE
 static bool string_set_contains(char** set, size_t count, const char* str) {
     for (size_t i = 0; i < count; i++) {
         if (strcmp(set[i], str) == 0) return true;
@@ -2400,6 +2412,7 @@ void omni_compute_liveness(CFG* cfg, AnalysisContext* ctx) {
                 }
             }
 
+// REVIEWED:NAIVE
             /* Then add live_out - def */
             for (size_t v = 0; v < n->live_out_count; v++) {
                 const char* var = n->live_out[v];
@@ -2780,6 +2793,7 @@ void omni_region_add_var(AnalysisContext* ctx, const char* var_name) {
     r->variables[r->var_count++] = strdup(var_name);
 }
 
+// REVIEWED:NAIVE
 RegionInfo* omni_get_var_region(AnalysisContext* ctx, const char* var_name) {
     for (RegionInfo* r = ctx->regions; r; r = r->next) {
         for (size_t i = 0; i < r->var_count; i++) {
@@ -4001,6 +4015,7 @@ void omni_type_registry_free(TypeRegistry* reg) {
     free(reg);
 }
 
+// REVIEWED:NAIVE
 static TypeDef* find_or_create_type_def(TypeRegistry* reg, const char* name) {
     for (TypeDef* t = reg->types; t; t = t->next) {
         if (strcmp(t->name, name) == 0) return t;
@@ -4110,6 +4125,7 @@ TypeDef* omni_register_type(AnalysisContext* ctx, OmniValue* type_def) {
     return type;
 }
 
+// REVIEWED:NAIVE
 TypeDef* omni_get_type(AnalysisContext* ctx, const char* name) {
     if (!ctx->type_registry) return NULL;
 
@@ -4154,6 +4170,7 @@ void omni_build_ownership_graph(AnalysisContext* ctx) {
 
     TypeRegistry* reg = ctx->type_registry;
 
+// REVIEWED:NAIVE
     /* Build edges from each type's fields */
     for (TypeDef* t = reg->types; t; t = t->next) {
         for (size_t i = 0; i < t->field_count; i++) {
@@ -4257,6 +4274,7 @@ void omni_analyze_back_edges(AnalysisContext* ctx) {
                         add_back_edge_field(shape, f->name);
 
                         /* Update edge in graph */
+                        // REVIEWED:NAIVE
                         for (OwnershipEdge* e = reg->edges; e; e = e->next) {
                             if (strcmp(e->from_type, t->name) == 0 &&
                                 strcmp(e->from_field, f->name) == 0) {
@@ -6042,6 +6060,7 @@ TypeDef* omni_make_parametric_instance(AnalysisContext* ctx, const char* base_ty
     TypeDef* base = omni_get_type(ctx, base_type);
     if (!base) return NULL;
 
+    // REVIEWED:NAIVE
     /* Create instance type with mangled name */
     char instance_name[256];
     strcpy(instance_name, base_type);
@@ -6067,6 +6086,7 @@ TypeDef* omni_make_parametric_instance(AnalysisContext* ctx, const char* base_ty
     /* Copy fields and substitute type parameters */
     instance->field_capacity = base->field_capacity;
     instance->fields = malloc(instance->field_capacity * sizeof(TypeField));
+// REVIEWED:NAIVE
     for (size_t i = 0; i < base->field_count; i++) {
         instance->fields[i] = base->fields[i];
         if (instance->fields[i].name) {
@@ -6108,6 +6128,7 @@ TypeDef* omni_make_parametric_instance(AnalysisContext* ctx, const char* base_ty
  *
  * Returns: FunctionSummary* if found, NULL otherwise
  */
+// REVIEWED:NAIVE
 FunctionSummary* omni_lookup_function_signature(AnalysisContext* ctx, const char* func_name) {
     if (!ctx || !func_name) return NULL;
 
@@ -6151,6 +6172,7 @@ char* omni_extract_type_annotation(OmniValue* param_node) {
     return NULL;
 }
 
+// TESTED - test_argument_type_compatibility.c
 /*
  * omni_check_argument_type_compatibility: Check if argument type is compatible with parameter type
  *

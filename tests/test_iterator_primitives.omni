@@ -1,0 +1,137 @@
+;; Test Basic Iterator Primitives
+;; Tests: first, rest, take, iterate
+
+(println "=== Testing First Primitive ===")
+
+;; Test first on non-empty list
+(define lst1 (list 1 2 3 4 5))
+(assert-eq (first lst1) 1)
+
+;; Test first on single element list
+(define lst2 (list 42))
+(assert-eq (first lst2) 42)
+
+;; Test first on empty list
+(define lst3 (list())
+(assert-nil (first lst3))
+
+; REVIEWED:SYNTAX
+;; Test first on pair created via cons
+(define pair1 (cons 100 (list 200 300))))
+(assert-eq (first pair1) 100)
+
+(println "PASS: first primitive")
+
+; REVIEWED:SYNTAX
+(println "
+=== Testing Rest Primitive ===")
+
+;; Test rest on list with multiple elements
+(define lst4 (list 1 2 3 4 5))
+(define rest1 (rest lst4))
+(assert-eq (first rest1) 2)
+(assert-eq (first (rest rest1)) 3)
+
+;; Test rest on single element list
+(define lst5 (list 99))
+(assert-nil (rest lst5))
+
+;; Test rest on empty list
+(assert-nil (rest (list()))
+
+;; Test rest on pair
+(define rest2 (rest (cons 10 (list 20 30))))
+(assert-eq (first rest2) 20)
+
+(println "PASS: rest primitive")
+
+(println "
+=== Testing Take Primitive ===")
+
+;; Test take from list
+(define lst6 (list 1 2 3 4 5 6 7 8 9 10))
+(define taken1 (take 3 lst6))
+(assert-eq (first taken1) 1)
+(assert-eq (first (rest taken1)) 2)
+(assert-eq (first (rest (rest taken1))) 3)
+
+;; Test take more elements than available
+(define lst7 (list 1 2 3))
+(define taken2 (take 10 lst7))
+(assert-eq (first taken2) 1)
+(assert-eq (first (rest taken2)) 2)
+(assert-eq (first (rest (rest taken2))) 3)
+(assert-nil (rest (rest (rest taken2))))
+
+;; Test take zero elements
+(define taken3 (take 0 (list 1 2 3))))
+(assert-nil taken3)
+
+;; Test take negative number
+(assert-nil (take -5 (list 1 2 3))))
+
+(println "PASS: take primitive")
+
+(println "
+=== Testing Iterate Primitive ===")
+
+;; Test iterate with simple increment function
+(define inc (lambda [x] (+ x 1))))
+(define iter1 (iterate inc 0))
+
+;; Get first few values from iterator
+(define val1 (next iter1))
+(assert-eq val1 0)
+
+(define val2 (next iter1))
+(assert-eq val2 1)
+
+(define val3 (next iter1))
+(assert-eq val3 2)
+
+;; Test iterate with multiplication function
+(define double (lambda [x] (* x 2))))
+(define iter2 (iterate double 1))
+
+(define val4 (next iter2))
+(assert-eq val4 1)
+
+(define val5 (next iter2))
+(assert-eq val5 2)
+
+(define val6 (next iter2))
+(assert-eq val6 4)
+
+(println "PASS: iterate primitive")
+
+(println "
+=== Testing Iterator + Take Integration ===")
+
+;; Test take from iterate iterator
+(define iter3 (iterate inc 0))
+(define taken4 (take 5 iter3))
+
+;; Verify taken values
+(assert-eq (first taken4) 0)
+(assert-eq (first (rest taken4)) 1)
+(assert-eq (first (rest (rest taken4))) 2)
+(assert-eq (first (rest (rest (rest taken4)))) 3)
+(assert-eq (first (rest (rest (rest (rest taken4))))) 4)
+
+(println "PASS: iterate + take integration")
+
+(println "
+=== Testing First/Rest on Nested Structures ===")
+
+;; Test first on nested list
+(define nested (list (list 1 2)) (list 3 4))))
+(assert-eq (first (first nested)) 1)
+
+;; Test rest on nested list
+(define nested-rest (rest nested))
+(assert-eq (first (first nested-rest)) 3)
+
+(println "PASS: first/rest on nested structures")
+
+(println "
+SUCCESS: All iterator primitive tests passed!")

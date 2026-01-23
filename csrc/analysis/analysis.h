@@ -669,6 +669,9 @@ void omni_add_reuse_candidate(AnalysisContext* ctx, const char* freed_var,
 /* Get reuse candidate for an allocation position */
 ReuseCandidate* omni_get_reuse_at(AnalysisContext* ctx, int alloc_pos);
 
+/* Mark a reuse candidate as consumed (used) */
+void omni_consume_reuse(ReuseCandidate* rc);
+
 /* Check if a freed variable's memory can be reused for a new type */
 bool omni_can_reuse_for(AnalysisContext* ctx, const char* freed_var,
                         const char* new_type);

@@ -12,6 +12,7 @@
 #include <pthread.h>
 #include <stdbool.h>
 #include <math.h>
+#include <time.h>
 
 #include "memory/region_core.h"
 #include "memory/region_value.h"
@@ -102,7 +103,8 @@ Obj* omni_lookup_type(const char* name) {
 
 /* Helpers */
 int is_nil(Obj* x) { return x == NULL; }
-static Obj omni_nothing_obj = { .tag = TAG_NOTHING };
+/* Note: NOT static - exported for condition.c and other modules */
+Obj omni_nothing_obj = { .tag = TAG_NOTHING };
 int is_nothing(Obj* x) {
     return x == &omni_nothing_obj || (x && IS_BOXED(x) && x->tag == TAG_NOTHING);
 }
@@ -143,7 +145,9 @@ Obj* mk_closure(ClosureFn fn, Obj** captures, BorrowRef** refs, int count, int a
     c->capture_count = count;
     c->arity = arity;
     c->name = "lambda";
-    
+    c->source_text = NULL;
+    c->region_aware = 0;
+
     if (count > 0 && captures) {
         c->captures = region_alloc(_global_region, sizeof(Obj*) * count);
         for (int i = 0; i < count; i++) {
@@ -157,11 +161,61 @@ Obj* mk_closure(ClosureFn fn, Obj** captures, BorrowRef** refs, int count, int a
     return o;
 }
 
+Obj* mk_closure_region(struct Region* r, ClosureFnRegion fn, Obj** captures, int count, int arity) {
+    if (!r) {
+        _ensure_global_region();
+        r = _global_region;
+    }
+
+    Obj* o = alloc_obj_region(r, TAG_CLOSURE);
+    if (!o) return NULL;
+
+    Closure* c = region_alloc(r, sizeof(Closure));
+    if (!c) return NULL;
+
+    c->fn_region = fn;  /* Note: fn and fn_region are in a union - don't overwrite! */
+    c->capture_count = count;
+    c->arity = arity;
+    c->name = "lambda";
+    c->source_text = NULL;
+    c->region_aware = 1;  /* This closure uses region-aware calling convention */
+
+    if (count > 0 && captures) {
+        c->captures = region_alloc(r, sizeof(Obj*) * count);
+        for (int i = 0; i < count; i++) {
+            c->captures[i] = captures[i];
+        }
+    } else {
+        c->captures = NULL;
+    }
+
+    o->ptr = c;
+    return o;
+}
+
 Obj* call_closure(Obj* clos, Obj** args, int argc) {
     if (!clos || !IS_BOXED(clos) || clos->tag != TAG_CLOSURE) return NULL;
     Closure* c = (Closure*)clos->ptr;
     // Arity check
     if (c->arity >= 0 && c->arity != argc) return NULL;
+    /* Use region-aware fn if available, otherwise legacy fn */
+    if (c->region_aware && c->fn_region) {
+        _ensure_global_region();
+        return c->fn_region(_global_region, c->captures, args, argc);
+    }
+    return c->fn(c->captures, args, argc);
+}
+
+Obj* call_closure_region(struct Region* caller_region, Obj* clos, Obj** args, int argc) {
+    if (!clos || !IS_BOXED(clos) || clos->tag != TAG_CLOSURE) return NULL;
+    Closure* c = (Closure*)clos->ptr;
+    // Arity check
+    if (c->arity >= 0 && c->arity != argc) return NULL;
+    /* Use region-aware fn if available, otherwise legacy fn */
+    if (c->region_aware && c->fn_region) {
+        return c->fn_region(caller_region, c->captures, args, argc);
+    }
+    /* For legacy closures, still use the region-less call */
     return c->fn(c->captures, args, argc);
 }
 
@@ -1061,6 +1115,8 @@ void flush_freelist(void) {}
 /* Region-Resident Operations */
 Obj* mk_array(int capacity) { _ensure_global_region(); return mk_array_region(_global_region, capacity); }
 Obj* mk_dict(void) { _ensure_global_region(); return mk_dict_region(_global_region); }
+Obj* mk_set(void) { _ensure_global_region(); return mk_set_region(_global_region); }
+Obj* mk_datetime(int64_t ts, int32_t tz) { _ensure_global_region(); return mk_datetime_region(_global_region, ts, tz); }
 Obj* mk_keyword(const char* name) { _ensure_global_region(); return mk_keyword_region(_global_region, name); }
 Obj* mk_tuple(Obj** items, int count) { _ensure_global_region(); return mk_tuple_region(_global_region, items, count); }
 Obj* mk_named_tuple(Obj** keys, Obj** values, int count) { _ensure_global_region(); return mk_named_tuple_region(_global_region, keys, values, count); }
@@ -1670,6 +1726,887 @@ Obj* dict_remove(Obj* dict, Obj* key_to_remove) {
     return result;
 }
 
+/* ========== Set Operations (Issue 24) ========== */
+
+/*
+ * set_add: Add element to set
+ *
+ * Uses the element as both key and value in the underlying hashmap.
+ * Duplicate additions are no-ops (set semantics).
+ */
+void set_add(Obj* set, Obj* elem) {
+    if (!set || !IS_BOXED(set) || set->tag != TAG_SET) return;
+    if (!elem) return;
+
+    Set* s = (Set*)set->ptr;
+    Region* r = omni_obj_region(set);
+    if (!r) {
+        _ensure_global_region();
+        r = _global_region;
+    }
+
+    /* Store barrier: ensure element outlives set's region */
+    Obj* repaired_elem = omni_store_repair(set, &elem, elem);
+
+    /* Use hashmap_put_region to add element (element is both key and value) */
+    hashmap_put_region(&s->map, repaired_elem, repaired_elem, r);
+}
+
+/*
+ * set_remove: Remove element from set
+ *
+ * Returns the removed element, or NULL if not found.
+ */
+Obj* set_remove(Obj* set, Obj* elem) {
+    if (!set || !IS_BOXED(set) || set->tag != TAG_SET) return NULL;
+    if (!elem) return NULL;
+
+    Set* s = (Set*)set->ptr;
+    return (Obj*)hashmap_remove(&s->map, elem);
+}
+
+/*
+ * set_contains: Check if element is in set
+ *
+ * Returns mk_bool(1) if found, mk_bool(0) otherwise.
+ */
+Obj* set_contains(Obj* set, Obj* elem) {
+    if (!set || !IS_BOXED(set) || set->tag != TAG_SET) return mk_bool(0);
+    if (!elem) return mk_bool(0);
+
+    Set* s = (Set*)set->ptr;
+    return mk_bool(hashmap_contains(&s->map, elem));
+}
+
+/*
+ * set_size: Return number of elements in set
+ */
+int set_size(Obj* set) {
+    if (!set || !IS_BOXED(set) || set->tag != TAG_SET) return 0;
+    Set* s = (Set*)set->ptr;
+    return (int)s->map.entry_count;
+}
+
+/*
+ * set_empty_p: Check if set is empty
+ */
+Obj* set_empty_p(Obj* set) {
+    return mk_bool(set_size(set) == 0);
+}
+
+/*
+ * set_union: Return A ∪ B (elements in A or B or both)
+ */
+Obj* set_union(Obj* a, Obj* b) {
+    Obj* result = mk_set();
+    if (!result) return NULL;
+
+    /* Add all elements from A */
+    if (a && IS_BOXED(a) && a->tag == TAG_SET) {
+        Set* sa = (Set*)a->ptr;
+        for (size_t i = 0; i < sa->map.bucket_count; i++) {
+            HashEntry* entry = sa->map.buckets[i];
+            while (entry) {
+                set_add(result, (Obj*)entry->key);
+                entry = entry->next;
+            }
+        }
+    }
+
+    /* Add all elements from B */
+    if (b && IS_BOXED(b) && b->tag == TAG_SET) {
+        Set* sb = (Set*)b->ptr;
+        for (size_t i = 0; i < sb->map.bucket_count; i++) {
+            HashEntry* entry = sb->map.buckets[i];
+            while (entry) {
+                set_add(result, (Obj*)entry->key);
+                entry = entry->next;
+            }
+        }
+    }
+
+    return result;
+}
+
+/*
+ * set_intersection: Return A ∩ B (elements in both A and B)
+ */
+Obj* set_intersection(Obj* a, Obj* b) {
+    Obj* result = mk_set();
+    if (!result) return NULL;
+
+    if (!a || !IS_BOXED(a) || a->tag != TAG_SET) return result;
+    if (!b || !IS_BOXED(b) || b->tag != TAG_SET) return result;
+
+    Set* sa = (Set*)a->ptr;
+    Set* sb = (Set*)b->ptr;
+
+    /* For each element in A, check if it's in B */
+    for (size_t i = 0; i < sa->map.bucket_count; i++) {
+        HashEntry* entry = sa->map.buckets[i];
+        while (entry) {
+            if (hashmap_contains(&sb->map, entry->key)) {
+                set_add(result, (Obj*)entry->key);
+            }
+            entry = entry->next;
+        }
+    }
+
+    return result;
+}
+
+/*
+ * set_difference: Return A \ B (elements in A but not in B)
+ */
+Obj* set_difference(Obj* a, Obj* b) {
+    Obj* result = mk_set();
+    if (!result) return NULL;
+
+    if (!a || !IS_BOXED(a) || a->tag != TAG_SET) return result;
+
+    Set* sa = (Set*)a->ptr;
+    Set* sb = (b && IS_BOXED(b) && b->tag == TAG_SET) ? (Set*)b->ptr : NULL;
+
+    /* For each element in A, add if not in B */
+    for (size_t i = 0; i < sa->map.bucket_count; i++) {
+        HashEntry* entry = sa->map.buckets[i];
+        while (entry) {
+            if (!sb || !hashmap_contains(&sb->map, entry->key)) {
+                set_add(result, (Obj*)entry->key);
+            }
+            entry = entry->next;
+        }
+    }
+
+    return result;
+}
+
+/*
+ * set_symmetric_difference: Return A △ B (elements in A or B but not both)
+ */
+Obj* set_symmetric_difference(Obj* a, Obj* b) {
+    Obj* result = mk_set();
+    if (!result) return NULL;
+
+    Set* sa = (a && IS_BOXED(a) && a->tag == TAG_SET) ? (Set*)a->ptr : NULL;
+    Set* sb = (b && IS_BOXED(b) && b->tag == TAG_SET) ? (Set*)b->ptr : NULL;
+
+    /* Add elements from A not in B */
+    if (sa) {
+        for (size_t i = 0; i < sa->map.bucket_count; i++) {
+            HashEntry* entry = sa->map.buckets[i];
+            while (entry) {
+                if (!sb || !hashmap_contains(&sb->map, entry->key)) {
+                    set_add(result, (Obj*)entry->key);
+                }
+                entry = entry->next;
+            }
+        }
+    }
+
+    /* Add elements from B not in A */
+    if (sb) {
+        for (size_t i = 0; i < sb->map.bucket_count; i++) {
+            HashEntry* entry = sb->map.buckets[i];
+            while (entry) {
+                if (!sa || !hashmap_contains(&sa->map, entry->key)) {
+                    set_add(result, (Obj*)entry->key);
+                }
+                entry = entry->next;
+            }
+        }
+    }
+
+    return result;
+}
+
+/*
+ * set_subset_p: Check if A ⊆ B (all elements of A are in B)
+ */
+Obj* set_subset_p(Obj* a, Obj* b) {
+    if (!a || !IS_BOXED(a) || a->tag != TAG_SET) return mk_bool(1); /* Empty set is subset of all */
+    if (!b || !IS_BOXED(b) || b->tag != TAG_SET) return mk_bool(set_size(a) == 0);
+
+    Set* sa = (Set*)a->ptr;
+    Set* sb = (Set*)b->ptr;
+
+    for (size_t i = 0; i < sa->map.bucket_count; i++) {
+        HashEntry* entry = sa->map.buckets[i];
+        while (entry) {
+            if (!hashmap_contains(&sb->map, entry->key)) {
+                return mk_bool(0);
+            }
+            entry = entry->next;
+        }
+    }
+
+    return mk_bool(1);
+}
+
+/*
+ * set_superset_p: Check if A ⊇ B (A contains all elements of B)
+ */
+Obj* set_superset_p(Obj* a, Obj* b) {
+    return set_subset_p(b, a);
+}
+
+/*
+ * set_to_list: Convert set to list
+ */
+Obj* set_to_list(Obj* set) {
+    if (!set || !IS_BOXED(set) || set->tag != TAG_SET) return NULL;
+
+    Set* s = (Set*)set->ptr;
+    Obj* result = NULL;
+
+    /* Build list in reverse (cons prepends) */
+    for (size_t i = 0; i < s->map.bucket_count; i++) {
+        HashEntry* entry = s->map.buckets[i];
+        while (entry) {
+            result = mk_pair((Obj*)entry->key, result);
+            entry = entry->next;
+        }
+    }
+
+    return result;
+}
+
+/*
+ * list_to_set: Convert list to set
+ */
+Obj* list_to_set(Obj* list) {
+    Obj* result = mk_set();
+    if (!result) return NULL;
+
+    while (list && IS_BOXED(list) && list->tag == TAG_PAIR) {
+        set_add(result, list->a);
+        list = list->b;
+    }
+
+    return result;
+}
+
+/*
+ * set_to_array: Convert set to array
+ */
+Obj* set_to_array(Obj* set) {
+    if (!set || !IS_BOXED(set) || set->tag != TAG_SET) return mk_array(0);
+
+    Set* s = (Set*)set->ptr;
+    int size = (int)s->map.entry_count;
+    Obj* result = mk_array(size);
+    if (!result) return NULL;
+
+    int idx = 0;
+    for (size_t i = 0; i < s->map.bucket_count; i++) {
+        HashEntry* entry = s->map.buckets[i];
+        while (entry) {
+            array_push(result, (Obj*)entry->key);
+            entry = entry->next;
+            idx++;
+        }
+    }
+
+    return result;
+}
+
+/*
+ * array_to_set: Convert array to set
+ */
+Obj* array_to_set(Obj* arr) {
+    Obj* result = mk_set();
+    if (!result) return NULL;
+
+    if (!arr || !IS_BOXED(arr) || arr->tag != TAG_ARRAY) return result;
+
+    Array* a = (Array*)arr->ptr;
+    for (int i = 0; i < a->len; i++) {
+        set_add(result, a->data[i]);
+    }
+
+    return result;
+}
+
+/* ========== Issue 24 P3: Set Iteration & HOFs ========== */
+
+/* Context structure for set_foreach callback */
+typedef struct SetForEachCtx {
+    Obj* fn;       /* Function to call for each element */
+} SetForEachCtx;
+
+/* Internal callback for set_foreach */
+static void set_foreach_callback(void* key, void* value, void* ctx) {
+    (void)value;  /* Set stores element as both key and value */
+    SetForEachCtx* fctx = (SetForEachCtx*)ctx;
+    Obj* elem = (Obj*)key;
+
+    /* Call the function with the element */
+    if (fctx->fn) {
+        Obj* args = mk_cell(elem, NULL);
+        prim_apply(fctx->fn, args);
+    }
+}
+
+/*
+ * set_foreach - Apply a function to each element of a set
+ * Returns nothing (for side effects only)
+ */
+Obj* set_foreach(Obj* set, Obj* fn) {
+    if (!set || !IS_BOXED(set) || set->tag != TAG_SET) return mk_nothing();
+    if (!fn) return mk_nothing();
+
+    Set* s = (Set*)set->ptr;
+    SetForEachCtx ctx = { fn };
+    hashmap_foreach(&s->map, set_foreach_callback, &ctx);
+
+    return mk_nothing();
+}
+
+/* Context structure for set_map callback */
+typedef struct SetMapCtx {
+    Obj* fn;       /* Function to call for each element */
+    Obj* result;   /* Result set being built */
+} SetMapCtx;
+
+/* Internal callback for set_map */
+static void set_map_callback(void* key, void* value, void* ctx) {
+    (void)value;
+    SetMapCtx* mctx = (SetMapCtx*)ctx;
+    Obj* elem = (Obj*)key;
+
+    /* Call the function with the element */
+    if (mctx->fn) {
+        Obj* args = mk_cell(elem, NULL);
+        Obj* mapped = prim_apply(mctx->fn, args);
+        if (mapped && mctx->result) {
+            set_add(mctx->result, mapped);
+        }
+    }
+}
+
+/*
+ * set_map - Map a function over set elements, returning a new set
+ * Example: (set-map inc #{1 2 3}) => #{2 3 4}
+ */
+Obj* set_map(Obj* set, Obj* fn) {
+    if (!set || !IS_BOXED(set) || set->tag != TAG_SET) return mk_set();
+    if (!fn) return mk_set();
+
+    Obj* result = mk_set();
+    if (!result) return NULL;
+
+    Set* s = (Set*)set->ptr;
+    SetMapCtx ctx = { fn, result };
+    hashmap_foreach(&s->map, set_map_callback, &ctx);
+
+    return result;
+}
+
+/* Context structure for set_filter callback */
+typedef struct SetFilterCtx {
+    Obj* pred;     /* Predicate function */
+    Obj* result;   /* Result set being built */
+} SetFilterCtx;
+
+/* Internal callback for set_filter */
+static void set_filter_callback(void* key, void* value, void* ctx) {
+    (void)value;
+    SetFilterCtx* fctx = (SetFilterCtx*)ctx;
+    Obj* elem = (Obj*)key;
+
+    /* Call the predicate with the element */
+    if (fctx->pred) {
+        Obj* args = mk_cell(elem, NULL);
+        Obj* keep = prim_apply(fctx->pred, args);
+        /* Keep element if predicate returns truthy */
+        if (keep && keep != OMNI_FALSE && !is_nothing(keep) && keep != NULL) {
+            set_add(fctx->result, elem);
+        }
+    }
+}
+
+/*
+ * set_filter - Filter set elements by a predicate, returning a new set
+ * Example: (set-filter even? #{1 2 3 4}) => #{2 4}
+ */
+Obj* set_filter(Obj* set, Obj* pred) {
+    if (!set || !IS_BOXED(set) || set->tag != TAG_SET) return mk_set();
+    if (!pred) return mk_set();
+
+    Obj* result = mk_set();
+    if (!result) return NULL;
+
+    Set* s = (Set*)set->ptr;
+    SetFilterCtx ctx = { pred, result };
+    hashmap_foreach(&s->map, set_filter_callback, &ctx);
+
+    return result;
+}
+
+/* Context structure for set_reduce callback */
+typedef struct SetReduceCtx {
+    Obj* fn;       /* Binary function (acc, elem) -> new_acc */
+    Obj* acc;      /* Accumulator */
+} SetReduceCtx;
+
+/* Internal callback for set_reduce */
+static void set_reduce_callback(void* key, void* value, void* ctx) {
+    (void)value;
+    SetReduceCtx* rctx = (SetReduceCtx*)ctx;
+    Obj* elem = (Obj*)key;
+
+    /* Call the function with (acc, elem) */
+    if (rctx->fn) {
+        Obj* args = mk_cell(rctx->acc, mk_cell(elem, NULL));
+        rctx->acc = prim_apply(rctx->fn, args);
+    }
+}
+
+/*
+ * set_reduce - Reduce set elements to a single value
+ * Example: (set-reduce + 0 #{1 2 3}) => 6
+ */
+Obj* set_reduce(Obj* set, Obj* fn, Obj* init) {
+    if (!set || !IS_BOXED(set) || set->tag != TAG_SET) return init;
+    if (!fn) return init;
+
+    Set* s = (Set*)set->ptr;
+    SetReduceCtx ctx = { fn, init };
+    hashmap_foreach(&s->map, set_reduce_callback, &ctx);
+
+    return ctx.acc;
+}
+
+/* ========== DateTime Functions (Issue 25) ========== */
+
+/*
+ * datetime_now - Create a DateTime for the current time
+ * Returns: DateTime with current UTC timestamp and local timezone offset
+ */
+Obj* datetime_now(void) {
+    time_t now = time(NULL);
+    struct tm local_tm;
+    localtime_r(&now, &local_tm);
+
+    /* Calculate timezone offset from UTC.
+     * POSIX extension tm_gmtoff provides offset in seconds. */
+    int32_t tz_offset = (int32_t)local_tm.tm_gmtoff;
+
+    _ensure_global_region();
+    return mk_datetime_region(_global_region, (int64_t)now, tz_offset);
+}
+
+/*
+ * datetime_now_utc - Create a DateTime for the current time in UTC
+ * Returns: DateTime with current UTC timestamp and zero offset
+ */
+Obj* datetime_now_utc(void) {
+    time_t now = time(NULL);
+    _ensure_global_region();
+    return mk_datetime_region(_global_region, (int64_t)now, 0);
+}
+
+/*
+ * datetime_from_unix - Create a DateTime from Unix timestamp
+ * timestamp: Seconds since 1970-01-01 00:00:00 UTC
+ * Returns: DateTime with zero timezone offset (UTC)
+ */
+Obj* datetime_from_unix(Obj* timestamp) {
+    if (!timestamp) return NULL;
+    int64_t ts = obj_to_int(timestamp);
+    _ensure_global_region();
+    return mk_datetime_region(_global_region, ts, 0);
+}
+
+/*
+ * datetime_from_unix_tz - Create a DateTime from Unix timestamp with timezone
+ * timestamp: Seconds since 1970-01-01 00:00:00 UTC
+ * tz_offset: Timezone offset in seconds from UTC
+ * Returns: DateTime with specified timezone offset
+ */
+Obj* datetime_from_unix_tz(Obj* timestamp, Obj* tz_offset) {
+    if (!timestamp) return NULL;
+    int64_t ts = obj_to_int(timestamp);
+    int32_t tz = tz_offset ? (int32_t)obj_to_int(tz_offset) : 0;
+    _ensure_global_region();
+    return mk_datetime_region(_global_region, ts, tz);
+}
+
+/*
+ * datetime_to_unix - Extract Unix timestamp from DateTime
+ * dt: DateTime object
+ * Returns: Integer Unix timestamp
+ */
+Obj* datetime_to_unix(Obj* dt) {
+    if (!dt || !IS_BOXED(dt) || dt->tag != TAG_DATETIME) return mk_int(0);
+    DateTime* d = (DateTime*)dt->ptr;
+    return mk_int(d->timestamp);
+}
+
+/*
+ * datetime_tz_offset - Get timezone offset from DateTime
+ * dt: DateTime object
+ * Returns: Integer timezone offset in seconds from UTC
+ */
+Obj* datetime_tz_offset(Obj* dt) {
+    if (!dt || !IS_BOXED(dt) || dt->tag != TAG_DATETIME) return mk_int(0);
+    DateTime* d = (DateTime*)dt->ptr;
+    return mk_int(d->tz_offset);
+}
+
+/* ========== DateTime Components (Issue 25 P1) ========== */
+
+/*
+ * Helper: Get tm struct from DateTime, applying timezone offset
+ */
+static struct tm datetime_to_tm(DateTime* d) {
+    struct tm tm;
+    /* Apply timezone offset to get local time */
+    time_t local_time = (time_t)(d->timestamp + d->tz_offset);
+    gmtime_r(&local_time, &tm);
+    return tm;
+}
+
+/*
+ * datetime_make - Create DateTime from components
+ * (datetime year month day hour minute second)
+ */
+Obj* datetime_make(Obj* year, Obj* month, Obj* day, Obj* hour, Obj* minute, Obj* second) {
+    struct tm tm = {0};
+    tm.tm_year = (int)obj_to_int(year) - 1900;
+    tm.tm_mon = (int)obj_to_int(month) - 1;  /* 0-based month */
+    tm.tm_mday = (int)obj_to_int(day);
+    tm.tm_hour = hour ? (int)obj_to_int(hour) : 0;
+    tm.tm_min = minute ? (int)obj_to_int(minute) : 0;
+    tm.tm_sec = second ? (int)obj_to_int(second) : 0;
+    tm.tm_isdst = -1;  /* Let mktime determine DST */
+
+    time_t ts = timegm(&tm);  /* Interpret as UTC */
+    _ensure_global_region();
+    return mk_datetime_region(_global_region, (int64_t)ts, 0);
+}
+
+/*
+ * datetime_make_local - Create DateTime from components in local timezone
+ */
+Obj* datetime_make_local(Obj* year, Obj* month, Obj* day, Obj* hour, Obj* minute, Obj* second) {
+    struct tm tm = {0};
+    tm.tm_year = (int)obj_to_int(year) - 1900;
+    tm.tm_mon = (int)obj_to_int(month) - 1;
+    tm.tm_mday = (int)obj_to_int(day);
+    tm.tm_hour = hour ? (int)obj_to_int(hour) : 0;
+    tm.tm_min = minute ? (int)obj_to_int(minute) : 0;
+    tm.tm_sec = second ? (int)obj_to_int(second) : 0;
+    tm.tm_isdst = -1;
+
+    time_t ts = mktime(&tm);  /* Interpret as local time */
+    int32_t tz = (int32_t)tm.tm_gmtoff;
+    _ensure_global_region();
+    return mk_datetime_region(_global_region, (int64_t)ts, tz);
+}
+
+/* Component accessors */
+Obj* datetime_year(Obj* dt) {
+    if (!dt || !IS_BOXED(dt) || dt->tag != TAG_DATETIME) return mk_int(0);
+    struct tm tm = datetime_to_tm((DateTime*)dt->ptr);
+    return mk_int(tm.tm_year + 1900);
+}
+
+Obj* datetime_month(Obj* dt) {
+    if (!dt || !IS_BOXED(dt) || dt->tag != TAG_DATETIME) return mk_int(0);
+    struct tm tm = datetime_to_tm((DateTime*)dt->ptr);
+    return mk_int(tm.tm_mon + 1);  /* 1-based month */
+}
+
+Obj* datetime_day(Obj* dt) {
+    if (!dt || !IS_BOXED(dt) || dt->tag != TAG_DATETIME) return mk_int(0);
+    struct tm tm = datetime_to_tm((DateTime*)dt->ptr);
+    return mk_int(tm.tm_mday);
+}
+
+Obj* datetime_hour(Obj* dt) {
+    if (!dt || !IS_BOXED(dt) || dt->tag != TAG_DATETIME) return mk_int(0);
+    struct tm tm = datetime_to_tm((DateTime*)dt->ptr);
+    return mk_int(tm.tm_hour);
+}
+
+Obj* datetime_minute(Obj* dt) {
+    if (!dt || !IS_BOXED(dt) || dt->tag != TAG_DATETIME) return mk_int(0);
+    struct tm tm = datetime_to_tm((DateTime*)dt->ptr);
+    return mk_int(tm.tm_min);
+}
+
+Obj* datetime_second(Obj* dt) {
+    if (!dt || !IS_BOXED(dt) || dt->tag != TAG_DATETIME) return mk_int(0);
+    struct tm tm = datetime_to_tm((DateTime*)dt->ptr);
+    return mk_int(tm.tm_sec);
+}
+
+Obj* datetime_weekday(Obj* dt) {
+    if (!dt || !IS_BOXED(dt) || dt->tag != TAG_DATETIME) return mk_int(0);
+    struct tm tm = datetime_to_tm((DateTime*)dt->ptr);
+    return mk_int(tm.tm_wday);  /* 0 = Sunday, 6 = Saturday */
+}
+
+Obj* datetime_yearday(Obj* dt) {
+    if (!dt || !IS_BOXED(dt) || dt->tag != TAG_DATETIME) return mk_int(0);
+    struct tm tm = datetime_to_tm((DateTime*)dt->ptr);
+    return mk_int(tm.tm_yday + 1);  /* 1-based day of year */
+}
+
+/* ========== DateTime Arithmetic (Issue 25 P2) ========== */
+
+/*
+ * datetime_add_seconds - Add seconds to a DateTime
+ * Returns: New DateTime offset by the given seconds
+ */
+Obj* datetime_add_seconds(Obj* dt, Obj* seconds) {
+    if (!dt || !IS_BOXED(dt) || dt->tag != TAG_DATETIME) return dt;
+    DateTime* d = (DateTime*)dt->ptr;
+    int64_t delta = obj_to_int(seconds);
+    _ensure_global_region();
+    return mk_datetime_region(_global_region, d->timestamp + delta, d->tz_offset);
+}
+
+/*
+ * datetime_add_minutes - Add minutes to a DateTime
+ */
+Obj* datetime_add_minutes(Obj* dt, Obj* minutes) {
+    if (!dt || !IS_BOXED(dt) || dt->tag != TAG_DATETIME) return dt;
+    DateTime* d = (DateTime*)dt->ptr;
+    int64_t delta = obj_to_int(minutes) * 60;
+    _ensure_global_region();
+    return mk_datetime_region(_global_region, d->timestamp + delta, d->tz_offset);
+}
+
+/*
+ * datetime_add_hours - Add hours to a DateTime
+ */
+Obj* datetime_add_hours(Obj* dt, Obj* hours) {
+    if (!dt || !IS_BOXED(dt) || dt->tag != TAG_DATETIME) return dt;
+    DateTime* d = (DateTime*)dt->ptr;
+    int64_t delta = obj_to_int(hours) * 3600;
+    _ensure_global_region();
+    return mk_datetime_region(_global_region, d->timestamp + delta, d->tz_offset);
+}
+
+/*
+ * datetime_add_days - Add days to a DateTime
+ */
+Obj* datetime_add_days(Obj* dt, Obj* days) {
+    if (!dt || !IS_BOXED(dt) || dt->tag != TAG_DATETIME) return dt;
+    DateTime* d = (DateTime*)dt->ptr;
+    int64_t delta = obj_to_int(days) * 86400;
+    _ensure_global_region();
+    return mk_datetime_region(_global_region, d->timestamp + delta, d->tz_offset);
+}
+
+/*
+ * datetime_diff - Get difference between two DateTimes in seconds
+ * Returns: (dt1 - dt2) in seconds as integer
+ */
+Obj* datetime_diff(Obj* dt1, Obj* dt2) {
+    if (!dt1 || !IS_BOXED(dt1) || dt1->tag != TAG_DATETIME) return mk_int(0);
+    if (!dt2 || !IS_BOXED(dt2) || dt2->tag != TAG_DATETIME) return mk_int(0);
+    DateTime* d1 = (DateTime*)dt1->ptr;
+    DateTime* d2 = (DateTime*)dt2->ptr;
+    return mk_int(d1->timestamp - d2->timestamp);
+}
+
+/*
+ * datetime_lt - Compare DateTimes: dt1 < dt2
+ */
+Obj* datetime_lt(Obj* dt1, Obj* dt2) {
+    if (!dt1 || !IS_BOXED(dt1) || dt1->tag != TAG_DATETIME) return mk_bool(0);
+    if (!dt2 || !IS_BOXED(dt2) || dt2->tag != TAG_DATETIME) return mk_bool(0);
+    DateTime* d1 = (DateTime*)dt1->ptr;
+    DateTime* d2 = (DateTime*)dt2->ptr;
+    return mk_bool(d1->timestamp < d2->timestamp);
+}
+
+/*
+ * datetime_gt - Compare DateTimes: dt1 > dt2
+ */
+Obj* datetime_gt(Obj* dt1, Obj* dt2) {
+    if (!dt1 || !IS_BOXED(dt1) || dt1->tag != TAG_DATETIME) return mk_bool(0);
+    if (!dt2 || !IS_BOXED(dt2) || dt2->tag != TAG_DATETIME) return mk_bool(0);
+    DateTime* d1 = (DateTime*)dt1->ptr;
+    DateTime* d2 = (DateTime*)dt2->ptr;
+    return mk_bool(d1->timestamp > d2->timestamp);
+}
+
+/*
+ * datetime_eq - Compare DateTimes: dt1 == dt2
+ */
+Obj* datetime_eq(Obj* dt1, Obj* dt2) {
+    if (!dt1 || !IS_BOXED(dt1) || dt1->tag != TAG_DATETIME) return mk_bool(0);
+    if (!dt2 || !IS_BOXED(dt2) || dt2->tag != TAG_DATETIME) return mk_bool(0);
+    DateTime* d1 = (DateTime*)dt1->ptr;
+    DateTime* d2 = (DateTime*)dt2->ptr;
+    return mk_bool(d1->timestamp == d2->timestamp);
+}
+
+/*
+ * datetime_le - Compare DateTimes: dt1 <= dt2
+ */
+Obj* datetime_le(Obj* dt1, Obj* dt2) {
+    if (!dt1 || !IS_BOXED(dt1) || dt1->tag != TAG_DATETIME) return mk_bool(0);
+    if (!dt2 || !IS_BOXED(dt2) || dt2->tag != TAG_DATETIME) return mk_bool(0);
+    DateTime* d1 = (DateTime*)dt1->ptr;
+    DateTime* d2 = (DateTime*)dt2->ptr;
+    return mk_bool(d1->timestamp <= d2->timestamp);
+}
+
+/*
+ * datetime_ge - Compare DateTimes: dt1 >= dt2
+ */
+Obj* datetime_ge(Obj* dt1, Obj* dt2) {
+    if (!dt1 || !IS_BOXED(dt1) || dt1->tag != TAG_DATETIME) return mk_bool(0);
+    if (!dt2 || !IS_BOXED(dt2) || dt2->tag != TAG_DATETIME) return mk_bool(0);
+    DateTime* d1 = (DateTime*)dt1->ptr;
+    DateTime* d2 = (DateTime*)dt2->ptr;
+    return mk_bool(d1->timestamp >= d2->timestamp);
+}
+
+/* ========== DateTime Formatting (Issue 25 P3) ========== */
+
+/*
+ * datetime_format - Format DateTime to string using strftime-style format
+ * format: String with format specifiers (e.g., "%Y-%m-%d %H:%M:%S")
+ * Returns: Formatted string
+ */
+Obj* datetime_format(Obj* dt, Obj* format) {
+    if (!dt || !IS_BOXED(dt) || dt->tag != TAG_DATETIME) return mk_string("");
+    if (!format) return mk_string("");
+
+    DateTime* d = (DateTime*)dt->ptr;
+    const char* fmt = obj_to_cstring(format);
+
+    struct tm tm = datetime_to_tm(d);
+    char buf[256];
+    size_t len = strftime(buf, sizeof(buf), fmt, &tm);
+    if (len == 0) return mk_string("");
+
+    return mk_string(buf);
+}
+
+/*
+ * datetime_to_iso8601 - Format DateTime as ISO 8601 string
+ * Returns: "2026-01-18T12:30:00Z" or "2026-01-18T12:30:00+05:30"
+ */
+Obj* datetime_to_iso8601(Obj* dt) {
+    if (!dt || !IS_BOXED(dt) || dt->tag != TAG_DATETIME) return mk_string("");
+
+    DateTime* d = (DateTime*)dt->ptr;
+    struct tm tm = datetime_to_tm(d);
+
+    char buf[64];
+    strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &tm);
+
+    char result[80];
+    if (d->tz_offset == 0) {
+        snprintf(result, sizeof(result), "%sZ", buf);
+    } else {
+        int32_t offset = d->tz_offset;
+        char sign = offset >= 0 ? '+' : '-';
+        if (offset < 0) offset = -offset;
+        int hours = offset / 3600;
+        int mins = (offset % 3600) / 60;
+        snprintf(result, sizeof(result), "%s%c%02d:%02d", buf, sign, hours, mins);
+    }
+
+    return mk_string(result);
+}
+
+/*
+ * datetime_to_rfc2822 - Format DateTime as RFC 2822 string
+ * Returns: "Sun, 18 Jan 2026 12:30:00 +0000"
+ */
+Obj* datetime_to_rfc2822(Obj* dt) {
+    if (!dt || !IS_BOXED(dt) || dt->tag != TAG_DATETIME) return mk_string("");
+
+    DateTime* d = (DateTime*)dt->ptr;
+    struct tm tm = datetime_to_tm(d);
+
+    char buf[64];
+    strftime(buf, sizeof(buf), "%a, %d %b %Y %H:%M:%S", &tm);
+
+    char result[80];
+    int32_t offset = d->tz_offset;
+    char sign = offset >= 0 ? '+' : '-';
+    if (offset < 0) offset = -offset;
+    int hours = offset / 3600;
+    int mins = (offset % 3600) / 60;
+    snprintf(result, sizeof(result), "%s %c%02d%02d", buf, sign, hours, mins);
+
+    return mk_string(result);
+}
+
+/*
+ * datetime_parse_iso8601 - Parse ISO 8601 string to DateTime
+ * Input: "2026-01-18T12:30:00Z" or "2026-01-18T12:30:00+05:30"
+ * Returns: DateTime or NULL on parse error
+ */
+Obj* datetime_parse_iso8601(Obj* str) {
+    if (!str) return NULL;
+    const char* s = obj_to_cstring(str);
+    if (!s) return NULL;
+
+    int year, month, day, hour = 0, minute = 0, second = 0;
+    int tz_hours = 0, tz_mins = 0;
+    char tz_sign = '+';
+
+    /* Parse date part: YYYY-MM-DD */
+    if (sscanf(s, "%d-%d-%d", &year, &month, &day) != 3) {
+        return NULL;
+    }
+
+    /* Find 'T' separator */
+    const char* t = strchr(s, 'T');
+    if (t) {
+        t++; /* Skip 'T' */
+        /* Parse time part: HH:MM:SS */
+        if (sscanf(t, "%d:%d:%d", &hour, &minute, &second) < 2) {
+            return NULL;
+        }
+
+        /* Find timezone indicator */
+        const char* tz = t;
+        while (*tz && *tz != 'Z' && *tz != '+' && *tz != '-') tz++;
+
+        if (*tz == 'Z') {
+            tz_hours = 0;
+            tz_mins = 0;
+        } else if (*tz == '+' || *tz == '-') {
+            tz_sign = *tz;
+            if (sscanf(tz + 1, "%d:%d", &tz_hours, &tz_mins) < 1) {
+                /* Try without colon: +0530 */
+                if (sscanf(tz + 1, "%2d%2d", &tz_hours, &tz_mins) < 1) {
+                    return NULL;
+                }
+            }
+        }
+    }
+
+    struct tm tm = {0};
+    tm.tm_year = year - 1900;
+    tm.tm_mon = month - 1;
+    tm.tm_mday = day;
+    tm.tm_hour = hour;
+    tm.tm_min = minute;
+    tm.tm_sec = second;
+
+    time_t ts = timegm(&tm);
+    int32_t tz_offset = (tz_hours * 3600 + tz_mins * 60);
+    if (tz_sign == '-') tz_offset = -tz_offset;
+
+    /* Adjust timestamp for timezone (convert local to UTC) */
+    ts -= tz_offset;
+
+    _ensure_global_region();
+    return mk_datetime_region(_global_region, (int64_t)ts, tz_offset);
+}
+
 /* Arithmetic - MOVED to math_numerics.c to avoid duplicate symbols */
 #if 0
 Obj* prim_add(Obj* a, Obj* b) {
@@ -1706,6 +2643,56 @@ Obj* prim_abs(Obj* a) {
 #endif
 
 /* Comparisons */
+
+/*
+ * kind_values_equal - Deep equality check for Kind objects
+ *
+ * Issue 18 P1: Compares Kind objects by:
+ * 1. Type name equality (e.g., "Int" == "Int")
+ * 2. Parameter count equality
+ * 3. Recursive parameter equality
+ *
+ * Returns: true if kinds are structurally equal
+ */
+static bool kind_values_equal(Obj* a, Obj* b) {
+    if (!a || !b) return a == b;
+    if (!IS_BOXED(a) || !IS_BOXED(b)) return false;
+    if (a->tag != TAG_KIND || b->tag != TAG_KIND) return false;
+
+    Kind* ka = (Kind*)a->ptr;
+    Kind* kb = (Kind*)b->ptr;
+    if (!ka || !kb) return ka == kb;
+
+    /* Compare type names */
+    if (!ka->name || !kb->name) return ka->name == kb->name;
+    if (strcmp(ka->name, kb->name) != 0) return false;
+
+    /* Compare parameter counts */
+    if (ka->param_count != kb->param_count) return false;
+
+    /* Compare parameters recursively */
+    for (int i = 0; i < ka->param_count; i++) {
+        if (!kind_values_equal(ka->params[i], kb->params[i])) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/*
+ * prim_kind_eq - Kind equality predicate (kind=?)
+ *
+ * Issue 18 P1: Runtime predicate for comparing Kind objects.
+ * Returns true if two kinds are structurally equal.
+ *
+ * Usage: (kind=? {Int} {Int}) => true
+ *        (kind=? {Array Int} {Array String}) => false
+ */
+Obj* prim_kind_eq(Obj* a, Obj* b) {
+    return mk_bool(kind_values_equal(a, b));
+}
+
 Obj* prim_eq(Obj* a, Obj* b) {
     /* Special case: String comparison by content, not pointer */
     if (a && b && IS_BOXED(a) && IS_BOXED(b)) {
@@ -1720,6 +2707,10 @@ Obj* prim_eq(Obj* a, Obj* b) {
             const char* sym_a = (const char*)a->ptr;
             const char* sym_b = (const char*)b->ptr;
             return mk_bool(sym_a && sym_b && strcmp(sym_a, sym_b) == 0);
+        }
+        /* Issue 18 P1: Kind equality by structure */
+        if (a->tag == TAG_KIND && b->tag == TAG_KIND) {
+            return mk_bool(kind_values_equal(a, b));
         }
     }
     /* Default: numeric/immediate comparison */
@@ -1760,6 +2751,8 @@ Obj* ctr_tag(Obj* x) {
         case TAG_KEYWORD: return mk_sym("keyword");
         case TAG_ARRAY: return mk_sym("array");
         case TAG_DICT: return mk_sym("dict");
+        case TAG_SET: return mk_sym("set");
+        case TAG_DATETIME: return mk_sym("datetime");
         case TAG_BOX: return mk_sym("box");
         case TAG_CLOSURE: return mk_sym("closure");
         case TAG_CHANNEL: return mk_sym("channel");
@@ -1822,6 +2815,56 @@ static void print_dict(Dict* d) {
     printf("}");
 }
 
+/* Set print (Issue 24) */
+typedef struct {
+    int first;
+} SetPrintCtx;
+
+static void set_print_callback(void* key, void* value, void* ctx) {
+    (void)value;  /* Set stores element as both key and value */
+    SetPrintCtx* sctx = (SetPrintCtx*)ctx;
+    if (!sctx->first) printf(" ");
+    sctx->first = 0;
+    print_obj((Obj*)key);
+}
+
+static void print_set(Set* s) {
+    if (!s) {
+        printf("#set{}");
+        return;
+    }
+    SetPrintCtx ctx = {1};
+    printf("#set{");
+    hashmap_foreach(&s->map, set_print_callback, &ctx);
+    printf("}");
+}
+
+/* DateTime print (Issue 25) */
+static void print_datetime(DateTime* dt) {
+    if (!dt) {
+        printf("#datetime<invalid>");
+        return;
+    }
+    time_t ts = (time_t)dt->timestamp;
+    struct tm utc_tm;
+    gmtime_r(&ts, &utc_tm);
+
+    /* Print ISO 8601 format with timezone */
+    char buf[64];
+    strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &utc_tm);
+
+    if (dt->tz_offset == 0) {
+        printf("#datetime<%sZ>", buf);
+    } else {
+        int32_t offset = dt->tz_offset;
+        char sign = offset >= 0 ? '+' : '-';
+        if (offset < 0) offset = -offset;
+        int hours = offset / 3600;
+        int mins = (offset % 3600) / 60;
+        printf("#datetime<%s%c%02d:%02d>", buf, sign, hours, mins);
+    }
+}
+
 /* I/O */
 void print_obj(Obj* x) {
     if (!x) { printf("()"); return; }
@@ -1838,6 +2881,8 @@ void print_obj(Obj* x) {
         case TAG_PAIR: printf("("); print_obj(x->a); printf(" . "); print_obj(x->b); printf(")"); break;
         case TAG_ARRAY: print_array((Array*)x->ptr); break;
         case TAG_DICT: print_dict((Dict*)x->ptr); break;
+        case TAG_SET: print_set((Set*)x->ptr); break;
+        case TAG_DATETIME: print_datetime((DateTime*)x->ptr); break;
         case TAG_NOTHING: printf("nothing"); break; /* Should be caught by is_nothing above */
         default: printf("#<obj:%d>", x->tag); break;
     }
@@ -2134,6 +3179,7 @@ Obj* prim_str(Obj* value) {
     return mk_string_cstr_region(_global_region, "?");
 }
 
+// TESTED - tests/test_string_append.omni
 /*
  * prim_strcat: Concatenate two strings
  * Args: str1, str2 - String objects to concatenate
@@ -2299,6 +3345,7 @@ Obj* prim_union(Obj* types_list) {
     strcpy(union_name, "Union");
 
     p = types_list;
+    // REVIEWED:NAIVE
     while (p && IS_BOXED(p) && p->tag == TAG_PAIR) {
         const char* type_name = NULL;
         Obj* type_obj = p->a;
@@ -2370,6 +3417,7 @@ Obj* prim_fn(Obj* params_and_ret) {
     }
     if (ret_name) name_len += strlen(ret_name) + 4;
 
+// REVIEWED:NAIVE
     char* fn_name = malloc(name_len + 1);
     strcpy(fn_name, "Fn");
 
@@ -2495,18 +3543,73 @@ static Obj* deep_get(Obj* root, char** components, int component_count) {
 #endif
 
 /*
- * Helper: Set a nested field in a structure (immutable - returns new structure)
- * For now, this is a simplified implementation that creates new pairs
- * A full implementation would use proper structural sharing
+ * Helper: Set a nested field in a structure
+ *
+ * For dicts: Mutates in place by traversing to the leaf and setting value
+ * For other types: Returns error (would need immutable update with structural sharing)
+ *
+ * Issue 29 P2: Fully implemented for dict types (2026-01-21)
  */
 static Obj* deep_set(Obj* root, char** components, int component_count, Obj* new_value) {
-    (void)components;
     if (!root || component_count == 0) return new_value;
 
-    /* For simplicity, this is a placeholder that returns an error */
-    /* A full implementation would recursively rebuild the structure */
     omni_ensure_global_region();
-    return mk_error_region(omni_get_global_region(), "deep-put: Not yet fully implemented");
+    Region* r = omni_get_global_region();
+
+    /* Navigate to the parent of the target field */
+    Obj* current = root;
+    for (int i = 0; i < component_count - 1; i++) {
+        if (!current || !IS_BOXED(current)) {
+            return mk_error_region(r, "deep-put: Cannot traverse non-dict value");
+        }
+
+        if (current->tag == TAG_DICT) {
+            /* Dict lookup by string key */
+            Obj* key = mk_string(components[i]);
+            Obj* next = dict_get(current, key);
+            if (!next) {
+                /* Auto-create intermediate dicts if needed */
+                next = mk_dict();
+                dict_set(current, key, next);
+            }
+            current = next;
+        } else if (current->tag == TAG_PAIR) {
+            /* For pairs, use 'car' or 'cdr' as component names */
+            if (strcmp(components[i], "car") == 0 || strcmp(components[i], "a") == 0) {
+                current = current->a;
+            } else if (strcmp(components[i], "cdr") == 0 || strcmp(components[i], "b") == 0) {
+                current = current->b;
+            } else {
+                return mk_error_region(r, "deep-put: Pair only supports 'car'/'cdr' paths");
+            }
+        } else {
+            return mk_error_region(r, "deep-put: Cannot traverse non-dict/pair value");
+        }
+    }
+
+    /* Set the final field */
+    const char* final_key = components[component_count - 1];
+
+    if (!current || !IS_BOXED(current)) {
+        return mk_error_region(r, "deep-put: Target is not a mutable structure");
+    }
+
+    if (current->tag == TAG_DICT) {
+        dict_set(current, mk_string(final_key), new_value);
+        return root;
+    } else if (current->tag == TAG_PAIR) {
+        if (strcmp(final_key, "car") == 0 || strcmp(final_key, "a") == 0) {
+            current->a = new_value;
+            return root;
+        } else if (strcmp(final_key, "cdr") == 0 || strcmp(final_key, "b") == 0) {
+            current->b = new_value;
+            return root;
+        } else {
+            return mk_error_region(r, "deep-put: Pair only supports 'car'/'cdr' paths");
+        }
+    }
+
+    return mk_error_region(r, "deep-put: Target is not a mutable structure");
 }
 
 /*
@@ -2622,6 +3725,12 @@ Obj* prim_value_to_type(Obj* value) {
                 break;
             case TAG_DICT:
                 type_name = "Dict";
+                break;
+            case TAG_SET:
+                type_name = "Set";
+                break;
+            case TAG_DATETIME:
+                type_name = "DateTime";
                 break;
             case TAG_NOTHING:
                 type_name = "Nothing";
@@ -3517,6 +4626,7 @@ Obj* prim_emit(Obj* value) {
  *   - prim_update_in_bang: Nested path in-place update
  */
 
+// TESTED - tests/test_dict_copy.omni
 /*
  * prim_dict_copy: Create a shallow copy of a dict
  *

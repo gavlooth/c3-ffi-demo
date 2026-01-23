@@ -1,0 +1,442 @@
+;; test_collections_utils.omni - Comprehensive tests for collection utilities
+;;
+;; Tests for functions in runtime/src/collections.c that lack tests:
+;;   - sort-by, sort-with
+;;   - group-by
+;;   - partition
+;;   - coll-take, coll-drop
+;;   - take-while, drop-while
+;;   - flatten, flatten-deep
+;;   - zip, unzip
+;;   - frequencies
+;;   - interleave, interpose
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+(define test-num [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (= expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+(define test-bool [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (equal? expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+(define test-eq [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (equal? expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+;; ============================================================
+;; Sort By
+;; ============================================================
+
+(print "")
+(print "=== Sort By ===")
+
+;; Test 1: sort-by with length
+(test-eq "sort-by with length"
+  '("a" "bb" "ccc")
+  (sort-by string-length '("ccc" "a" "bb")))
+
+;; REVIEWED:SYNTAX
+;; Test 2: sort-by with first char
+(test-eq "sort-by with first char"
+  '(apple banana cherry)
+; REVIEWED:SYNTAX
+  (sort-by (fn (s) (first s)) '(banana apple cherry)))
+
+;; Test 3: sort-by on array
+(test-eq "sort-by on array"
+  ["a" "bb" "ccc"]
+  (sort-by string-length ["ccc" "a" "bb"]))
+
+;; ============================================================
+;; Sort With
+;; ============================================================
+
+(print "")
+(print "=== Sort With ===")
+
+;; Define comparison functions
+(define cmp-num [a] [b]
+  (if (< a b) -1 (if (> a b) 1 0)))
+
+(define cmp-str [a] [b]
+  (if (string<? a b) -1 (if (string>? a b) 1 0)))
+
+;; Test 4: sort-with with comparator
+(test-eq "sort-with numbers descending"
+  [5 4 3 2 1]
+  (sort-with (fn (a b) (- b a)) [1 2 3 4 5]))
+
+;; Test 5: sort-with on strings
+(test-eq "sort-with strings ascending"
+  '("apple" "banana" "cherry")
+  (sort-with cmp-str '("banana" "cherry" "apple")))
+
+;; ============================================================
+;; Group By
+;; ============================================================
+
+(print "")
+(print "=== Group By ===")
+
+;; Test 6: group-by by even/odd
+(test-eq "group-by even/odd"
+  [true false true false true]
+  (group-by even? [1 2 3 4 5]))
+
+;; Test 7: group-by by string length
+(test-eq "group-by by string length"
+  '(["a" "b"] ["cd" "ef"])
+  (group-by string-length '("cd" "a" "ef" "b")))
+
+;; Test 8: group-by on array
+(test-eq "group-by on array"
+  [[1 3 5] [2 4 6]]
+  (group-by odd? [1 2 3 4 5 6]))
+
+;; ============================================================
+;; Partition
+;; ============================================================
+
+(print "")
+(print "=== Partition ===")
+
+;; Test 9: partition by even/odd
+(test-eq "partition even/odd"
+  [[2 4] [1 3 5]]
+  (partition even? [1 2 3 4 5]))
+
+;; Test 10: partition by positive/negative
+(test-eq "partition positive/negative"
+  [[1 2 3] [-1 -2 -3]]
+  (partition positive? [1 -1 2 -2 3 -3]))
+
+;; Test 11: partition on list
+(test-eq "partition on list"
+  [[2 4] [1 3 5]]
+  (partition even? '(1 2 3 4 5)))
+
+;; ============================================================
+;; Coll Take
+;; ============================================================
+
+(print "")
+(print "=== Coll Take ===")
+
+;; Test 12: coll-take from list
+(test-eq "coll-take from list"
+  '(1 2 3)
+  (coll-take 3 '(1 2 3 4 5)))
+
+;; Test 13: coll-take from array
+(test-eq "coll-take from array"
+  [1 2 3]
+  (coll-take 3 [1 2 3 4 5]))
+
+;; Test 14: coll-take zero
+(test-eq "coll-take zero"
+  ()
+  (coll-take 0 '(1 2 3)))
+
+;; Test 15: coll-take more than length
+(test-eq "coll-take more than length"
+  '(1 2 3)
+  (coll-take 10 '(1 2 3)))
+
+;; ============================================================
+;; Coll Drop
+;; ============================================================
+
+(print "")
+(print "=== Coll Drop ===")
+
+;; Test 16: coll-drop from list
+(test-eq "coll-drop from list"
+  '(4 5)
+  (coll-drop 3 '(1 2 3 4 5)))
+
+;; Test 17: coll-drop from array
+(test-eq "coll-drop from array"
+  [4 5]
+  (coll-drop 3 [1 2 3 4 5]))
+
+;; Test 18: coll-drop zero
+(test-eq "coll-drop zero"
+  '(1 2 3)
+  (coll-drop 0 '(1 2 3)))
+
+;; Test 19: coll-drop more than length
+(test-eq "coll-drop more than length"
+  ()
+  (coll-drop 10 '(1 2 3)))
+
+;; Test 20: coll-drop all
+(test-eq "coll-drop all"
+  ()
+  (coll-drop 3 '(1 2 3)))
+
+;; ============================================================
+;; Take While
+;; ============================================================
+
+(print "")
+(print "=== Take While ===")
+
+;; Test 21: take-while positive
+(test-eq "take-while positive"
+  '(1 2 3)
+  (take-while positive? '(1 2 3 -1 -2)))
+
+;; Test 22: take-while even
+(test-eq "take-while even"
+  '(2 4)
+  (take-while even? '(2 4 5 7)))
+
+;; Test 23: take-while less than 5
+(test-eq "take-while less than 5"
+  '(1 2 3 4)
+  (take-while (fn (x) (< x 5)) '(1 2 3 4 5 6)))
+
+;; Test 24: take-while on array
+(test-eq "take-while on array"
+  [1 2 3]
+  (take-while positive? [1 2 3 -1 -2]))
+
+;; ============================================================
+;; Drop While
+;; ============================================================
+
+(print "")
+(print "=== Drop While ===")
+
+;; Test 25: drop-while positive
+(test-eq "drop-while positive"
+  '(-1 -2)
+  (drop-while positive? '(1 2 3 -1 -2)))
+
+;; Test 26: drop-while even
+(test-eq "drop-while even"
+  '(5 7)
+  (drop-while even? '(2 4 5 7)))
+
+;; Test 27: drop-while less than 5
+(test-eq "drop-while less than 5"
+  '(5 6)
+  (drop-while (fn (x) (< x 5)) '(1 2 3 4 5 6)))
+
+;; Test 28: drop-while on array
+(test-eq "drop-while on array"
+  [-1 -2]
+  (drop-while positive? [1 2 3 -1 -2]))
+
+;; ============================================================
+;; Flatten
+;; ============================================================
+
+(print "")
+(print "=== Flatten ===")
+
+;; Test 29: flatten nested lists
+(test-eq "flatten nested lists"
+  '(1 2 3 4 5 6)
+  (flatten '((1 2) (3 4) (5 6))))
+
+;; Test 30: flatten deeply nested
+(test-eq "flatten deeply nested"
+  '(1 2 3 4)
+  (flatten '((1) (2 (3 (4)))))
+
+;; Test 31: flatten empty lists
+(test-eq "flatten with empty lists"
+  '(1 2 3 4)
+  (flatten '(1 () 2 () 3 4)))
+
+;; Test 32: flatten arrays
+(test-eq "flatten arrays"
+  [1 2 3 4 5 6]
+  (flatten [[1 2] [3 4] [5 6]]))
+
+;; ============================================================
+;; Flatten Deep
+;; ============================================================
+
+(print "")
+(print "=== Flatten Deep ===")
+
+;; Test 33: flatten-deep nested
+(test-eq "flatten-deep nested"
+  '(1 2 3 4 5 6)
+  (flatten-deep '((1 2) ((3 (4)) (5 6)))))
+
+;; Test 34: flatten-deep with empty
+(test-eq "flatten-deep with empty"
+  '(1 2 3 4)
+  (flatten-deep '(((1)) (2 (())) (3 (4)))))
+
+;; ============================================================
+;; Zip
+;; ============================================================
+
+(print "")
+(print "=== Zip ===")
+
+;; Test 35: zip two lists
+(test-eq "zip two lists"
+  [(1 10) (2 20) (3 30)]
+  (zip '(1 2 3) '(10 20 30)))
+
+;; Test 36: zip different lengths
+(test-eq "zip different lengths"
+  [(1 10) (2 20)]
+  (zip '(1 2) '(10 20 30 40)))
+
+;; Test 37: zip arrays
+(test-eq "zip arrays"
+  [[1 10] [2 20] [3 30]]
+  (zip [1 2 3] [10 20 30]))
+
+;; Test 38: zip with empty
+(test-eq "zip with empty"
+  ()
+  (zip '(1 2 3) ()))
+
+;; ============================================================
+;; Unzip
+;; ============================================================
+
+(print "")
+(print "=== Unzip ===")
+
+;; Test 39: unzip pairs
+(test-eq "unzip pairs"
+  [(1 2 3) (10 20 30)]
+  (unzip '((1 10) (2 20) (3 30))))
+
+;; Test 40: unzip array of pairs
+(test-eq "unzip array"
+  [[1 2 3] [10 20 30]]
+  (unzip [[1 10] [2 20] [3 30]]))
+
+;; ============================================================
+;; Frequencies
+;; ============================================================
+
+(print "")
+(print "=== Frequencies ===")
+
+;; Test 41: frequencies of numbers
+;; Note: result may be dict or array, test approximate structure
+(define freq-result (frequencies '(1 2 2 3 3 3)))
+(print "  frequencies result:" freq-result)
+(if (and (not (equal? freq-result ())) (> (length freq-result) 0))
+    (print "PASS: frequencies returns non-empty")
+    (print "FAIL: frequencies returned unexpected"))
+
+;; Test 42: frequencies of strings
+(define freq-str (frequencies '("a" "b" "b" "c" "c" "c")))
+(print "  frequencies of strings:" freq-str)
+(if (and (not (equal? freq-str ())) (> (length freq-str) 0))
+    (print "PASS: frequencies of strings returns non-empty")
+    (print "FAIL: frequencies of strings returned unexpected"))
+
+;; ============================================================
+;; Interleave
+;; ============================================================
+
+(print "")
+(print "=== Interleave ===")
+
+;; Test 43: interleave lists
+(test-eq "interleave lists"
+  '(1 10 2 20 3 30)
+  (interleave '(1 2 3) '(10 20 30)))
+
+;; Test 44: interleave different lengths
+(test-eq "interleave different lengths"
+  '(1 10 2 20 3)
+  (interleave '(1 2 3) '(10 20)))
+
+;; Test 45: interleave arrays
+(test-eq "interleave arrays"
+  [1 10 2 20 3 30]
+  (interleave [1 2 3] [10 20 30]))
+
+;; ============================================================
+;; Interpose
+;; ============================================================
+
+(print "")
+(print "=== Interpose ===")
+
+;; Test 46: interpose between elements
+(test-eq "interpose numbers"
+  '(1 0 2 0 3 0 4)
+  (interpose 0 '(1 2 3 4)))
+
+;; Test 47: interpose string
+(test-eq "interpose string"
+  '("a" "," "b" "," "c")
+  (interpose "," '("a" "b" "c")))
+
+;; Test 48: interpose with single element
+(test-eq "interpose single element"
+  '(1)
+  (interpose 0 '(1)))
+
+;; Test 49: interpose with empty
+(test-eq "interpose empty"
+  ()
+  (interpose 0 ()))
+
+;; Test 50: interpose with array
+(test-eq "interpose array"
+  [1 0 2 0 3 0 4]
+  (interpose 0 [1 2 3 4]))
+
+;; ============================================================
+;; Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

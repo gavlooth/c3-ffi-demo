@@ -472,6 +472,91 @@ Effects are performed like normal function calls:
   [ask [prompt] (resume "Alice")])            ; resume with value
 ```
 
+### Effect Operation Semantics
+
+**Key Insight:** Effect operations are **NOT** special forms. They are ordinary function calls
+that are dynamically intercepted by the nearest enclosing `handle` form.
+
+```lisp
+;; `raise` is NOT a keyword - it's a normal function call
+(raise "Division by zero")
+
+;; This is equivalent to:
+(perform 'raise "Division by zero")
+```
+
+**How it works:**
+1. When an effect operation is called (e.g., `(raise msg)`), the runtime searches
+   the call stack for a matching handler
+2. The `handle` form installs a **prompt** (delimiter) with handler clauses
+3. When an effect matches a handler clause, the continuation is captured up to that prompt
+4. The handler clause receives the payload and optionally a **resumption** object
+
+### Effect Row Type Signatures
+
+Functions can declare which effects they may perform using the `^:effects` metadata:
+
+```lisp
+;; Function that may raise Error effect
+(define safe-div [x {Int}] [y {Int}] {Int} ^:effects [{Error}]
+  (if (= y 0)
+    (raise "Division by zero")
+    (/ x y)))
+
+;; Function with multiple effects
+(define interactive-compute [x {Int}] {Int} ^:effects [{Ask} {Emit}]
+  (let [name (ask "Your name?")]
+    (emit (string-append "Hello, " name))
+    (* x 2)))
+
+;; Pure function (no effects)
+(define double [x {Int}] {Int}
+  (* x 2))
+```
+
+**Effect rows are checked at compile time:**
+- Calling an effectful function from a pure context is a type error
+- Handlers must cover all effects that may be performed
+- Effect inference tracks which effects flow through a computation
+
+### Resume Semantics
+
+The `resume` function is a **normal function** that is only valid within handler clauses.
+It invokes the captured continuation (resumption) with a value.
+
+**Type signature:**
+```
+resume : (Resumption a → a → b)
+```
+
+**Semantics:**
+1. `resume` is passed as the second argument to handler clauses (after payload)
+2. Calling `resume` continues the computation from where the effect was performed
+3. The value passed to `resume` becomes the return value of the effect operation
+4. Handlers can call `resume` zero times (abort), once (one-shot), or multiple times (multi-shot)
+
+```lisp
+;; Handler that does NOT resume (aborts computation)
+(handle
+  (begin (raise "error") (println "never reached"))
+  [raise [msg] 0])  ; returns 0, computation aborted
+
+;; Handler that resumes once (one-shot continuation)
+(handle
+  (+ 1 (ask "number?"))
+  [ask [prompt resume] (resume 41)])  ; returns 42
+
+;; Handler that resumes multiple times (multi-shot)
+(handle
+  (emit (choose [1 2 3]))
+  [choose [options resume]
+    (map resume options)])  ; calls resume for each option
+```
+
+**Implementation note:** Resumptions are implemented using delimited continuations.
+The `handle` form installs a prompt, and `resume` invokes `cont_invoke()` on the
+captured continuation.
+
 ### Why Not try/catch?
 
 Algebraic effects provide:

@@ -2,7 +2,7 @@
 ;; Measures actual operation execution time (not compilation)
 
 ;; Define a simple loop function using recursion
-(define (loop-n n func)
+(define loop-n [n] [func]
   (if (<= n 0)
       0
       (begin
@@ -13,7 +13,7 @@
 (define counter 0)
 
 ;; Benchmark: Integer addition in tight loop
-(define (bench-int-add iterations)
+(define bench-int-add [iterations]
   (set! counter 0)
   (loop-n iterations
     (fn []

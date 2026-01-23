@@ -4,225 +4,252 @@
  * Verifies that regions with RETAIN_REGION strategy outlive their scope
  * and are not reclaimed until all retains are released.
  *
- * STATUS: STUB / NOT IMPLEMENTED
- *
- * This test is blocked by unimplemented feature: Runtime does not yet
- * expose region_retain_internal() and region_release_internal() for testing.
- *
- * TODO: To enable this test:
- *  1. Expose region_retain_internal() in runtime API (omni.h)
- *  2. Expose region_release_internal() in runtime API (omni.h)
- *  3. Implement external_rc field in Region for tracking external refs
- *  4. Then uncomment and fix test cases below
+ * STATUS: ENABLED (Issue 29 P3 - APIs now exposed)
  *
  * Reference:
  * - runtime/docs/REGION_RC_MODEL.md (Section 3.3 external boundaries)
  * - runtime/docs/CTRR_TRANSMIGRATION.md
  */
 
-#include "test_framework.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* Colors for output */
+#define RED     "\033[31m"
+#define GREEN   "\033[32m"
+#define YELLOW  "\033[33m"
+#define RESET   "\033[0m"
+
+/* Include runtime headers */
+#include "../include/omni.h"
+#include "../src/memory/region_core.h"  /* For Region struct internals */
+
+/* Test counters (local to this test file) */
+static int rc_tests_run = 0;
+static int rc_tests_passed = 0;
+static int rc_tests_failed = 0;
 
 /* ========== Region RC Liveness Tests ========== */
 
 /*
  * Test 1: Region outlives scope after retain_internal
- *
- * TODO: UNCOMMENT AFTER FEATURE IMPLEMENTATION
- *
- * Scenario:
- *  1. Create region R
- *  2. Allocate value x in R
- *  3. Call region_exit(R) - scope ends
- *  4. Call region_retain_internal(R) - external reference created
- *  5. Verify R is NOT destroyed (external_rc > 0)
- *  6. Call region_release_internal(R)
- *  7. Verify R IS destroyed (external_rc == 0)
- *
- * Expected behavior:
- *  - region_exit() should NOT destroy region if external_rc > 0
- *  - region_retain_internal() should increment external_rc
- *  - region_release_internal() should decrement external_rc and trigger destroy if zero
  */
-#if 0  /* TODO: Enable after runtime API exposes retain_internal/release_internal */
-TEST("region outlives after retain") {
-    Region* r = region_create();
-    ASSERT_NOT_NULL(r);
+static void test_region_outlives_after_retain(void) {
+    printf("  region outlives after retain: ");
+    fflush(stdout);
 
-    Obj* x = mk_int(r, 42);
-    ASSERT_NOT_NULL(x);
+    Region* r = region_create();
+    if (!r) {
+        printf(RED "FAIL" RESET " - region_create failed\n");
+        rc_tests_failed++;
+        return;
+    }
+
+    Obj* x = mk_int_region(r, 42);
+    if (!x) {
+        printf(RED "FAIL" RESET " - mk_int_region failed\n");
+        rc_tests_failed++;
+        return;
+    }
+
+    /* Create external reference BEFORE scope exit */
+    region_retain_internal(r);
+    if (r->external_rc != 1) {
+        printf(RED "FAIL" RESET " - external_rc should be 1 after retain\n");
+        rc_tests_failed++;
+        return;
+    }
 
     /* Simulate scope exit */
     region_exit(r);
 
-    /* Create external reference (retain) */
-    /* TODO: Need runtime API: region_retain_internal(r) */
-    /* region_retain_internal(r); */
-
-    /* Verify region is still alive (not destroyed) */
-    /* TODO: Need to check region->external_rc > 0 */
-    /* ASSERT_TRUE(r->external_rc > 0); */
+    /* Region should still be alive (not destroyed) because external_rc > 0 */
+    if (r->external_rc != 1) {
+        printf(RED "FAIL" RESET " - external_rc changed after exit\n");
+        rc_tests_failed++;
+        return;
+    }
 
     /* Release external reference */
-    /* TODO: Need runtime API: region_release_internal(r) */
-    /* region_release_internal(r); */
+    region_release_internal(r);
+    /* Note: region_release_internal calls region_destroy_if_dead internally */
 
-    /* Verify region is now eligible for destruction */
-    /* TODO: ASSERT_TRUE(r->external_rc == 0); */
-
-    /* Cleanup */
-    /* region_destroy_if_dead(r) should destroy it now */
-    region_destroy_if_dead(r);
-
-    PASS();
+    printf(GREEN "PASS" RESET "\n");
+    rc_tests_passed++;
 }
-#endif
 
 /*
  * Test 2: Multiple retains require matching number of releases
- *
- * TODO: UNCOMMENT AFTER FEATURE IMPLEMENTATION
- *
- * Scenario:
- *  1. Create region R
- *  2. Call retain_internal 3 times
- *  3. Call release_internal once - region should still live
- *  4. Call release_internal second time - region should still live
- *  5. Call release_internal third time - region should be destroyable
  */
-#if 0  /* TODO: Enable after runtime API exposes retain_internal/release_internal */
-TEST("multiple retains require matching releases") {
+static void test_multiple_retains_matching_releases(void) {
+    printf("  multiple retains require matching releases: ");
+    fflush(stdout);
+
     Region* r = region_create();
-    ASSERT_NOT_NULL(r);
+    if (!r) {
+        printf(RED "FAIL" RESET " - region_create failed\n");
+        rc_tests_failed++;
+        return;
+    }
 
     /* Create multiple external references */
-    /* TODO: region_retain_internal(r); */
-    /* TODO: region_retain_internal(r); */
-    /* TODO: region_retain_internal(r); */
+    region_retain_internal(r);
+    region_retain_internal(r);
+    region_retain_internal(r);
+
+    if (r->external_rc != 3) {
+        printf(RED "FAIL" RESET " - external_rc should be 3\n");
+        rc_tests_failed++;
+        return;
+    }
+
+    /* Exit scope while we have external refs */
+    region_exit(r);
 
     /* First release - should still live */
-    /* TODO: region_release_internal(r); */
-    /* TODO: ASSERT_TRUE(r->external_rc > 0); */
+    region_release_internal(r);
+    if (r->external_rc != 2) {
+        printf(RED "FAIL" RESET " - external_rc should be 2 after first release\n");
+        rc_tests_failed++;
+        return;
+    }
 
     /* Second release - should still live */
-    /* TODO: region_release_internal(r); */
-    /* TODO: ASSERT_TRUE(r->external_rc > 0); */
+    region_release_internal(r);
+    if (r->external_rc != 1) {
+        printf(RED "FAIL" RESET " - external_rc should be 1 after second release\n");
+        rc_tests_failed++;
+        return;
+    }
 
-    /* Third release - should be at zero */
-    /* TODO: region_release_internal(r); */
-    /* TODO: ASSERT_TRUE(r->external_rc == 0); */
+    /* Third release - triggers destroy_if_dead */
+    region_release_internal(r);
+    /* After this, r may be destroyed or recycled */
 
-    region_destroy_if_dead(r);
-    PASS();
+    printf(GREEN "PASS" RESET "\n");
+    rc_tests_passed++;
 }
-#endif
 
 /*
  * Test 3: Region with zero external refs is destroyed on exit
- *
- * TODO: UNCOMMENT AFTER FEATURE IMPLEMENTATION
- *
- * Scenario:
- *  1. Create region R
- *  2. Do NOT call retain_internal
- *  3. Call region_exit(R)
- *  4. Verify R IS destroyed (external_rc == 0)
  */
-#if 0  /* TODO: Enable after runtime API exposes retain_internal/release_internal */
-TEST("region destroyed on exit without retains") {
+static void test_region_destroyed_without_retains(void) {
+    printf("  region destroyed without retains: ");
+    fflush(stdout);
+
     Region* r = region_create();
-    ASSERT_NOT_NULL(r);
+    if (!r) {
+        printf(RED "FAIL" RESET " - region_create failed\n");
+        rc_tests_failed++;
+        return;
+    }
+
+    /* Verify initial external_rc is 0 */
+    if (r->external_rc != 0) {
+        printf(RED "FAIL" RESET " - initial external_rc should be 0\n");
+        rc_tests_failed++;
+        return;
+    }
 
     /* Do NOT create external references */
 
-    /* Exit scope */
+    /* Exit scope - should trigger destruction since external_rc == 0 */
     region_exit(r);
 
-    /* Verify region was destroyed (external_rc was 0) */
-    /* TODO: Need a way to check if region was destroyed */
-    /* Current API: region_destroy_if_dead(r) only destroys if safe */
-    /* If external_rc == 0, it should have destroyed on region_exit() */
-    /* But we can't verify that without adding a flag to Region struct */
+    /* Region may be destroyed or recycled after exit with no external refs */
+    /* We can't safely access r after this point */
 
-    /* Cleanup (no-op if already destroyed) */
-    region_destroy_if_dead(r);
-    PASS();
+    printf(GREEN "PASS" RESET "\n");
+    rc_tests_passed++;
 }
-#endif
 
 /*
  * Test 4: Retain/Release pairs with real values
- *
- * TODO: UNCOMMENT AFTER FEATURE IMPLEMENTATION
- *
- * Scenario:
- *  1. Create region R
- *  2. Allocate pair in R
- *  3. Retain R (pair escapes scope)
- *  4. Exit R
- *  5. Use pair (verify it's still valid)
- *  6. Release R
- *  7. Verify pair is now invalid (optional - may still be readable)
  */
-#if 0  /* TODO: Enable after runtime API exposes retain_internal/release_internal */
-TEST("retain preserves value validity") {
+static void test_retain_preserves_value(void) {
+    printf("  retain preserves value validity: ");
+    fflush(stdout);
+
     Region* r = region_create();
-    ASSERT_NOT_NULL(r);
+    if (!r) {
+        printf(RED "FAIL" RESET " - region_create failed\n");
+        rc_tests_failed++;
+        return;
+    }
 
     /* Allocate a pair in region */
-    Obj* pair = mk_pair(r, mk_int(r, 1), mk_int(r, 2));
-    ASSERT_NOT_NULL(pair);
-    ASSERT_EQ(pair->tag, T_CELL);
+    Obj* a = mk_int_region(r, 1);
+    Obj* b = mk_int_region(r, 2);
+    Obj* pair = mk_cell_region(r, a, b);
+
+    if (!pair || pair->tag != TAG_PAIR) {
+        printf(RED "FAIL" RESET " - pair creation failed\n");
+        rc_tests_failed++;
+        return;
+    }
 
     /* Retain region (pair will escape) */
-    /* TODO: region_retain_internal(r); */
+    region_retain_internal(r);
 
     /* Exit scope */
     region_exit(r);
 
     /* Pair should still be valid and readable */
-    /* TODO: Check pair->tag, pair->cell.car, pair->cell.cdr */
-    /* ASSERT_EQ(pair->cell.car->i, 1); */
-    /* ASSERT_EQ(pair->cell.cdr->i, 2); */
+    if (pair->tag != TAG_PAIR || !pair->a || !pair->b) {
+        printf(RED "FAIL" RESET " - pair corrupted after exit\n");
+        rc_tests_failed++;
+        return;
+    }
+
+    if (obj_to_int(pair->a) != 1 || obj_to_int(pair->b) != 2) {
+        printf(RED "FAIL" RESET " - pair values changed after exit\n");
+        rc_tests_failed++;
+        return;
+    }
 
     /* Release region */
-    /* TODO: region_release_internal(r); */
+    region_release_internal(r);
+    /* After release, r may be destroyed */
 
-    /* Region should be destroyable */
-    /* TODO: ASSERT_TRUE(r->external_rc == 0); */
-
-    region_destroy_if_dead(r);
-    PASS();
+    printf(GREEN "PASS" RESET "\n");
+    rc_tests_passed++;
 }
-#endif
 
 /* ========== Test Suite Entry Point ========== */
 
 void run_region_rc_liveness_tests(void) {
     printf("\n" YELLOW "=== Region RC Liveness (Issue 1 P2) ===" RESET "\n");
-    printf(YELLOW "STATUS: STUB - Tests blocked by unimplemented runtime API" RESET "\n\n");
+    printf(GREEN "STATUS: ENABLED - APIs now exposed (Issue 29 P3 Fixed)" RESET "\n\n");
 
-    printf("  TODO: Expose region_retain_internal() in omni.h\n");
-    printf("  TODO: Expose region_release_internal() in omni.h\n");
-    printf("  TODO: Add external_rc field to Region struct for tracking\n");
-    printf("  TODO: Update region_exit() to check external_rc before destroy\n");
-    printf("  TODO: Then uncomment and fix test cases above\n\n");
+    rc_tests_run = 0;
+    rc_tests_passed = 0;
+    rc_tests_failed = 0;
 
-    /* Currently all tests are disabled - skip execution */
-    printf(YELLOW "--- Tests (Currently Disabled) ---" RESET "\n");
-    printf("  region outlives after retain: " RED "SKIPPED" RESET " (blocked)\n");
-    printf("  multiple retains require matching releases: " RED "SKIPPED" RESET " (blocked)\n");
-    printf("  region destroyed on exit without retains: " RED "SKIPPED" RESET " (blocked)\n");
-    printf("  retain preserves value validity: " RED "SKIPPED" RESET " (blocked)\n");
+    /* Run all tests */
+    test_region_outlives_after_retain();
+    rc_tests_run++;
+
+    test_multiple_retains_matching_releases();
+    rc_tests_run++;
+
+    test_region_destroyed_without_retains();
+    rc_tests_run++;
+
+    test_retain_preserves_value();
+    rc_tests_run++;
 
     printf("\n" YELLOW "=== Summary ===" RESET "\n");
-    printf("  Total: 0 (all tests disabled)\n");
-    printf("  Status: " YELLOW "STUB - Runtime API implementation needed" RESET "\n");
+    printf("  Total: %d, Passed: %d, Failed: %d\n", rc_tests_run, rc_tests_passed, rc_tests_failed);
+    if (rc_tests_failed == 0) {
+        printf("  Status: " GREEN "ALL TESTS PASSED" RESET "\n");
+    } else {
+        printf("  Status: " RED "SOME TESTS FAILED" RESET "\n");
+    }
 }
 
 /* Standalone main() for independent testing */
-/* This test is meant to be included in test_main.c, but has main()
-   for standalone execution during development */
 int main(void) {
     run_region_rc_liveness_tests();
-    return 0; /* Return success - test suite is valid, just disabled */
+    return rc_tests_failed > 0 ? 1 : 0;
 }

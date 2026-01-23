@@ -46,9 +46,11 @@ typedef enum {
     /* OmniLisp extensions */
     OMNI_ARRAY,        /* Mutable array [1 2 3] */
     OMNI_DICT,         /* Dictionary #{:a 1 :b 2} */
+    OMNI_SET,          /* Set #set{1 2 3} (Issue 24) */
     OMNI_TUPLE,        /* Immutable tuple */
     OMNI_NOTHING,      /* Unit value */
     OMNI_TYPE_LIT,     /* Type literal {Int} */
+    OMNI_KIND_SPLICE,  /* Kind splice {#kind expr} - compile-time evaluated */
     OMNI_KEYWORD,      /* Keyword :symbol */
 } OmniTag;
 
@@ -215,6 +217,13 @@ struct OmniValue {
             size_t cap;
         } dict;
 
+        /* OMNI_SET (Issue 24) */
+        struct {
+            OmniValue** data;
+            size_t len;
+            size_t cap;
+        } set;
+
         /* OMNI_TUPLE */
         struct {
             OmniValue** data;
@@ -227,6 +236,11 @@ struct OmniValue {
             OmniValue** params;
             size_t param_count;
         } type_lit;
+
+        /* OMNI_KIND_SPLICE */
+        struct {
+            OmniValue* expr;  /* Expression to evaluate at compile time */
+        } kind_splice;
     };
 };
 
@@ -274,8 +288,11 @@ OmniValue* omni_new_keyword(const char* name);
 OmniValue* omni_new_array(size_t initial_cap);
 OmniValue* omni_new_array_from(OmniValue** elements, size_t len);
 OmniValue* omni_new_dict(void);
+OmniValue* omni_new_set(void);            /* Issue 24: Set data structure */
+void omni_set_add(OmniValue* set, OmniValue* elem);  /* Issue 24: Add element to set */
 OmniValue* omni_new_tuple(OmniValue** elements, size_t len);
 OmniValue* omni_new_type_lit(const char* name, OmniValue** params, size_t param_count);
+OmniValue* omni_new_kind_splice(OmniValue* expr);
 OmniValue* omni_new_user_type(const char* type_name, OmniField* fields, size_t field_count);
 
 /* ============== Type Predicates ============== */
@@ -302,9 +319,11 @@ static inline bool omni_is_process(OmniValue* v) { return v != NULL && v->tag ==
 static inline bool omni_is_menv(OmniValue* v) { return v != NULL && v->tag == OMNI_MENV; }
 static inline bool omni_is_array(OmniValue* v) { return v != NULL && v->tag == OMNI_ARRAY; }
 static inline bool omni_is_dict(OmniValue* v) { return v != NULL && v->tag == OMNI_DICT; }
+static inline bool omni_is_set(OmniValue* v) { return v != NULL && v->tag == OMNI_SET; }
 static inline bool omni_is_tuple(OmniValue* v) { return v != NULL && v->tag == OMNI_TUPLE; }
 static inline bool omni_is_nothing(OmniValue* v) { return v == omni_nothing || (v != NULL && v->tag == OMNI_NOTHING); }
 static inline bool omni_is_type_lit(OmniValue* v) { return v != NULL && v->tag == OMNI_TYPE_LIT; }
+static inline bool omni_is_kind_splice(OmniValue* v) { return v != NULL && v->tag == OMNI_KIND_SPLICE; }
 static inline bool omni_is_keyword(OmniValue* v) { return v != NULL && v->tag == OMNI_KEYWORD; }
 static inline bool omni_is_user_type(OmniValue* v) { return v != NULL && v->tag == OMNI_USER_TYPE; }
 

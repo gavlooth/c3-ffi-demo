@@ -71,18 +71,22 @@ void omni_codegen_escape_repair(CodeGenContext* ctx,
                                 const char* dst_region_var,
                                 EscapeRepairStrategy strategy);
 
-/* Issue 1 P2: Choose between transmigrate vs retain based on escape type
+/* Issue 1 P2: Choose between transmigrate vs retain based on escape type and size
  *
- * Issue 1 P2: Implemented RETAIN_REGION support for demonstration.
- * Strategy selection is controlled by an environment variable for testing.
+ * Strategy selection logic:
+ * 1. Environment variable override (for testing): OMNILISP_REPAIR_STRATEGY=retain|transmigrate
+ * 2. Type-based heuristic:
+ *    - Small fixed-size types (int, float, char, pair, symbol): TRANSMIGRATE (copy is cheap)
+ *    - Large/variable-size types (array, string, closure, dict): RETAIN (avoid copying)
+ * 3. Default: TRANSMIGRATE (conservative, always correct)
  *
- * Future enhancement: Use size-based heuristic (small → transmigrate, large → retain)
+ * Rationale:
+ * - Transmigrate copies the value graph to destination region. Good for small data.
+ * - Retain increments region RC, keeping source region alive. Good for large data
+ *   that would be expensive to copy.
  */
 EscapeRepairStrategy omni_choose_escape_repair_strategy(CodeGenContext* ctx,
                                                      const char* var_name) {
-    (void)ctx;
-    (void)var_name;
-
     /* Check environment variable for strategy override (for testing) */
     char* strategy_env = getenv("OMNILISP_REPAIR_STRATEGY");
     if (strategy_env) {
@@ -93,16 +97,38 @@ EscapeRepairStrategy omni_choose_escape_repair_strategy(CodeGenContext* ctx,
         }
     }
 
-    /* Default: Always transmigrate (conservative default) */
-    return ESCAPE_REPAIR_TRANSMIGRATE;
+    /* Issue 1 P2: Type-based size heuristic */
+    if (ctx && ctx->analysis && var_name) {
+        int type_id = omni_get_var_type_id(ctx->analysis, var_name);
 
-    /* Future: Size-based strategy
-     * if (size < RETAIN_THRESHOLD) {
-     *     return ESCAPE_REPAIR_TRANSMIGRATE;
-     * } else {
-     *     return ESCAPE_REPAIR_RETAIN_REGION;
-     * }
-     */
+        /* Small fixed-size types: transmigrate (copy is cheap) */
+        switch (type_id) {
+            case TYPE_ID_INT:
+            case TYPE_ID_FLOAT:
+            case TYPE_ID_CHAR:
+            case TYPE_ID_PAIR:      /* Cons cell - fixed 2 pointers */
+            case TYPE_ID_SYMBOL:    /* Interned, typically small */
+            case TYPE_ID_BOX:       /* Single pointer wrapper */
+            case TYPE_ID_NOTHING:   /* Singleton */
+                return ESCAPE_REPAIR_TRANSMIGRATE;
+
+            /* Large/variable-size types: retain region (avoid expensive copy) */
+            case TYPE_ID_ARRAY:     /* Variable length */
+            case TYPE_ID_STRING:    /* Variable length */
+            case TYPE_ID_DICT:      /* Hash table, potentially large */
+            case TYPE_ID_CLOSURE:   /* Captures environment, variable size */
+            case TYPE_ID_TUPLE:     /* Variable length */
+            case TYPE_ID_NAMED_TUPLE:
+                return ESCAPE_REPAIR_RETAIN_REGION;
+
+            /* Unknown or other: conservative default */
+            default:
+                return ESCAPE_REPAIR_TRANSMIGRATE;
+        }
+    }
+
+    /* No analysis context: conservative default */
+    return ESCAPE_REPAIR_TRANSMIGRATE;
 }
 
 bool omni_should_transmigrate(CodeGenContext* ctx, const char* var_name) {

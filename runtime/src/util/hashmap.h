@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "wyhash.h"
 
 // Simple pointer-keyed hash map for O(1) lookups
 // Used for fast object->node mappings in SCC and deferred RC
@@ -35,15 +36,15 @@ void hashmap_free_entries(HashMap* map);  // Free entries but not values
  *
  * OPTIMIZATION (T-opt-inline-hash-fastpath): Inline hot path for common case.
  * The hash computation and bucket lookup are now inlineable.
+ *
+ * Uses wyhash64 - a high-quality 64-bit mixer that passes BigCrush/PractRand.
+ * See: https://github.com/wangyi-fudan/wyhash (public domain)
  */
 static inline void* hashmap_get(HashMap* map, void* key) {
     if (!map || !key) return NULL;
 
-    // Hash function: pointer cast to size_t (FNV-1a style)
-    size_t hash = (size_t)key;
-    hash ^= hash >> 7;
-    hash *= 0x100000001b3;
-    hash ^= hash >> 11;
+    // Hash function: wyhash64 mixer for pointer keys
+    size_t hash = (size_t)wyhash64((uint64_t)(uintptr_t)key, 0x9E3779B97F4A7C15ULL);
 
     size_t bucket = hash % map->bucket_count;
 

@@ -1,0 +1,190 @@
+;; test_string_length.omni - Comprehensive tests for string-length primitive
+;;
+;; Tests prim_string_length function (exposed as string-length in OmniLisp)
+;; which returns the length of a string as an integer.
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+(define test-num [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (= expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+;; ============================================================
+;; Basic Length Tests
+;; ============================================================
+
+(print "")
+(print "=== Basic Length Tests ===")
+
+;; Test 1: Empty string length
+(test-num "empty string"
+  0
+  (string-length ""))
+
+;; Test 2: Single character
+(test-num "single character"
+  1
+  (string-length "a"))
+
+;; Test 3: Multiple characters
+(test-num "multiple characters"
+  5
+  (string-length "hello"))
+
+;; Test 4: String with spaces
+(test-num "string with spaces"
+  11
+  (string-length "hello world"))
+
+;; ============================================================
+;; Special Character Tests
+;; ============================================================
+
+(print "")
+(print "=== Special Character Tests ===")
+
+;; Test 5: String with newline
+(test-num "string with newline"
+  6
+  (string-length "hello\n"))
+
+;; Test 6: String with tab
+(test-num "string with tab"
+  6
+  (string-length "hello\t"))
+
+;; Test 7: String with mixed special chars
+(test-num "mixed special chars"
+  7
+  (string-length "a\n\t\r"))
+
+;; ============================================================
+;; Whitespace Tests
+;; ============================================================
+
+(print "")
+(print "=== Whitespace Tests ===")
+
+;; Test 8: Single space
+(test-num "single space"
+  1
+  (string-length " "))
+
+;; Test 9: Multiple spaces
+(test-num "multiple spaces"
+  5
+  (string-length "     "))
+
+;; Test 10: Leading and trailing whitespace
+(test-num "leading and trailing whitespace"
+  9
+  (string-length "  hello  "))
+
+;; ============================================================
+;; Numeric String Tests
+;; ============================================================
+
+(print "")
+(print "=== Numeric String Tests ===")
+
+;; Test 11: Numeric string
+(test-num "numeric string"
+  3
+  (string-length "123"))
+
+;; Test 12: String with decimal point
+(test-num "decimal string"
+  5
+  (string-length "3.14"))
+
+;; ============================================================
+;; Mixed Content Tests
+;; ============================================================
+
+(print "")
+(print "=== Mixed Content Tests ===")
+
+;; Test 13: Alphanumeric
+(test-num "alphanumeric"
+  8
+  (string-length "abc123xyz"))
+
+;; Test 14: String with punctuation
+(test-num "punctuation"
+  12
+  (string-length "hello, world!"))
+
+;; Test 15: String with special symbols
+(test-num "special symbols"
+  6
+  (string-length "$%^&*("))
+
+;; ============================================================
+;; Unicode Character Tests
+;; ============================================================
+
+(print "")
+(print "=== Character Tests ===")
+
+;; Test 16: Lowercase string
+(test-num "lowercase string"
+  5
+  (string-length "hello"))
+
+;; Test 17: Uppercase string
+(test-num "uppercase string"
+  5
+  (string-length "HELLO"))
+
+;; Test 18: Mixed case
+(test-num "mixed case"
+  10
+  (string-length "HeLlO WoRlD"))
+
+;; ============================================================
+;; Edge Case Tests
+;; ============================================================
+
+(print "")
+(print "=== Edge Case Tests ===")
+
+;; Test 19: Long string
+(test-num "long string"
+  26
+  (string-length "abcdefghijklmnopqrstuvwxyz"))
+
+;; Test 20: Repeated characters
+(test-num "repeated characters"
+  10
+  (string-length "aaaaaaaaaa"))
+
+;; ============================================================
+;; Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

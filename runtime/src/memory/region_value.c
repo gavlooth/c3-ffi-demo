@@ -18,11 +18,37 @@
  * maintaining compatibility with code that still uses tag-based operations.
  * Eventually, all code will use type_id and we can eliminate the tag field.
  *
- * OPTIMIZATION: Since TAG enum is now aligned with TypeID (TAG = TypeID + 1),
- * this is now a simple addition instead of a switch statement.
+ * NOTE: The TAG enum and TypeID enum have DIFFERENT orderings (TAG has
+ * additional types like SYM, BOX inserted between primitives and collections).
+ * Simple arithmetic (tag = type_id + 1) does NOT work. Use lookup tables.
  */
 static inline int type_id_to_tag(TypeID type_id) {
-    return type_id + 1;  /* TAG = TypeID + 1 */
+    /* Lookup table: TypeID -> TAG */
+    static const int type_id_to_tag_table[] = {
+        [TYPE_ID_INT]     = TAG_INT,      /* 0 -> 1 */
+        [TYPE_ID_FLOAT]   = TAG_FLOAT,    /* 1 -> 2 */
+        [TYPE_ID_CHAR]    = TAG_CHAR,     /* 2 -> 3 */
+        [TYPE_ID_PAIR]    = TAG_PAIR,     /* 3 -> 4 */
+        [TYPE_ID_ARRAY]   = TAG_ARRAY,    /* 4 -> 12 */
+        [TYPE_ID_STRING]  = TAG_STRING,   /* 5 -> 14 */
+        [TYPE_ID_SYMBOL]  = TAG_SYM,      /* 6 -> 5 */
+        [TYPE_ID_DICT]    = TAG_DICT,     /* 7 -> 13 */
+        [TYPE_ID_CLOSURE] = TAG_CLOSURE,  /* 8 -> 7 */
+        [TYPE_ID_BOX]     = TAG_BOX,      /* 9 -> 6 */
+        [TYPE_ID_CHANNEL] = TAG_CHANNEL,  /* 10 -> 8 */
+        [TYPE_ID_THREAD]  = TAG_THREAD,   /* 11 -> 11 */
+        [TYPE_ID_ERROR]   = TAG_ERROR,    /* 12 -> 9 */
+        [TYPE_ID_ATOM]    = TAG_ATOM,     /* 13 -> 10 */
+        [TYPE_ID_SET]     = TAG_SET,      /* 14 -> 16 */
+        [15]              = TAG_KEYWORD,  /* RESERVED_15 -> 15 (KEYWORD) */
+        [TYPE_ID_GENERIC] = TAG_GENERIC,  /* 16 -> 18 */
+        [TYPE_ID_KIND]    = TAG_KIND,     /* 17 -> 19 */
+        [TYPE_ID_NOTHING] = TAG_NOTHING,  /* 18 -> 20 */
+    };
+    if (type_id < 0 || type_id >= (TypeID)(sizeof(type_id_to_tag_table) / sizeof(type_id_to_tag_table[0]))) {
+        return TAG_GENERIC;  /* Fallback for unknown types */
+    }
+    return type_id_to_tag_table[type_id];
 }
 
 /*
@@ -31,11 +57,37 @@ static inline int type_id_to_tag(TypeID type_id) {
  * Phase 25: Enable constructors to use alloc_obj_typed() by converting
  * legacy tag values to TypeID constants.
  *
- * OPTIMIZATION: Since TAG enum is now aligned with TypeID (TAG = TypeID + 1),
- * this is now a simple subtraction instead of a switch statement.
+ * NOTE: Uses lookup table because TAG and TypeID enums are not aligned.
  */
 static inline TypeID tag_to_type_id(int tag) {
-    return tag - 1;  /* TypeID = TAG - 1 */
+    /* Lookup table: TAG -> TypeID */
+    static const TypeID tag_to_type_id_table[] = {
+        [0]            = TYPE_ID_INT,     /* Invalid tag 0 -> fallback */
+        [TAG_INT]      = TYPE_ID_INT,     /* 1 -> 0 */
+        [TAG_FLOAT]    = TYPE_ID_FLOAT,   /* 2 -> 1 */
+        [TAG_CHAR]     = TYPE_ID_CHAR,    /* 3 -> 2 */
+        [TAG_PAIR]     = TYPE_ID_PAIR,    /* 4 -> 3 */
+        [TAG_SYM]      = TYPE_ID_SYMBOL,  /* 5 -> 6 */
+        [TAG_BOX]      = TYPE_ID_BOX,     /* 6 -> 9 */
+        [TAG_CLOSURE]  = TYPE_ID_CLOSURE, /* 7 -> 8 */
+        [TAG_CHANNEL]  = TYPE_ID_CHANNEL, /* 8 -> 10 */
+        [TAG_ERROR]    = TYPE_ID_ERROR,   /* 9 -> 12 */
+        [TAG_ATOM]     = TYPE_ID_ATOM,    /* 10 -> 13 */
+        [TAG_THREAD]   = TYPE_ID_THREAD,  /* 11 -> 11 */
+        [TAG_ARRAY]    = TYPE_ID_ARRAY,   /* 12 -> 4 */
+        [TAG_DICT]     = TYPE_ID_DICT,    /* 13 -> 7 */
+        [TAG_STRING]   = TYPE_ID_STRING,  /* 14 -> 5 */
+        [TAG_KEYWORD]  = TYPE_ID_GENERIC, /* 15 -> 16 (no direct TypeID) */
+        [TAG_SET]      = TYPE_ID_SET,     /* 16 -> 14 */
+        [TAG_DATETIME] = TYPE_ID_GENERIC, /* 17 -> 16 (no direct TypeID) */
+        [TAG_GENERIC]  = TYPE_ID_GENERIC, /* 18 -> 16 */
+        [TAG_KIND]     = TYPE_ID_KIND,    /* 19 -> 17 */
+        [TAG_NOTHING]  = TYPE_ID_NOTHING, /* 20 -> 18 */
+    };
+    if (tag < 0 || tag >= (int)(sizeof(tag_to_type_id_table) / sizeof(tag_to_type_id_table[0]))) {
+        return TYPE_ID_GENERIC;  /* Fallback for unknown tags */
+    }
+    return tag_to_type_id_table[tag];
 }
 
 Obj* alloc_obj_region(Region* r, int tag) {
@@ -570,6 +622,44 @@ Obj* mk_dict_region(Region* r) {
     d->map.had_alloc_failure = 0;
     
     o->ptr = d;
+    return o;
+}
+
+/* Issue 24: Set data structure
+ * Implemented as a hashmap where element is stored as both key and value.
+ * This provides O(1) average-case operations.
+ */
+Obj* mk_set_region(Region* r) {
+    Obj* o = alloc_obj_region(r, TAG_SET);
+    if (!o) return NULL;
+
+    Set* s = region_alloc(r, sizeof(Set));
+    if (!s) return NULL;
+
+    // Initialize region-resident hash map
+    s->map.bucket_count = 16;
+    s->map.entry_count = 0;
+    s->map.load_factor = 0.75f;
+    s->map.buckets = region_alloc(r, sizeof(HashEntry*) * s->map.bucket_count);
+    memset(s->map.buckets, 0, sizeof(HashEntry*) * s->map.bucket_count);
+    s->map.had_alloc_failure = 0;
+
+    o->ptr = s;
+    return o;
+}
+
+/* Issue 25: DateTime constructor */
+Obj* mk_datetime_region(Region* r, int64_t timestamp, int32_t tz_offset) {
+    Obj* o = alloc_obj_region(r, TAG_DATETIME);
+    if (!o) return NULL;
+
+    DateTime* dt = region_alloc(r, sizeof(DateTime));
+    if (!dt) return NULL;
+
+    dt->timestamp = timestamp;
+    dt->tz_offset = tz_offset;
+
+    o->ptr = dt;
     return o;
 }
 

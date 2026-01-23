@@ -1,0 +1,382 @@
+;; test_string_equals.omni - Comprehensive tests for string=? primitive
+;;
+;; Tests prim_string_equals function (exposed as string=? in OmniLisp)
+;; which compares two strings for equality.
+
+;; ============================================================
+;; Test Results Summary
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+;; ============================================================
+;; Basic Equality Tests
+;; ============================================================
+
+(print "")
+(print "=== Basic Equality Tests ===")
+
+;; Test 1: Two equal strings
+(set! test-count (+ test-count 1))
+(if (string=? "hello" "hello")
+    (do
+      (set! pass-count (+ pass-count 1))
+      (print "PASS: equal strings"))
+    (do
+      (set! fail-count (+ fail-count 1))
+      (print "FAIL: equal strings")))
+
+;; Test 2: Two different strings
+(set! test-count (+ test-count 1))
+(if (string=? "hello" "world")
+    (do
+      (set! fail-count (+ fail-count 1))
+      (print "FAIL: different strings"))
+    (do
+      (set! pass-count (+ pass-count 1))
+      (print "PASS: different strings")))
+
+;; Test 3: Empty strings
+(set! test-count (+ test-count 1))
+(if (string=? "" "")
+    (do
+      (set! pass-count (+ pass-count 1))
+      (print "PASS: both empty strings"))
+    (do
+      (set! fail-count (+ fail-count 1))
+      (print "FAIL: both empty strings")))
+
+;; Test 4: Empty vs non-empty
+(set! test-count (+ test-count 1))
+(if (string=? "" "hello")
+    (do
+      (set! fail-count (+ fail-count 1))
+      (print "FAIL: empty vs non-empty"))
+    (do
+      (set! pass-count (+ pass-count 1))
+      (print "PASS: empty vs non-empty")))
+
+;; Test 5: Non-empty vs empty
+(set! test-count (+ test-count 1))
+(if (string=? "hello" "")
+    (do
+      (set! fail-count (+ fail-count 1))
+      (print "FAIL: non-empty vs empty"))
+    (do
+      (set! pass-count (+ pass-count 1))
+      (print "PASS: non-empty vs empty")))
+
+;; ============================================================
+;; Case Sensitivity Tests
+;; ============================================================
+
+(print "")
+(print "=== Case Sensitivity Tests ===")
+
+;; Test 6: Uppercase vs lowercase
+(set! test-count (+ test-count 1))
+(if (string=? "HELLO" "hello")
+    (do
+      (set! fail-count (+ fail-count 1))
+      (print "FAIL: case sensitivity - different case"))
+    (do
+      (set! pass-count (+ pass-count 1))
+      (print "PASS: case sensitivity - different case")))
+
+;; Test 7: Lowercase vs uppercase
+(set! test-count (+ test-count 1))
+(if (string=? "hello" "HELLO")
+    (do
+      (set! fail-count (+ fail-count 1))
+      (print "FAIL: case sensitivity - lower vs upper"))
+    (do
+      (set! pass-count (+ pass-count 1))
+      (print "PASS: case sensitivity - lower vs upper")))
+
+;; Test 8: Same string with different case
+(set! test-count (+ test-count 1))
+(if (string=? "Hello" "hELLO")
+    (do
+      (set! fail-count (+ fail-count 1))
+      (print "FAIL: same chars different case"))
+    (do
+      (set! pass-count (+ pass-count 1))
+      (print "PASS: same chars different case")))
+
+;; ============================================================
+;; Whitespace Tests
+;; ============================================================
+
+(print "")
+(print "=== Whitespace Tests ===")
+
+;; Test 9: String with leading/trailing spaces
+(set! test-count (+ test-count 1))
+(if (string=? " hello " "hello")
+    (do
+      (set! fail-count (+ fail-count 1))
+      (print "FAIL: string with spaces vs no spaces"))
+    (do
+      (set! pass-count (+ pass-count 1))
+      (print "PASS: string with spaces vs no spaces")))
+
+;; Test 10: Different number of spaces
+(set! test-count (+ test-count 1))
+(if (string=? "hello  world" "hello world")
+    (do
+      (set! fail-count (+ fail-count 1))
+      (print "FAIL: different space count"))
+    (do
+      (set! pass-count (+ pass-count 1))
+      (print "PASS: different space count")))
+
+;; Test 11: Spaces are significant
+(set! test-count (+ test-count 1))
+(if (string=? "hello world" "hello world")
+    (do
+      (set! pass-count (+ pass-count 1))
+      (print "PASS: spaces in middle"))
+    (do
+      (set! fail-count (+ fail-count 1))
+      (print "FAIL: spaces in middle")))
+
+;; ============================================================
+;; Length Tests
+;; ============================================================
+
+(print "")
+(print "=== Length Tests ===")
+
+;; Test 12: String vs prefix
+(set! test-count (+ test-count 1))
+(if (string=? "hello" "hell")
+    (do
+      (set! fail-count (+ fail-count 1))
+      (print "FAIL: string vs its prefix"))
+    (do
+      (set! pass-count (+ pass-count 1))
+      (print "PASS: string vs its prefix")))
+
+;; Test 13: String vs suffix
+(set! test-count (+ test-count 1))
+(if (string=? "hello" "ello")
+    (do
+      (set! fail-count (+ fail-count 1))
+      (print "FAIL: string vs its suffix"))
+    (do
+      (set! pass-count (+ pass-count 1))
+      (print "PASS: string vs its suffix")))
+
+;; Test 14: Same string multiple times
+(set! test-count (+ test-count 1))
+(if (string=? "hello" "hello")
+    (do
+      (set! pass-count (+ pass-count 1))
+      (print "PASS: duplicate strings"))
+    (do
+      (set! fail-count (+ fail-count 1))
+      (print "FAIL: duplicate strings")))
+
+;; ============================================================
+;; Special Character Tests
+;; ============================================================
+
+(print "")
+(print "=== Special Character Tests ===")
+
+;; Test 15: Special characters
+(set! test-count (+ test-count 1))
+(if (string=? "a@b#c" "a@b#c")
+    (do
+      (set! pass-count (+ pass-count 1))
+      (print "PASS: special characters"))
+    (do
+      (set! fail-count (+ fail-count 1))
+      (print "FAIL: special characters")))
+
+;; Test 16: Newline vs space
+(set! test-count (+ test-count 1))
+(if (string=? "a\nb" "a b")
+    (do
+      (set! fail-count (+ fail-count 1))
+      (print "FAIL: newline vs space"))
+    (do
+      (set! pass-count (+ pass-count 1))
+      (print "PASS: newline vs space")))
+
+;; Test 17: Tab vs spaces
+(set! test-count (+ test-count 1))
+(if (string=? "a\tb" "a  b")
+    (do
+      (set! fail-count (+ fail-count 1))
+      (print "FAIL: tab vs spaces"))
+    (do
+      (set! pass-count (+ pass-count 1))
+      (print "PASS: tab vs spaces")))
+
+;; ============================================================
+;; Numeric String Tests
+;; ============================================================
+
+(print "")
+(print "=== Numeric String Tests ===")
+
+;; Test 18: Numeric strings equal
+(set! test-count (+ test-count 1))
+(if (string=? "123" "123")
+    (do
+      (set! pass-count (+ pass-count 1))
+      (print "PASS: numeric strings equal"))
+    (do
+      (set! fail-count (+ fail-count 1))
+      (print "FAIL: numeric strings equal")))
+
+;; Test 19: Numeric strings different
+(set! test-count (+ test-count 1))
+(if (string=? "123" "456")
+    (do
+      (set! fail-count (+ fail-count 1))
+      (print "FAIL: numeric strings different"))
+    (do
+      (set! pass-count (+ pass-count 1))
+      (print "PASS: numeric strings different")))
+
+;; Test 20: Numeric vs alphabetic
+(set! test-count (+ test-count 1))
+(if (string=? "123" "abc")
+    (do
+      (set! fail-count (+ fail-count 1))
+      (print "FAIL: numeric vs alphabetic"))
+    (do
+      (set! pass-count (+ pass-count 1))
+      (print "PASS: numeric vs alphabetic")))
+
+;; ============================================================
+;; Single Character Tests
+;; ============================================================
+
+(print "")
+(print "=== Single Character Tests ===")
+
+;; Test 21: Single character same
+(set! test-count (+ test-count 1))
+(if (string=? "a" "a")
+    (do
+      (set! pass-count (+ pass-count 1))
+      (print "PASS: single char same"))
+    (do
+      (set! fail-count (+ fail-count 1))
+      (print "FAIL: single char same")))
+
+;; Test 22: Single character different
+(set! test-count (+ test-count 1))
+(if (string=? "a" "b")
+    (do
+      (set! fail-count (+ fail-count 1))
+      (print "FAIL: single char different"))
+    (do
+      (set! pass-count (+ pass-count 1))
+      (print "PASS: single char different")))
+
+;; Test 23: Single char vs multiple chars
+(set! test-count (+ test-count 1))
+(if (string=? "a" "aa")
+    (do
+      (set! fail-count (+ fail-count 1))
+      (print "FAIL: single vs multiple chars"))
+    (do
+      (set! pass-count (+ pass-count 1))
+      (print "PASS: single vs multiple chars")))
+
+;; ============================================================
+;; Repeated Character Tests
+;; ============================================================
+
+(print "")
+(print "=== Repeated Character Tests ===")
+
+;; Test 24: Repeated characters equal
+(set! test-count (+ test-count 1))
+(if (string=? "aaaa" "aaaa")
+    (do
+      (set! pass-count (+ pass-count 1))
+      (print "PASS: repeated chars equal"))
+    (do
+      (set! fail-count (+ fail-count 1))
+      (print "FAIL: repeated chars equal")))
+
+;; Test 25: Repeated characters different count
+(set! test-count (+ test-count 1))
+(if (string=? "aaaa" "aaa")
+    (do
+      (set! fail-count (+ fail-count 1))
+      (print "FAIL: repeated chars different count"))
+    (do
+      (set! pass-count (+ pass-count 1))
+      (print "PASS: repeated chars different count")))
+
+;; Test 26: Different repeated chars
+(set! test-count (+ test-count 1))
+(if (string=? "aaaa" "bbbb")
+    (do
+      (set! fail-count (+ fail-count 1))
+      (print "FAIL: different repeated chars"))
+    (do
+      (set! pass-count (+ pass-count 1))
+      (print "PASS: different repeated chars")))
+
+;; ============================================================
+;; Mixed Content Tests
+;; ============================================================
+
+(print "")
+(print "=== Mixed Content Tests ===")
+
+;; Test 27: Alphanumeric strings
+(set! test-count (+ test-count 1))
+(if (string=? "abc123xyz" "abc123xyz")
+    (do
+      (set! pass-count (+ pass-count 1))
+      (print "PASS: alphanumeric strings"))
+    (do
+      (set! fail-count (+ fail-count 1))
+      (print "FAIL: alphanumeric strings")))
+
+;; Test 28: Alphanumeric different
+(set! test-count (+ test-count 1))
+(if (string=? "abc123xyz" "abc123xyZ")
+    (do
+      (set! fail-count (+ fail-count 1))
+      (print "FAIL: alphanumeric different"))
+    (do
+      (set! pass-count (+ pass-count 1))
+      (print "PASS: alphanumeric different")))
+
+;; Test 29: Strings with punctuation
+(set! test-count (+ test-count 1))
+(if (string=? "Hello, World!" "Hello, World!")
+    (do
+      (set! pass-count (+ pass-count 1))
+      (print "PASS: strings with punctuation"))
+    (do
+      (set! fail-count (+ fail-count 1))
+      (print "FAIL: strings with punctuation")))
+
+;; ============================================================
+;; Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

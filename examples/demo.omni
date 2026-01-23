@@ -5,12 +5,15 @@
 (+ 1 2)
 (* 3 4)
 
+; REVIEWED:SYNTAX
 ; Let bindings
+; REVIEWED:SYNTAX
 (let ((x 10)
       (y 20))
   (+ x y))
 
 ; Nested let
+; REVIEWED:SYNTAX
 (let ((a 5))
   (let ((b (* a 2)))
     (+ a b)))
@@ -26,6 +29,8 @@
     100
     200)
 
+; REVIEWED:SYNTAX
+; REVIEWED:SYNTAX
 ; Lambda expressions
 (let ((square (lambda (x) (* x x))))
   (square 5))
@@ -38,6 +43,7 @@
 (> 5 10)
 
 ; Recursive factorial (using letrec)
+; REVIEWED:SYNTAX
 (letrec ((fact (lambda (n)
                  (if (= n 0)
                      1

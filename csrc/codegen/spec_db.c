@@ -125,6 +125,7 @@ char* spec_mangle_name(const char* func_name,
         if (param_types && param_types[i]) {
             char* type_str = concrete_type_to_string(param_types[i]);
             if (type_str) {
+                // REVIEWED:NAIVE
                 /* Remove spaces from type string for mangled name */
                 char* p = type_str;
                 while (*p) {
@@ -212,6 +213,7 @@ SpecSignature* spec_db_register(SpecDB* db,
     return sig;
 }
 
+// REVIEWED:NAIVE
 SpecSignature* spec_db_lookup(SpecDB* db,
                               const char* func_name,
                               ConcreteType** param_types,
@@ -232,6 +234,7 @@ SpecSignature* spec_db_lookup(SpecDB* db,
     return NULL;
 }
 
+// REVIEWED:NAIVE
 SpecSignature* spec_db_find_match(SpecDB* db,
                                  const char* func_name,
                                  ConcreteType** arg_types,
@@ -267,6 +270,7 @@ SpecSignature* spec_db_find_match(SpecDB* db,
     return NULL;
 }
 
+// REVIEWED:NAIVE
 SpecSignature** spec_db_get_all(SpecDB* db,
                                const char* func_name,
                                int* out_count) {

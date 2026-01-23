@@ -456,7 +456,99 @@ Define high-performance PEG grammars directly in the Flow domain.
 
 ---
 
-## 8. Memory Management (CTRR)
+## 8. Regular Expressions (Pika Regex)
+
+OmniLisp includes a **Pika-style regex engine** - a self-contained PEG-based matcher that compiles regex patterns to an AST and matches directly.
+
+### 8.1 Regex Functions
+
+| Function | Args | Returns | Description |
+|----------|------|---------|-------------|
+| `re-match` | `pattern input` | `string \| nil` | First match anywhere in string |
+| `re-find-all` | `pattern input` | `(list ...)` | All non-overlapping matches |
+| `re-split` | `pattern input` | `(list ...)` | Split string by pattern |
+| `re-replace` | `pattern repl input global?` | `string` | Replace matches (global if true) |
+| `re-fullmatch` | `pattern input` | `bool` | True if entire string matches |
+
+### 8.2 Pattern Syntax
+
+```lisp
+;; Literals
+(re-match "hello" "say hello world")  ; => "hello"
+
+;; Character classes
+(re-match "[aeiou]" "hello")          ; => "e"
+(re-match "[a-z]+" "Hello123")        ; => "ello"
+(re-match "[^0-9]+" "abc123")         ; => "abc"
+
+;; Quantifiers
+(re-match "a*" "aaab")                ; => "aaa"
+(re-match "a+" "aaab")                ; => "aaa"
+(re-match "a?" "abc")                 ; => "a"
+(re-match "a{2,4}" "aaaaa")           ; => "aaaa"
+
+;; Possessive quantifiers (no backtracking)
+(re-match "a*+" "aaab")               ; => "aaa" (greedy, no backtrack)
+
+;; Alternation
+(re-match "cat|dog" "I have a dog")   ; => "dog"
+
+;; Grouping
+(re-match "(ab)+" "ababab")           ; => "ababab"
+(re-match "(?:ab)+" "ababab")         ; => "ababab" (non-capturing)
+
+;; Lookahead
+(re-match "foo(?=bar)" "foobar")      ; => "foo" (positive lookahead)
+(re-match "foo(?!baz)" "foobar")      ; => "foo" (negative lookahead)
+
+;; Anchors
+(re-fullmatch "^hello$" "hello")      ; => true
+(re-match "\\bword\\b" "a word here") ; => "word" (word boundary)
+
+;; Escape sequences
+(re-find-all "\\d+" "a1b23c456")      ; => ("1" "23" "456")
+(re-match "\\w+" "hello_world!")      ; => "hello_world"
+(re-match "\\s+" "a   b")             ; => "   "
+```
+
+### 8.3 Escape Reference
+
+| Escape | Meaning |
+|--------|---------|
+| `\d` | Digit `[0-9]` |
+| `\D` | Non-digit `[^0-9]` |
+| `\w` | Word char `[a-zA-Z0-9_]` |
+| `\W` | Non-word char |
+| `\s` | Whitespace `[ \t\n\r]` |
+| `\S` | Non-whitespace |
+| `\n` | Newline |
+| `\t` | Tab |
+| `\r` | Carriage return |
+| `\\` | Literal backslash |
+
+### 8.4 Examples
+
+```lisp
+;; Split by whitespace
+(re-split "\\s+" "hello   world  test")
+; => ("hello" "world" "test")
+
+;; Replace all digits
+(re-replace "\\d" "X" "a1b2c3" true)
+; => "aXbXcX"
+
+;; Validate email (simplified)
+(re-fullmatch "[a-z]+@[a-z]+\\.[a-z]+" "user@example.com")
+; => true
+
+;; Extract numbers
+(re-find-all "-?\\d+\\.?\\d*" "temp: -3.5, count: 42")
+; => ("-3.5" "42")
+```
+
+---
+
+## 9. Memory Management (CTRR)
 
 OmniLisp uses **CTRR (Compile-Time Region Reclamation)**: a deterministic,
 garbage-collection-free model where the compiler schedules region lifetimes and
@@ -475,7 +567,7 @@ Canonical references:
 
 ---
 
-## 9. Deprecated Namespaces
+## 10. Deprecated Namespaces
 
 The following are legacy and should not be used:
 *   `violet.*`: Use core primitives instead.

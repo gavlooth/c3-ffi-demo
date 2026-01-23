@@ -1,0 +1,222 @@
+;; test_string_join.omni - Comprehensive tests for string-join primitive
+;;
+;; Tests prim_string_join function (exposed as string-join in OmniLisp)
+;; which joins a list of strings with a delimiter.
+;;
+;; Run with: ./omni tests/test_string_join.omni
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+;; Helper to compare string equality
+(define test-string [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (equal? expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+;; ============================================================
+;; Basic Join Tests
+;; ============================================================
+
+(print "")
+(print "=== Basic Join Tests ===")
+
+;; Test 1: Join two strings with space delimiter
+(test-string "join two strings with space"
+  "hello world"
+  (string-join " " (list "hello" "world")))
+
+;; Test 2: Join three strings with comma delimiter
+(test-string "join three strings with comma"
+  "a,b,c"
+  (string-join "," (list "a" "b" "c")))
+
+;; Test 3: Join single string (no delimiter needed)
+(test-string "join single string"
+  "hello"
+  (string-join " " (list "hello")))
+
+;; ============================================================
+;; Empty List Tests
+;; ============================================================
+
+(print "")
+(print "=== Empty List Tests ===")
+
+;; Test 4: Join empty list returns empty string
+(test-string "join empty list"
+  ""
+  (string-join "," (list)))
+
+;; Test 5: Join empty list with complex delimiter
+(test-string "join empty list with delimiter"
+  ""
+  (string-join "---" (list)))
+
+;; ============================================================
+;; Empty String Elements Tests
+;; ============================================================
+
+(print "")
+(print "=== Empty String Elements Tests ===")
+
+;; Test 6: Join list with empty strings
+(test-string "join with empty strings"
+  "a,,b"
+  (string-join "," (list "a" "" "b")))
+
+;; Test 7: Join list with only empty strings
+(test-string "join only empty strings"
+  ",,"
+  (string-join "," (list "" "" "")))
+
+;; Test 8: Join with empty delimiter
+(test-string "join with empty delimiter"
+  "abc"
+  (string-join "" (list "a" "b" "c")))
+
+;; ============================================================
+;; Multi-character Delimiters Tests
+;; ============================================================
+
+(print "")
+(print "=== Multi-character Delimiters Tests ===")
+
+;; Test 9: Join with multi-character delimiter
+(test-string "join with multi-char delimiter"
+  "a::b::c"
+  (string-join "::" (list "a" "b" "c")))
+
+;; Test 10: Join with word delimiter
+(test-string "join with word delimiter"
+  "hello AND world AND test"
+  (string-join " AND " (list "hello" "world" "test")))
+
+;; Test 11: Join with newline delimiter
+(test-string "join with newline delimiter"
+  "line1\nline2\nline3"
+  (string-join "\n" (list "line1" "line2" "line3")))
+
+;; ============================================================
+;; Whitespace Delimiters Tests
+;; ============================================================
+
+(print "")
+(print "=== Whitespace Delimiters Tests ===")
+
+;; Test 12: Join with tab delimiter
+(test-string "join with tab delimiter"
+  "col1\tcol2\tcol3"
+  (string-join "\t" (list "col1" "col2" "col3")))
+
+;; Test 13: Join with multiple space delimiter
+(test-string "join with multi-space delimiter"
+  "a  b  c"
+  (string-join "  " (list "a" "b" "c")))
+
+;; ============================================================
+;; Numeric and Special Character Content
+;; ============================================================
+
+(print "")
+(print "=== Numeric and Special Character Content ===")
+
+;; Test 14: Join strings containing numbers
+(test-string "join numeric strings"
+  "1,2,3"
+  (string-join "," (list "1" "2" "3")))
+
+;; Test 15: Join strings with special characters
+(test-string "join special chars"
+  "a@b#c"
+  (string-join "@" (list "a" "b#c")))
+
+;; Test 16: Join strings with punctuation
+(test-string "join punctuation strings"
+  "Hello, World! How are you?"
+  (string-join " " (list "Hello," "World!" "How" "are" "you?")))
+
+;; ============================================================
+;; Long List Tests
+;; ============================================================
+
+(print "")
+(print "=== Long List Tests ===")
+
+;; Test 17: Join many elements
+(test-string "join many elements"
+  "1,2,3,4,5,6,7,8,9,10"
+  (string-join "," (list "1" "2" "3" "4" "5" "6" "7" "8" "9" "10")))
+
+;; Test 18: Join with repeated delimiter pattern
+(test-string "join repeated delimiter pattern"
+  "a--b--c--d"
+  (string-join "--" (list "a" "b" "c" "d")))
+
+;; ============================================================
+;; Path Construction Tests
+;; ============================================================
+
+(print "")
+(print "=== Path Construction Tests ===")
+
+;; Test 19: Join path components
+(test-string "join path components"
+  "/home/user/docs"
+  (string-join "/" (list "" "home" "user" "docs")))
+
+;; Test 20: Join with slash prefix
+(test-string "join with slash"
+  "a/b/c"
+  (string-join "/" (list "a" "b" "c")))
+
+;; ============================================================
+;; Complex String Content Tests
+;; ============================================================
+
+(print "")
+(print "=== Complex String Content Tests ===")
+
+;; Test 21: Join strings with mixed case
+(test-string "join mixed case"
+  "Hello|World|Test"
+  (string-join "|" (list "Hello" "World" "Test")))
+
+;; Test 22: Join strings containing the delimiter
+(test-string "join with delimiter in content"
+  "a,b,c"
+  (string-join "," (list "a" "b" "c")))
+
+;; Test 23: Join very long strings
+(test-string "join long strings"
+  "aaaaa bbbbb ccccc"
+  (string-join " " (list "aaaaa" "bbbbb" "ccccc")))
+
+;; ============================================================
+;; Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

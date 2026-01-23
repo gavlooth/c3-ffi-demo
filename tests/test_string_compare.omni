@@ -1,0 +1,274 @@
+;; test_string_compare.omni - Comprehensive tests for string-compare primitive
+;;
+;; Tests prim_string_compare function (exposed as string-compare in OmniLisp)
+;; which returns negative, zero, or positive integer based on lexical comparison:
+;;   - Negative: str1 < str2
+;;   - Zero: str1 == str2
+;;   - Positive: str1 > str2
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+(define test-compare [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (>= 0 expected)
+      (if (= expected actual)
+          (do
+            (set! pass-count (+ pass-count 1))
+            (print "PASS:" name))
+          (do
+            (set! fail-count (+ fail-count 1))
+            (print "FAIL:" name)
+            (print "  Expected (<= 0):" expected)
+            (print "  Got:" actual)))
+      (if (<= 0 expected)
+          (do
+            (set! fail-count (+ fail-count 1))
+            (print "FAIL:" name)
+            (print "  Expected (>= 0):" expected)
+            (print "  Got:" actual))
+          (do
+            (set! fail-count (+ fail-count 1))
+            (print "FAIL:" name)
+            (print "  Expected:" expected)
+            (print "  Got:" actual)))))
+
+; Helper to check if comparison result has correct sign
+; Returns true if actual and expected have same sign (both negative, zero, or positive)
+(define check-sign [expected-sign] [actual]
+  (cond
+    [(= expected-sign 0) (= actual 0)]
+    [(< expected-sign 0) (< actual 0)]
+    [(> expected-sign 0) (> actual 0)]
+    [false]))
+
+(define test-sign [name] [expected-sign] [actual]
+  (set! test-count (+ test-count 1))
+  (if (check-sign expected-sign actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected sign:" expected-sign)
+        (print "  Got:" actual))))
+
+;; ============================================================
+;; Equality Tests
+;; ============================================================
+
+(print "")
+(print "=== Equality Tests (should return 0) ===")
+
+;; Test 1: Empty strings are equal
+(test-sign "empty strings"
+  0
+  (string-compare "" ""))
+
+;; Test 2: Identical non-empty strings
+(test-sign "identical strings"
+  0
+  (string-compare "hello" "hello"))
+
+;; Test 3: Identical strings with special characters
+(test-sign "identical special chars"
+  0
+  (string-compare "hello world!" "hello world!"))
+
+;; ============================================================
+;; Less Than Tests (should return negative)
+;; ============================================================
+
+(print "")
+(print "=== Less Than Tests (should return negative) ===")
+
+;; Test 4: Empty string < non-empty
+(test-sign "empty < non-empty"
+  -1
+  (string-compare "" "a"))
+
+;; Test 5: Alphabetical order: 'a' < 'b'
+(test-sign "a < b"
+  -1
+  (string-compare "a" "b"))
+
+;; Test 6: Shorter string < longer string (prefix)
+(test-sign "short < long (prefix)"
+  -1
+  (string-compare "hello" "hello world"))
+
+;; Test 7: Different first character
+(test-sign "z < a"
+  -1
+  (string-compare "Z" "a"))
+
+;; Test 8: Lexical order
+(test-sign "apple < banana"
+  -1
+  (string-compare "apple" "banana"))
+
+;; ============================================================
+;; Greater Than Tests (should return positive)
+;; ============================================================
+
+(print "")
+(print "=== Greater Than Tests (should return positive) ===")
+
+;; Test 9: Non-empty string > empty
+(test-sign "non-empty > empty"
+  1
+  (string-compare "a" ""))
+
+;; Test 10: Alphabetical order: 'b' > 'a'
+(test-sign "b > a"
+  1
+  (string-compare "b" "a"))
+
+;; Test 11: Longer string > shorter string (extension)
+(test-sign "long > short (extension)"
+  1
+  (string-compare "hello world" "hello"))
+
+;; Test 12: Different first character
+(test-sign "a > Z"
+  1
+  (string-compare "a" "Z"))
+
+;; Test 13: Lexical order
+(test-sign "banana > apple"
+  1
+  (string-compare "banana" "apple"))
+
+;; ============================================================
+;; Case Sensitivity Tests
+;; ============================================================
+
+(print "")
+(print "=== Case Sensitivity Tests ===")
+
+;; Test 14: Uppercase > lowercase (ASCII order)
+(test-sign "uppercase > lowercase"
+  1
+  (string-compare "A" "a"))
+
+;; Test 15: Lowercase < uppercase
+(test-sign "lowercase < uppercase"
+  -1
+  (string-compare "a" "A"))
+
+;; Test 16: Mixed case comparison
+(test-sign "Hello > hello"
+  1
+  (string-compare "Hello" "hello"))
+
+;; ============================================================
+;; Numeric String Tests
+;; ============================================================
+
+(print "")
+(print "=== Numeric String Tests ===")
+
+;; Test 17: Numeric strings compared lexically
+(test-sign "\"10\" < \"2\" (lexicographic)"
+  -1
+  (string-compare "10" "2"))
+
+;; Test 18: Equal numeric strings
+(test-sign "\"42\" = \"42\""
+  0
+  (string-compare "42" "42"))
+
+;; Test 19: Different numeric strings
+(test-sign "\"100\" > \"99\" (lexicographic)"
+  1
+  (string-compare "100" "99"))
+
+;; ============================================================
+;; Special Character Tests
+;; ============================================================
+
+(print "")
+(print "=== Special Character Tests ===")
+
+;; Test 20: Punctuation comparison
+(test-sign "punctuation order"
+  -1
+  (string-compare "!\"?"))
+
+;; Test 21: String with spaces
+(test-sign "strings with spaces"
+  -1
+  (string-compare "hello " "hello!"))
+
+;; Test 22: Tab character comparison
+(test-sign "tab vs space"
+  1
+  (string-compare "\t" " "))
+
+;; ============================================================
+;; Whitespace Tests
+;; ============================================================
+
+(print "")
+(print "=== Whitespace Tests ===")
+
+;; Test 23: Different whitespace
+(test-sign "newline vs space"
+  1
+  (string-compare "\n" " "))
+
+;; Test 24: Multiple spaces
+(test-sign "single space < multiple spaces"
+  -1
+  (string-compare " " "  "))
+
+;; ============================================================
+;; Edge Case Tests
+;; ============================================================
+
+(print "")
+(print "=== Edge Case Tests ===")
+
+;; Test 25: Single character strings
+(test-sign "single char: x < y"
+  -1
+  (string-compare "x" "y"))
+
+;; Test 26: Long identical strings
+(test-sign "long identical strings"
+  0
+  (string-compare "abcdefghijklmnopqrstuvwxyz"
+                  "abcdefghijklmnopqrstuvwxyz"))
+
+;; Test 27: Strings differing only at end
+(test-sign "differ at end"
+  -1
+  (string-compare "hello world" "hello world!"))
+
+;; Test 28: One character difference at start
+(test-sign "differ at start"
+  1
+  (string-compare "xello" "hello"))
+
+;; ============================================================
+;; Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

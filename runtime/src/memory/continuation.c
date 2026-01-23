@@ -874,6 +874,7 @@ FiberChannel* fiber_channel_create(int capacity) {
     memset(ch, 0, sizeof(FiberChannel));
     ch->capacity = capacity;
     ch->refcount = 1;
+    /* Select waiter lists are NULL-initialized by memset */
 
     if (capacity > 0) {
         ch->buffer = calloc(capacity, sizeof(Obj*));
@@ -886,10 +887,54 @@ FiberChannel* fiber_channel_create(int capacity) {
     return ch;
 }
 
+/* ========== Select Waiter Helpers ========== */
+
+/*
+ * Remove a SelectWaiter from its channel's waiter list.
+ * Called during select cleanup to remove waiters from channels
+ * that didn't fire.
+ */
+static void select_waiter_remove(SelectWaiter* sw, FiberChannel* ch, bool is_send) {
+    if (!sw || !ch) return;
+
+    SelectWaiter** head = is_send ? &ch->select_send_waiters : &ch->select_recv_waiters;
+
+    if (sw->prev) {
+        sw->prev->next = sw->next;
+    } else {
+        *head = sw->next;
+    }
+    if (sw->next) {
+        sw->next->prev = sw->prev;
+    }
+    sw->next = sw->prev = NULL;
+}
+
+/*
+ * Wake a select waiter: remove from channel, set fiber's select_ready,
+ * and unpark the fiber.
+ */
+static void select_waiter_wake(SelectWaiter* sw, FiberChannel* ch, bool is_send, Obj* value) {
+    if (!sw || !sw->fiber) return;
+
+    Fiber* f = sw->fiber;
+
+    /* Remove from channel's waiter list */
+    select_waiter_remove(sw, ch, is_send);
+
+    /* Mark which case completed */
+    f->select_ready = sw->case_index;
+
+    /* Unpark the fiber */
+    fiber_unpark(f, value);
+}
+
+/* ========== Fiber Channel Operations ========== */
+
 void fiber_channel_send(FiberChannel* ch, Obj* value) {
     if (!ch || ch->closed) return;
 
-    /* Check for waiting receiver */
+    /* Check for waiting receiver (regular first, then select) */
     if (ch->recv_waiters) {
         Fiber* receiver = ch->recv_waiters;
         ch->recv_waiters = receiver->next;
@@ -900,6 +945,13 @@ void fiber_channel_send(FiberChannel* ch, Obj* value) {
 
         /* Hand off value directly */
         fiber_unpark(receiver, value);
+        return;
+    }
+
+    /* Check for select receiver */
+    if (ch->select_recv_waiters) {
+        SelectWaiter* sw = ch->select_recv_waiters;
+        select_waiter_wake(sw, ch, false, value);
         return;
     }
 
@@ -936,7 +988,7 @@ Obj* fiber_channel_recv(FiberChannel* ch) {
         ch->head = (ch->head + 1) % ch->capacity;
         ch->count--;
 
-        /* Wake a waiting sender if any */
+        /* Wake a waiting sender if any (regular first, then select) */
         if (ch->send_waiters) {
             Fiber* sender = ch->send_waiters;
             ch->send_waiters = sender->next;
@@ -954,12 +1006,22 @@ Obj* fiber_channel_recv(FiberChannel* ch) {
             ch->count++;
 
             fiber_unpark(sender, NULL);
+        } else if (ch->select_send_waiters) {
+            SelectWaiter* sw = ch->select_send_waiters;
+            Obj* send_val = sw->value;
+
+            ch->buffer[ch->tail] = send_val;
+            if (send_val) inc_ref(send_val);
+            ch->tail = (ch->tail + 1) % ch->capacity;
+            ch->count++;
+
+            select_waiter_wake(sw, ch, true, NULL);
         }
 
         return value;
     }
 
-    /* Check for waiting sender (unbuffered or after buffer empty) */
+    /* Check for waiting sender - regular first */
     if (ch->send_waiters) {
         Fiber* sender = ch->send_waiters;
         ch->send_waiters = sender->next;
@@ -972,6 +1034,14 @@ Obj* fiber_channel_recv(FiberChannel* ch) {
         sender->park_value = NULL;
 
         fiber_unpark(sender, NULL);
+        return value;
+    }
+
+    /* Check for select sender */
+    if (ch->select_send_waiters) {
+        SelectWaiter* sw = ch->select_send_waiters;
+        Obj* value = sw->value;
+        select_waiter_wake(sw, ch, true, NULL);
         return value;
     }
 
@@ -997,13 +1067,20 @@ Obj* fiber_channel_recv(FiberChannel* ch) {
 bool fiber_channel_try_send(FiberChannel* ch, Obj* value) {
     if (!ch || ch->closed) return false;
 
-    /* Receiver waiting? */
+    /* Regular receiver waiting? (priority over select receivers) */
     if (ch->recv_waiters) {
         Fiber* receiver = ch->recv_waiters;
         ch->recv_waiters = receiver->next;
         if (ch->recv_waiters) ch->recv_waiters->prev = NULL;
         receiver->next = NULL;
         fiber_unpark(receiver, value);
+        return true;
+    }
+
+    /* Select receiver waiting? */
+    if (ch->select_recv_waiters) {
+        SelectWaiter* sw = ch->select_recv_waiters;
+        select_waiter_wake(sw, ch, false, value);
         return true;
     }
 
@@ -1031,7 +1108,7 @@ Obj* fiber_channel_try_recv(FiberChannel* ch, bool* ok) {
         ch->count--;
         *ok = true;
 
-        /* Wake sender if waiting */
+        /* Wake sender if waiting (regular first, then select) */
         if (ch->send_waiters) {
             Fiber* sender = ch->send_waiters;
             ch->send_waiters = sender->next;
@@ -1046,12 +1123,22 @@ Obj* fiber_channel_try_recv(FiberChannel* ch, bool* ok) {
             ch->count++;
 
             fiber_unpark(sender, NULL);
+        } else if (ch->select_send_waiters) {
+            SelectWaiter* sw = ch->select_send_waiters;
+            Obj* send_val = sw->value;  /* Value stored in SelectWaiter */
+
+            ch->buffer[ch->tail] = send_val;
+            if (send_val) inc_ref(send_val);
+            ch->tail = (ch->tail + 1) % ch->capacity;
+            ch->count++;
+
+            select_waiter_wake(sw, ch, true, NULL);
         }
 
         return value;
     }
 
-    /* Sender waiting? */
+    /* Regular sender waiting? */
     if (ch->send_waiters) {
         Fiber* sender = ch->send_waiters;
         ch->send_waiters = sender->next;
@@ -1061,6 +1148,15 @@ Obj* fiber_channel_try_recv(FiberChannel* ch, bool* ok) {
         Obj* value = sender->park_value;
         sender->park_value = NULL;
         fiber_unpark(sender, NULL);
+        *ok = true;
+        return value;
+    }
+
+    /* Select sender waiting? */
+    if (ch->select_send_waiters) {
+        SelectWaiter* sw = ch->select_send_waiters;
+        Obj* value = sw->value;
+        select_waiter_wake(sw, ch, true, NULL);
         *ok = true;
         return value;
     }
@@ -1093,6 +1189,28 @@ void fiber_channel_close(FiberChannel* ch) {
         t = next;
     }
     ch->send_waiters = NULL;
+
+    /* Wake all select receivers with NULL (channel closed) */
+    SelectWaiter* sw = ch->select_recv_waiters;
+    while (sw) {
+        SelectWaiter* next = sw->next;
+        select_waiter_wake(sw, ch, false, NULL);
+        sw = next;
+    }
+    ch->select_recv_waiters = NULL;
+
+    /* Wake all select senders */
+    sw = ch->select_send_waiters;
+    while (sw) {
+        SelectWaiter* next = sw->next;
+        if (sw->value) {
+            dec_ref(sw->value);
+            sw->value = NULL;
+        }
+        select_waiter_wake(sw, ch, true, NULL);
+        sw = next;
+    }
+    ch->select_send_waiters = NULL;
 }
 
 bool fiber_channel_is_closed(FiberChannel* ch) {
@@ -1436,18 +1554,77 @@ void promise_release(Promise* p) {
     if (p->on_fulfill) dec_ref(p->on_fulfill);
     if (p->on_reject) dec_ref(p->on_reject);
 
-    /* Cancel waiting tasks */
+    /* Cancel waiting tasks by unparking them with error */
     Fiber* t = p->waiters;
     while (t) {
         Fiber* next = t->next;
-        t->state = FIBER_DONE;  /* TODO: Better cancellation */
+        /* Unpark fiber with error indicating promise was destroyed/cancelled */
+        /* fiber_unpark_error will enqueue fiber and set state to FIBER_READY */
+        fiber_unpark_error(t, NULL, true);
         t = next;
     }
+    /* Clear waiters list to prevent accessing freed fibers */
+    p->waiters = NULL;
 
     free(p);
 }
 
 /* ========== Select (Multi-Wait) ========== */
+
+/*
+ * Helper: Add a SelectWaiter to a channel's waiter list.
+ */
+static void select_waiter_add(SelectWaiter* sw, FiberChannel* ch, bool is_send) {
+    SelectWaiter** head = is_send ? &ch->select_send_waiters : &ch->select_recv_waiters;
+
+    sw->next = *head;
+    sw->prev = NULL;
+    if (*head) {
+        (*head)->prev = sw;
+    }
+    *head = sw;
+}
+
+/*
+ * Helper: Clean up all select waiters from a fiber after one case completes.
+ * Removes waiters from all channels and frees memory.
+ */
+static void select_cleanup(Fiber* f, SelectCase* cases) {
+    if (!f || !f->select_waiters) return;
+
+    for (int i = 0; i < f->select_count; i++) {
+        SelectWaiter* sw = f->select_waiters[i];
+        if (!sw) continue;
+
+        /* Skip the waiter that fired (already removed from channel) */
+        if (i == f->select_ready) {
+            free(sw);
+            continue;
+        }
+
+        /* Remove from channel's waiter list */
+        SelectCase* c = &cases[i];
+        if (c->op == SELECT_DEFAULT) {
+            free(sw);
+            continue;
+        }
+
+        bool is_send = (c->op == SELECT_SEND);
+        select_waiter_remove(sw, c->channel, is_send);
+
+        /* Free value reference for send cases */
+        if (is_send && sw->value) {
+            dec_ref(sw->value);
+        }
+
+        free(sw);
+    }
+
+    free(f->select_waiters);
+    f->select_waiters = NULL;
+    f->select_count = 0;
+    f->in_select = false;
+}
 
 int fiber_select(SelectCase* cases, int count) {
     if (!cases || count <= 0) return -1;
@@ -1485,10 +1662,84 @@ int fiber_select(SelectCase* cases, int count) {
     Fiber* current = fiber_current();
     if (!current) return -1;
 
-    /* TODO: Register on all channels and wait */
-    /* This is complex - need to track which channel woke us */
+    /* Count channel cases (excluding DEFAULT) */
+    int channel_count = 0;
+    for (int i = 0; i < count; i++) {
+        if (cases[i].op != SELECT_DEFAULT) {
+            channel_count++;
+        }
+    }
 
-    return -1;
+    if (channel_count == 0) {
+        /* No channel cases and no default - would block forever */
+        return -1;
+    }
+
+    /* Allocate waiter array */
+    SelectWaiter** waiters = calloc(count, sizeof(SelectWaiter*));
+    if (!waiters) return -1;
+
+    /* Create and register waiters for each channel case */
+    for (int i = 0; i < count; i++) {
+        SelectCase* c = &cases[i];
+
+        if (c->op == SELECT_DEFAULT) {
+            waiters[i] = NULL;
+            continue;
+        }
+
+        SelectWaiter* sw = malloc(sizeof(SelectWaiter));
+        if (!sw) {
+            /* Cleanup on allocation failure */
+            for (int j = 0; j < i; j++) {
+                if (waiters[j]) {
+                    SelectCase* cj = &cases[j];
+                    bool is_send = (cj->op == SELECT_SEND);
+                    select_waiter_remove(waiters[j], cj->channel, is_send);
+                    if (is_send && waiters[j]->value) {
+                        dec_ref(waiters[j]->value);
+                    }
+                    free(waiters[j]);
+                }
+            }
+            free(waiters);
+            return -1;
+        }
+
+        sw->fiber = current;
+        sw->case_index = i;
+        sw->value = (c->op == SELECT_SEND) ? c->value : NULL;
+        if (sw->value) inc_ref(sw->value);
+        sw->next = sw->prev = NULL;
+
+        waiters[i] = sw;
+
+        /* Add to channel's waiter list */
+        bool is_send = (c->op == SELECT_SEND);
+        select_waiter_add(sw, c->channel, is_send);
+    }
+
+    /* Store select state in fiber */
+    current->select_waiters = waiters;
+    current->select_count = count;
+    current->select_ready = -1;
+    current->in_select = true;
+
+    /* Park the fiber - will be woken when any channel is ready */
+    fiber_park(NULL, NULL);
+
+    /* When we resume, select_ready has been set by the waking channel */
+    int ready = current->select_ready;
+
+    /* Store the received value if it was a recv case */
+    if (ready >= 0 && cases[ready].op == SELECT_RECV && cases[ready].result) {
+        *cases[ready].result = current->value;
+    }
+
+    /* Clean up all waiters from other channels */
+    select_cleanup(current, cases);
+
+    return ready;
 }
 
 /* ========== Timer Infrastructure (Phase 5.1) ========== */

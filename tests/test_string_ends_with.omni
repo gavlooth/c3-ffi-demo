@@ -1,0 +1,314 @@
+;; test_string_ends_with.omni - Comprehensive tests for string-ends-with primitive
+;;
+;; Tests prim_string_ends_with function (exposed as string-ends-with in OmniLisp)
+;; which returns true if a string ends with given suffix.
+;;
+;; Run with: ./omni tests/test_string_ends_with.omni
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+(define test-bool name expected actual
+  (do
+    (set! test-count (+ test-count 1))
+    (if (= expected actual)
+        (do
+          (set! pass-count (+ pass-count 1))
+          (print "PASS:" name))
+        (do
+          (set! fail-count (+ fail-count 1))
+          (print "FAIL:" name)
+          (print "  Expected:" expected)
+          (print "  Got:" actual)))))
+
+;; ============================================================
+;; Basic Ends With Tests
+;; ============================================================
+
+(print "")
+(print "=== Basic Ends With Tests ===")
+
+;; Test 1: String ends with suffix
+(test-bool "ends with suffix"
+  1
+  (string-ends-with "hello world" "world"))
+
+;; Test 2: String ends with single character
+(test-bool "ends with single char"
+  1
+  (string-ends-with "hello" "o"))
+
+;; Test 3: String ends with multi-character suffix
+(test-bool "ends with multi-char suffix"
+  1
+  (string-ends-with "programming" "ming"))
+
+;; Test 4: Entire string is the suffix
+(test-bool "string equals suffix"
+  1
+  (string-ends-with "hello" "hello"))
+
+;; Test 5: String does not end with suffix
+(test-bool "does not end with"
+  0
+  (string-ends-with "hello world" "hello"))
+
+;; Test 6: Suffix appears but not at end
+(test-bool "suffix in middle"
+  0
+  (string-ends-with "hello world" "o wo"))
+
+;; ============================================================
+;; Empty String Tests
+;; ============================================================
+
+(print "")
+(print "=== Empty String Tests ===")
+
+;; Test 7: Empty string ends with empty string
+(test-bool "both empty"
+  1
+  (string-ends-with "" ""))
+
+;; Test 8: Non-empty string ends with empty suffix
+(test-bool "empty suffix"
+  1
+  (string-ends-with "hello" ""))
+
+;; Test 9: Empty string does not end with non-empty suffix
+(test-bool "empty string, non-empty suffix"
+  0
+  (string-ends-with "" "hello"))
+
+;; ============================================================
+;; Single Character Tests
+;; ============================================================
+
+(print "")
+(print "=== Single Character Tests ===")
+
+;; Test 10: Single char string ends with itself
+(test-bool "single char ends with itself"
+  1
+  (string-ends-with "a" "a"))
+
+;; Test 11: Single char string does not end with different char
+(test-bool "single char, different suffix"
+  0
+  (string-ends-with "a" "b"))
+
+;; Test 12: Single char string ends with empty suffix
+(test-bool "single char, empty suffix"
+  1
+  (string-ends-with "x" ""))
+
+;; ============================================================
+;; Case Sensitivity Tests
+;; ============================================================
+
+(print "")
+(print "=== Case Sensitivity Tests ===")
+
+;; Test 13: Case sensitive match
+(test-bool "case sensitive - lowercase"
+  1
+  (string-ends-with "Hello" "Hello"))
+
+;; Test 14: Case sensitive - no match
+(test-bool "case sensitive - wrong case"
+  0
+  (string-ends-with "Hello" "hello"))
+
+;; Test 15: Mixed case exact match
+(test-bool "mixed case exact"
+  1
+  (string-ends-with "HeLLo" "HeLLo"))
+
+;; Test 16: Mixed case no match
+(test-bool "mixed case no match"
+  0
+  (string-ends-with "HeLLo" "HELLO"))
+
+;; ============================================================
+;; Special Character Tests
+;; ============================================================
+
+(print "")
+(print "=== Special Character Tests ===")
+
+;; Test 17: Ends with space
+(test-bool "ends with space"
+  1
+  (string-ends-with "hello " " "))
+
+;; Test 18: Ends with newline
+(test-bool "ends with newline"
+  1
+  (string-ends-with "line1\n" "\n"))
+
+;; Test 19: Ends with tab
+(test-bool "ends with tab"
+  1
+  (string-ends-with "col1\t" "\t"))
+
+;; Test 20: Ends with punctuation
+(test-bool "ends with punctuation"
+  1
+  (string-ends-with "hello, world!" "!"))
+
+;; Test 21: Ends with special chars
+(test-bool "ends with special chars"
+  1
+  (string-ends-with "hello#$%" "#$%"))
+
+;; ============================================================
+;; Suffix Longer Than String
+;; ============================================================
+
+(print "")
+(print "=== Suffix Longer Than String ===")
+
+;; Test 22: Suffix longer than string
+(test-bool "suffix longer than string"
+  0
+  (string-ends-with "hi" "hello"))
+
+;; Test 23: Much longer suffix
+(test-bool "much longer suffix"
+  0
+  (string-ends-with "a" "aaaaaaaaaaaaaaaaaa"))
+
+;; Test 24: One character difference in length
+(test-bool "suffix one char longer"
+  0
+  (string-ends-with "hello" "hello!"))
+
+;; ============================================================
+;; Numeric String Tests
+;; ============================================================
+
+(print "")
+(print "=== Numeric String Tests ===")
+
+;; Test 25: Numeric string ends with number
+(test-bool "numeric suffix"
+  1
+  (string-ends-with "test123" "123"))
+
+;; Test 26: Numeric string ends with digit
+(test-bool "ends with digit"
+  1
+  (string-ends-with "value: 42" "2"))
+
+;; Test 27: Mixed alphanumeric suffix
+(test-bool "alphanumeric suffix"
+  1
+  (string-ends-with "test123" "123"))
+
+;; ============================================================
+;; Repeated Character Tests
+;; ============================================================
+
+(print "")
+(print "=== Repeated Character Tests ===")
+
+;; Test 28: Repeated character suffix
+(test-bool "repeated char suffix"
+  1
+  (string-ends-with "aaaaa" "aaa"))
+
+;; Test 29: Pattern repetition
+(test-bool "pattern repetition"
+  1
+  (string-ends-with "abcabcabc" "abcabc"))
+
+;; Test 30: Exact repeated string
+(test-bool "exact repeated string"
+  1
+  (string-ends-with "abcabc" "abcabc"))
+
+;; ============================================================
+;; Path-like Strings
+;; ============================================================
+
+(print "")
+(print "=== Path-like Strings ===")
+
+;; Test 31: File extension suffix
+(test-bool "file extension suffix"
+  1
+  (string-ends-with "/home/user/docs.txt" ".txt"))
+
+;; Test 32: Directory path suffix
+(test-bool "directory path suffix"
+  1
+  (string-ends-with "/home/user/docs" "docs"))
+
+;; Test 33: URL path suffix
+(test-bool "URL path suffix"
+  1
+  (string-ends-with "https://example.com/path" "path"))
+
+;; Test 34: Windows path suffix
+(test-bool "windows path suffix"
+  1
+  (string-ends-with "C:\\Users\\test" "test"))
+
+;; ============================================================
+;; Edge Cases
+;; ============================================================
+
+(print "")
+(print "=== Edge Cases ===")
+
+;; Test 35: Very long string, short suffix
+(test-bool "very long string, short suffix"
+  1
+  (string-ends-with "a very long string with many words and characters" "characters"))
+
+;; Test 36: Suffix matches entire string
+(test-bool "suffix matches entire string"
+  1
+  (string-ends-with "exact match" "exact match"))
+
+;; Test 37: Mismatch near end of string
+(test-bool "mismatch near end"
+  0
+  (string-ends-with "hello world" "hello worX"))
+
+;; Test 38: Special characters in suffix
+(test-bool "special chars in suffix"
+  1
+  (string-ends-with "<!-- comment -->" "-->"))
+
+;; Test 39: Single character difference
+(test-bool "single char difference"
+  0
+  (string-ends-with "hello world" "hello worl"))
+
+;; Test 40: Suffix with special pattern
+(test-bool "suffix with special pattern"
+  1
+  (string-ends-with "file.tar.gz" ".tar.gz"))
+
+;; ============================================================
+;; Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

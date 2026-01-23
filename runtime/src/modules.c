@@ -8,13 +8,212 @@
  *   - import: Import symbols from a module
  *   - export: Export symbols from a module
  *   - use: Use module (short form of import)
+ *   - require: Load and import module (with auto-loading)
+ *   - module-path-add: Add directory to module search path
  */
 
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <errno.h>
+#include <dlfcn.h>
+#include <unistd.h>
 #include "../include/omni.h"
 #include "internal_types.h"
+
+/* ============== Module Search Paths ============== */
+
+/*
+ * Module search path entry.
+ * Modules are searched in order: first path added has highest priority.
+ */
+typedef struct ModulePath {
+    char* path;                  /* Directory path */
+    struct ModulePath* next;     /* Next search path */
+} ModulePath;
+
+/* Global module search path list */
+static ModulePath* g_module_paths = NULL;
+
+/* Default extensions to try when loading modules */
+static const char* g_module_extensions[] = {
+    ".omni",
+    ".lisp",
+    NULL
+};
+
+/*
+ * module_path_add - Add a directory to the module search path
+ *
+ * New paths are prepended (higher priority than existing paths).
+ */
+static void module_path_add(const char* path) {
+    if (!path) return;
+
+    ModulePath* mp = malloc(sizeof(ModulePath));
+    if (!mp) return;
+
+    mp->path = strdup(path);
+    mp->next = g_module_paths;
+    g_module_paths = mp;
+}
+
+/*
+ * module_name_to_filename - Convert module name to filename
+ *
+ * Converts module names like "my-module" to "my-module" (no change)
+ * or "my.submodule" to "my/submodule" (dots become path separators).
+ */
+static char* module_name_to_filename(const char* name) {
+    if (!name) return NULL;
+
+    size_t len = strlen(name);
+    char* filename = malloc(len + 1);
+    if (!filename) return NULL;
+
+    for (size_t i = 0; i < len; i++) {
+        if (name[i] == '.') {
+            filename[i] = '/';  /* Convert dots to path separators */
+        } else {
+            filename[i] = name[i];
+        }
+    }
+    filename[len] = '\0';
+
+    return filename;
+}
+
+/*
+ * module_find_precompiled - Search for pre-compiled .so module
+ *
+ * Checks OMNI_MODULE_PATH and search paths for a pre-compiled .so file.
+ * Returns the full path to the .so file, or NULL if not found.
+ * Caller must free the returned string.
+ */
+static char* module_find_precompiled(const char* module_name) {
+    if (!module_name) return NULL;
+
+    char* base_name = module_name_to_filename(module_name);
+    if (!base_name) return NULL;
+
+    char full_path[4096];
+    struct stat st;
+
+    /* First check OMNI_MODULE_PATH environment variable */
+    const char* module_path = getenv("OMNI_MODULE_PATH");
+    if (module_path) {
+        snprintf(full_path, sizeof(full_path), "%s/%s.so", module_path, base_name);
+        if (stat(full_path, &st) == 0 && S_ISREG(st.st_mode)) {
+            free(base_name);
+            return strdup(full_path);
+        }
+    }
+
+    /* Check each search path for .so */
+    for (ModulePath* mp = g_module_paths; mp; mp = mp->next) {
+        snprintf(full_path, sizeof(full_path), "%s/%s.so", mp->path, base_name);
+        if (stat(full_path, &st) == 0 && S_ISREG(st.st_mode)) {
+            free(base_name);
+            return strdup(full_path);
+        }
+    }
+
+    /* Also try current directory */
+    snprintf(full_path, sizeof(full_path), "%s.so", base_name);
+    if (stat(full_path, &st) == 0 && S_ISREG(st.st_mode)) {
+        free(base_name);
+        return strdup(full_path);
+    }
+
+    free(base_name);
+    return NULL;
+}
+
+/*
+ * module_find_file - Search for a module file in search paths
+ *
+ * Tries each search path with each extension until a file is found.
+ * Returns the full path to the file, or NULL if not found.
+ * Caller must free the returned string.
+ */
+static char* module_find_file(const char* module_name) {
+    if (!module_name) return NULL;
+
+    char* base_name = module_name_to_filename(module_name);
+    if (!base_name) return NULL;
+
+    /* Buffer for constructing full paths */
+    char full_path[4096];
+
+    /* Try each search path */
+    for (ModulePath* mp = g_module_paths; mp; mp = mp->next) {
+        /* Try each extension */
+        for (int i = 0; g_module_extensions[i]; i++) {
+            snprintf(full_path, sizeof(full_path), "%s/%s%s",
+                     mp->path, base_name, g_module_extensions[i]);
+
+            /* Check if file exists and is readable */
+            struct stat st;
+            if (stat(full_path, &st) == 0 && S_ISREG(st.st_mode)) {
+                free(base_name);
+                return strdup(full_path);
+            }
+        }
+    }
+
+    /* Also try current directory */
+    for (int i = 0; g_module_extensions[i]; i++) {
+        snprintf(full_path, sizeof(full_path), "%s%s",
+                 base_name, g_module_extensions[i]);
+
+        struct stat st;
+        if (stat(full_path, &st) == 0 && S_ISREG(st.st_mode)) {
+            free(base_name);
+            return strdup(full_path);
+        }
+    }
+
+    free(base_name);
+    return NULL;
+}
+
+/*
+ * module_load_file - Load module source from file
+ *
+ * Returns the file contents as a string, or NULL on error.
+ * Caller must free the returned string.
+ */
+static char* module_load_file(const char* path) {
+    if (!path) return NULL;
+
+    FILE* f = fopen(path, "r");
+    if (!f) return NULL;
+
+    /* Get file size */
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    if (size < 0) {
+        fclose(f);
+        return NULL;
+    }
+
+    /* Allocate buffer */
+    char* content = malloc(size + 1);
+    if (!content) {
+        fclose(f);
+        return NULL;
+    }
+
+    /* Read file */
+    size_t read = fread(content, 1, size, f);
+    content[read] = '\0';
+
+    fclose(f);
+    return content;
+}
 
 /* ============== Module Structure ============== */
 
@@ -65,9 +264,11 @@ static Module* g_current_module = NULL;
 
 /* ============== Module Registry Functions ============== */
 
+// REVIEWED:NAIVE
 /*
  * Find or create a module by name
  */
+// REVIEWED:NAIVE
 static Module* get_or_create_module(const char* name) {
     if (!name) return NULL;
 
@@ -387,6 +588,7 @@ Obj* prim_import_only(Obj* name_obj, Obj* symbols_list) {
     char** symbols = extract_symbol_list(symbols_list, &symbol_count);
 
     /* Validate that requested symbols are exported */
+// REVIEWED:NAIVE
     for (int i = 0; i < symbol_count; i++) {
         int found = 0;
         for (ModuleExport* exp = m->exports; exp; exp = exp->next) {
@@ -521,27 +723,227 @@ Obj* prim_use(Obj* name_obj) {
  * Args: module_name
  * Returns: The module object
  *
- * Note: This would typically load the module from a file
- * if it's not already loaded. For now, it just looks up
- * existing modules.
+ * Auto-loading process:
+ *   1. Check if module is already loaded
+ *   2. If not, search for module file in search paths
+ *   3. Load and parse the module source
+ *   4. Execute/compile the module (requires parser integration)
+ *   5. Return the module object
+ *
+ * Note: Full auto-loading requires parser/compiler integration.
+ * Currently implements file finding and loading infrastructure.
  */
 Obj* prim_require(Obj* name_obj) {
+    /* First check if module is already loaded */
     Obj* module = prim_module_get(name_obj);
-
-    if (!module) {
-        /* Module not found - would need to load from file */
-        const char* name = NULL;
-        if (IS_BOXED(name_obj) && name_obj->tag == TAG_SYM) {
-            name = (const char*)name_obj->ptr;
-        } else if (IS_BOXED(name_obj) && name_obj->tag == TAG_STRING) {
-            name = (const char*)name_obj->ptr;
-        }
-
-        fprintf(stderr, "require: Module '%s' not found and auto-loading not implemented\n",
-                name ? name : "?");
+    if (module) {
+        return module;
     }
 
-    return module;
+    /* Get module name as string */
+    const char* name = NULL;
+    if (IS_BOXED(name_obj) && name_obj->tag == TAG_SYM) {
+        name = (const char*)name_obj->ptr;
+    } else if (IS_BOXED(name_obj) && name_obj->tag == TAG_STRING) {
+        name = (const char*)name_obj->ptr;
+    }
+
+    if (!name) {
+        fprintf(stderr, "require: Invalid module name\n");
+        return NULL;
+    }
+
+    /* First, try to find a pre-compiled .so module */
+    char* so_path = module_find_precompiled(name);
+    if (so_path) {
+        /* Load the pre-compiled shared library directly */
+        void* handle = dlopen(so_path, RTLD_NOW | RTLD_GLOBAL);
+        if (!handle) {
+            fprintf(stderr, "require: Failed to load pre-compiled module '%s': %s\n",
+                    name, dlerror());
+            free(so_path);
+            return NULL;
+        }
+        free(so_path);
+
+        /* The module's __attribute__((constructor)) init function has already run,
+         * which registered the module. Now look it up. */
+        Module* m = find_module(name);
+        if (!m) {
+            fprintf(stderr, "require: Pre-compiled module '%s' loaded but not registered\n", name);
+            dlclose(handle);
+            return NULL;
+        }
+
+        return mk_sym(name);
+    }
+
+    /* No pre-compiled module found, try to find source file and compile */
+    char* file_path = module_find_file(name);
+    if (!file_path) {
+        fprintf(stderr, "require: Module '%s' not found in search paths\n", name);
+        fprintf(stderr, "  Searched for pre-compiled: .so\n");
+        fprintf(stderr, "  Searched for source: .omni, .lisp\n");
+        const char* module_path = getenv("OMNI_MODULE_PATH");
+        if (module_path) {
+            fprintf(stderr, "  OMNI_MODULE_PATH: %s\n", module_path);
+        }
+        fprintf(stderr, "  Search paths:\n");
+        for (ModulePath* mp = g_module_paths; mp; mp = mp->next) {
+            fprintf(stderr, "    - %s\n", mp->path);
+        }
+        fprintf(stderr, "    - . (current directory)\n");
+        return NULL;
+    }
+
+    /*
+     * Compile module to shared library and load via dlopen.
+     *
+     * Flow:
+     * 1. Write source to temp file
+     * 2. Call omnilisp --shared to compile to .so
+     * 3. dlopen the .so (constructor auto-registers module)
+     * 4. Return the module object
+     */
+
+    /* Generate temp file paths */
+    char source_file[256];
+    char so_file[256];
+    snprintf(source_file, sizeof(source_file), "/tmp/omni_module_%s_XXXXXX.omni", name);
+    snprintf(so_file, sizeof(so_file), "/tmp/omni_module_%s_XXXXXX.so", name);
+
+    /* Create temp source file */
+    int source_fd = mkstemps(source_file, 5);  /* 5 for ".omni" */
+    if (source_fd < 0) {
+        fprintf(stderr, "require: Failed to create temp source file\n");
+        free(file_path);
+        return NULL;
+    }
+
+    /* Load and write source */
+    char* source = module_load_file(file_path);
+    if (!source) {
+        fprintf(stderr, "require: Failed to read module file '%s'\n", file_path);
+        close(source_fd);
+        unlink(source_file);
+        free(file_path);
+        return NULL;
+    }
+    write(source_fd, source, strlen(source));
+    close(source_fd);
+    free(source);
+    free(file_path);
+
+    /* Create temp .so path */
+    int so_fd = mkstemps(so_file, 3);  /* 3 for ".so" */
+    if (so_fd < 0) {
+        fprintf(stderr, "require: Failed to create temp .so file\n");
+        unlink(source_file);
+        return NULL;
+    }
+    close(so_fd);
+
+    /* Build compile command */
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd),
+             "omnilisp --shared --module-name '%s' -o '%s' '%s' 2>&1",
+             name, so_file, source_file);
+
+    /* Compile module */
+    FILE* compile_out = popen(cmd, "r");
+    if (!compile_out) {
+        fprintf(stderr, "require: Failed to execute compiler\n");
+        unlink(source_file);
+        unlink(so_file);
+        return NULL;
+    }
+
+    /* Read compiler output for errors */
+    char compile_buf[4096];
+    size_t compile_read = fread(compile_buf, 1, sizeof(compile_buf) - 1, compile_out);
+    compile_buf[compile_read] = '\0';
+    int compile_status = pclose(compile_out);
+
+    /* Clean up source file */
+    unlink(source_file);
+
+    if (compile_status != 0) {
+        fprintf(stderr, "require: Compilation failed for module '%s':\n%s\n",
+                name, compile_buf);
+        unlink(so_file);
+        return NULL;
+    }
+
+    /* Load the shared library */
+    void* handle = dlopen(so_file, RTLD_NOW | RTLD_GLOBAL);
+    if (!handle) {
+        fprintf(stderr, "require: Failed to load module '%s': %s\n",
+                name, dlerror());
+        unlink(so_file);
+        return NULL;
+    }
+
+    /* Clean up .so file (library is already loaded) */
+    unlink(so_file);
+
+    /* The module's __attribute__((constructor)) init function has already run,
+     * which registered the module. Now look it up. */
+    Module* m = find_module(name);
+    if (!m) {
+        fprintf(stderr, "require: Module '%s' loaded but not registered\n", name);
+        dlclose(handle);
+        return NULL;
+    }
+
+    /* Return the module as an Obj (using a symbol for now) */
+    return mk_sym(name);
+}
+
+/*
+ * prim_module_ref: Get an exported symbol from a module
+ *
+ * Args: module_name, symbol_name
+ * Returns: The exported value or NULL if not found
+ *
+ * Example:
+ *   (module-ref 'math_utils 'double)  ; Get double function from math_utils module
+ */
+Obj* prim_module_ref(Obj* module_name, Obj* symbol_name) {
+    const char* mod_name = NULL;
+    const char* sym_name = NULL;
+
+    if (IS_BOXED(module_name) && module_name->tag == TAG_SYM) {
+        mod_name = (const char*)module_name->ptr;
+    } else if (IS_BOXED(module_name) && module_name->tag == TAG_STRING) {
+        mod_name = (const char*)module_name->ptr;
+    }
+
+    if (IS_BOXED(symbol_name) && symbol_name->tag == TAG_SYM) {
+        sym_name = (const char*)symbol_name->ptr;
+    } else if (IS_BOXED(symbol_name) && symbol_name->tag == TAG_STRING) {
+        sym_name = (const char*)symbol_name->ptr;
+    }
+
+    if (!mod_name || !sym_name) {
+        fprintf(stderr, "module-ref: Invalid module or symbol name\n");
+        return NULL;
+    }
+
+    Module* m = find_module(mod_name);
+    if (!m) {
+        fprintf(stderr, "module-ref: Module '%s' not found\n", mod_name);
+        return NULL;
+    }
+
+    /* Find the export */
+    for (ModuleExport* exp = m->exports; exp; exp = exp->next) {
+        if (strcmp(exp->name, sym_name) == 0) {
+            return exp->value;
+        }
+    }
+
+    fprintf(stderr, "module-ref: Symbol '%s' not exported from module '%s'\n", sym_name, mod_name);
+    return NULL;
 }
 
 /*

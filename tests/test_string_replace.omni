@@ -1,0 +1,256 @@
+;; test_string_replace.omni - Comprehensive tests for string-replace primitive
+;;
+;; Tests prim_string_replace function (exposed as string-replace in OmniLisp)
+;; which replaces all occurrences of a substring with another substring.
+;;
+;; Run with: ./omni tests/test_string_replace.omni
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+(define test-string [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (equal? expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+;; ============================================================
+;; Basic Replacement Tests
+;; ============================================================
+
+(print "")
+(print "=== Basic Replacement Tests ===")
+
+;; Test 1: Replace single occurrence
+(test-string "replace single occurrence"
+  "hello world"
+  (string-replace "foo" "world" "hello foo"))
+
+;; Test 2: Replace multiple occurrences
+(test-string "replace multiple occurrences"
+  "dog dog dog"
+  (string-replace "cat" "dog" "cat cat cat"))
+
+;; Test 3: Replace at start
+(test-string "replace at start"
+  "XYZhello"
+  (string-replace "ABC" "XYZ" "ABChello"))
+
+;; Test 4: Replace at end
+(test-string "replace at end"
+  "helloXYZ"
+  (string-replace "ABC" "XYZ" "helloABC"))
+
+;; ============================================================
+;; Empty String Tests
+;; ============================================================
+
+(print "")
+(print "=== Empty String Tests ===")
+
+;; Test 5: Empty old string (should return unchanged)
+(test-string "empty old string"
+  "hello world"
+  (string-replace "" "XYZ" "hello world"))
+
+;; Test 6: Empty new string (delete occurrences)
+(test-string "empty new string (delete)"
+  "hello world"
+  (string-replace "foo" "" "hello foo world"))
+
+;; Test 7: Empty input string
+(test-string "empty input string"
+  ""
+  (string-replace "foo" "bar" ""))
+
+;; ============================================================
+;; No Match Tests
+;; ============================================================
+
+(print "")
+(print "=== No Match Tests ===")
+
+;; Test 8: Pattern not found
+(test-string "pattern not found"
+  "hello world"
+  (string-replace "xyz" "abc" "hello world"))
+
+;; Test 9: Case-sensitive no match
+(test-string "case-sensitive no match"
+  "Hello World"
+  (string-replace "hello" "hi" "Hello World"))
+
+;; Test 10: Single character no match
+(test-string "single char no match"
+  "abc"
+  (string-replace "x" "y" "abc"))
+
+;; ============================================================
+;; Multi-character Patterns
+;; ============================================================
+
+(print "")
+(print "=== Multi-character Patterns ===")
+
+;; Test 11: Replace with multi-char string
+(test-string "multi-char replacement"
+  "hello___world"
+  (string-replace " " "___" "hello world"))
+
+;; Test 12: Replace longer substring
+(test-string "replace longer substring"
+  "HELLO"
+  (string-replace "hello world" "HELLO" "hello world"))
+
+;; Test 13: Replace word with phrase
+(test-string "replace word with phrase"
+  "I like apples very much"
+  (string-replace "like" "really enjoy eating" "I like apples"))
+
+;; ============================================================
+;; Consecutive Occurrences Tests
+;; ============================================================
+
+(print "")
+(print "=== Consecutive Occurrences Tests ===")
+
+;; Test 14: Replace consecutive occurrences
+(test-string "consecutive occurrences"
+  "XXXXX"
+  (string-replace "a" "X" "aaaaa"))
+
+;; Test 15: Overlapping patterns (should not double-count)
+(test-string "overlapping patterns"
+  "aba"
+  (string-replace "aba" "X" "abaaba"))
+
+;; Test 16: Replace creates new pattern
+(test-string "replace creates new pattern"
+  "XX"
+  (string-replace "a" "X" "aa"))
+
+;; ============================================================
+;; Special Character Tests
+;; ============================================================
+
+(print "")
+(print "=== Special Character Tests ===")
+
+;; Test 17: Replace space
+(test-string "replace space"
+  "hello-world"
+  (string-replace " " "-" "hello world"))
+
+;; Test 18: Replace newline
+(test-string "replace newline"
+  "line1Xline2"
+  (string-replace "\n" "X" "line1\nline2"))
+
+;; Test 19: Replace tab
+(test-string "replace tab"
+  "col1Xcol2"
+  (string-replace "\t" "X" "col1\tcol2"))
+
+;; Test 20: Replace special characters
+(test-string "replace special chars"
+  "hello.world"
+  (string-replace "," "." "hello,world"))
+
+;; ============================================================
+;; Numeric String Tests
+;; ============================================================
+
+(print "")
+(print "=== Numeric String Tests ===")
+
+;; Test 21: Replace numeric substring
+(test-string "numeric substring"
+  "value: 42"
+  (string-replace "XXX" "42" "value: XXX"))
+
+;; Test 22: Replace numbers in string
+(test-string "replace numbers"
+  "a-b-c"
+  (string-replace "1" "-" "a1b1c"))
+
+;; Test 23: Replace decimal point
+(test-string "replace decimal"
+  "3,14"
+  (string-replace "." "," "3.14"))
+
+;; ============================================================
+;; Long String Tests
+;; ============================================================
+
+(print "")
+(print "=== Long String Tests ===")
+
+;; Test 24: Many occurrences
+(test-string "many occurrences"
+  "X,X,X,X,X,X,X,X,X,X"
+  (string-replace "," ",X" ",,.,,.,,.,,.,,.,,.,,.,,."))
+
+;; Test 25: Replace in long string
+(test-string "replace in long string"
+  "abcDEFghiDEFjklDEFmno"
+  (string-replace "XYZ" "DEF" "abcXYZghiXYZjklXYZmno"))
+
+;; ============================================================
+;; Edge Cases
+;; ============================================================
+
+(print "")
+(print "=== Edge Cases ===")
+
+;; Test 26: Same string as pattern
+(test-string "same string as pattern"
+  "REPLACEMENT"
+  (string-replace "PATTERN" "REPLACEMENT" "PATTERN"))
+
+;; Test 27: Replacement contains search pattern
+(test-string "replacement contains pattern"
+  "XXa"
+  (string-replace "a" "Xa" "a"))
+
+;; Test 28: Single character replacement
+(test-string "single char replacement"
+  "Xbc"
+  (string-replace "a" "X" "abc"))
+
+;; Test 29: Replace entire string
+(test-string "replace entire string"
+  "NEW"
+  (string-replace "OLD" "NEW" "OLD"))
+
+;; Test 30: Replace with identical string (no-op)
+(test-string "identical replacement"
+  "hello world"
+  (string-replace "hello world" "hello world" "hello world"))
+
+;; ============================================================
+;; Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

@@ -1,0 +1,213 @@
+;; test_frequencies.omni - Comprehensive tests for frequencies primitive
+;;
+;; Tests prim_frequencies function (exposed as frequencies in OmniLisp)
+;; which counts occurrences of each element in lists and arrays.
+;;
+;; Returns a dict mapping elements to their occurrence counts.
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+(define test-eq [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (equal? expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+;; ============================================================
+;; Array Frequencies Tests
+;; ============================================================
+
+(print "")
+(print "=== Array Frequencies Tests ===")
+
+;; Test 1: Empty array
+(test-eq "empty array"
+  #{}
+  (frequencies []))
+
+;; Test 2: Single element array
+(test-eq "single element array"
+  #{5 1}
+  (frequencies [5]))
+
+;; Test 3: Array with no duplicates
+(test-eq "array with no duplicates"
+  #{1 1 2 1 3 1 4 1 5 1}
+  (frequencies [1 2 3 4 5]))
+
+;; Test 4: Array with all duplicates
+(test-eq "array with all same elements"
+  #{7 4}
+  (frequencies [7 7 7 7]))
+
+;; Test 5: Array with some duplicates
+(test-eq "array with duplicates"
+  #{1 1 2 2 3 3 4 1}
+  (frequencies [1 2 2 3 3 3 4]))
+
+;; Test 6: Array counts correctly
+(test-eq "array counts correctly"
+  #{a 3 b 2 c 1}
+  (frequencies [a a a b b c]))
+
+;; Test 7: Array with negative numbers
+(test-eq "array with negative numbers"
+  #{-3 2 -1 1 0 1 2 2}
+  (frequencies [-3 -1 -3 0 2 2]))
+
+;; Test 8: Array with floats
+(test-eq "array with floats"
+  #{1.1 2 2.2 2 3.3 1}
+  (frequencies [1.1 2.2 1.1 3.3 2.2]))
+
+;; ============================================================
+;; List Frequencies Tests
+;; ============================================================
+
+(print "")
+(print "=== List Frequencies Tests ===")
+
+;; Test 9: Empty list
+(test-eq "empty list"
+  #{}
+  (frequencies ()))
+
+;; Test 10: Single element list
+(test-eq "single element list"
+  #{5 1}
+  (frequencies '(5)))
+
+;; Test 11: List with no duplicates
+(test-eq "list with no duplicates"
+  #{1 1 2 1 3 1 4 1 5 1}
+  (frequencies '(1 2 3 4 5)))
+
+;; Test 12: List with all duplicates
+(test-eq "list with all same elements"
+  #{7 4}
+  (frequencies '(7 7 7 7)))
+
+;; Test 13: List with some duplicates
+(test-eq "list with duplicates"
+  #{1 1 2 2 3 3 4 1}
+  (frequencies '(1 2 2 3 3 3 4)))
+
+;; Test 14: List counts correctly
+(test-eq "list counts correctly"
+  #{a 3 b 2 c 1}
+  (frequencies '(a a a b b c)))
+
+;; Test 15: List with negative numbers
+(test-eq "list with negative numbers"
+  #{-3 2 -1 1 0 1 2 2}
+  (frequencies '(-3 -1 -3 0 2 2)))
+
+;; Test 16: List with floats
+(test-eq "list with floats"
+  #{1.1 2 2.2 2 3.3 1}
+  (frequencies '(1.1 2.2 1.1 3.3 2.2)))
+
+;; ============================================================
+;; Edge Case Tests
+;; ============================================================
+
+(print "")
+(print "=== Edge Case Tests ===")
+
+;; Test 17: Two identical elements array
+(test-eq "two identical array"
+  #{5 2}
+  (frequencies [5 5]))
+
+;; Test 18: Two identical elements list
+(test-eq "two identical list"
+  #{5 2}
+  (frequencies '(5 5)))
+
+;; Test 19: Alternating duplicates array
+(test-eq "alternating duplicates array"
+  #{1 3 2 3 3 1}
+  (frequencies [1 2 1 2 3 1 2]))
+
+;; Test 20: Alternating duplicates list
+(test-eq "alternating duplicates list"
+  #{1 3 2 3 3 1}
+  (frequencies '(1 2 1 2 3 1 2)))
+
+;; Test 21: Array with strings
+(test-eq "array with strings"
+  #{"a" 2 "b" 2 "c" 1}
+  (frequencies ["a" "b" "a" "c" "b"]))
+
+;; Test 22: List with strings
+(test-eq "list with strings"
+  #{"a" 2 "b" 2 "c" 1}
+  (frequencies '("a" "b" "a" "c" "b")))
+
+;; Test 23: Array with symbols
+(test-eq "array with symbols"
+  #{a 2 b 2 c 1}
+  (frequencies [a b a c b]))
+
+;; Test 24: List with symbols
+(test-eq "list with symbols"
+  #{a 2 b 2 c 1}
+  (frequencies '(a b a c b)))
+
+;; ============================================================
+;; Result Tests
+;; ============================================================
+
+(print "")
+(print "=== Result Tests ===")
+
+;; Test 25: Large array with many duplicates
+(test-eq "large array many duplicates"
+  #{1 2 2 2 3 2 4 2 5 2}
+  (frequencies [1 1 2 2 3 3 4 4 5 5]))
+
+;; Test 26: Large list with many duplicates
+(test-eq "large list many duplicates"
+  #{1 2 2 2 3 2 4 2 5 2}
+  (frequencies '(1 1 2 2 3 3 4 4 5 5)))
+
+;; Test 27: Verify dict type returned
+(define result-array (frequencies [1 2 2 3]))
+(test-eq "result is dict for array"
+  true
+  (dict? result-array))
+
+;; Test 28: Verify dict type returned from list
+(define result-list (frequencies '(1 2 2 3)))
+(test-eq "result is dict for list"
+  true
+  (dict? result-list))
+
+;; ============================================================
+;; Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

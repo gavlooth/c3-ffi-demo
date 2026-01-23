@@ -1,0 +1,280 @@
+;; test_string_reverse.omni - Comprehensive tests for string-reverse primitive
+;;
+;; Tests prim_string_reverse function (exposed as string-reverse in OmniLisp)
+;; which reverses a string non-destructively.
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+(define test-eq [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (equal? expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+;; ============================================================
+;; Basic Reverse Tests
+;; ============================================================
+
+(print "")
+(print "=== Basic Reverse Tests ===")
+
+;; Test 1: Empty string
+(test-eq "empty string"
+  ""
+  (string-reverse ""))
+
+;; Test 2: Single character
+(test-eq "single character"
+  "a"
+  (string-reverse "a"))
+
+;; Test 3: Two characters
+(test-eq "two characters"
+  "ba"
+  (string-reverse "ab"))
+
+;; Test 4: Multiple characters
+(test-eq "multiple characters"
+  "olleh"
+  (string-reverse "hello"))
+
+;; Test 5: Longer string
+(test-eq "longer string"
+  "dlrow"
+  (string-reverse "world"))
+
+;; ============================================================
+;; Character Type Tests
+;; ============================================================
+
+(print "")
+(print "=== Character Type Tests ===")
+
+;; Test 6: All uppercase
+(test-eq "all uppercase"
+  "CBA"
+  (string-reverse "ABC"))
+
+;; Test 7: All lowercase
+(test-eq "all lowercase"
+  "cba"
+  (string-reverse "abc"))
+
+;; Test 8: Mixed case
+(test-eq "mixed case"
+  "bA"
+  (string-reverse "Ab"))
+
+;; Test 9: Numeric string
+(test-eq "numeric string"
+  "321"
+  (string-reverse "123"))
+
+;; Test 10: Alphanumeric
+(test-eq "alphanumeric"
+  "321cba"
+  (string-reverse "abc123"))
+
+;; ============================================================
+;; Special Character Tests
+;; ============================================================
+
+(print "")
+(print "=== Special Character Tests ===")
+
+;; Test 11: String with spaces
+(test-eq "string with spaces"
+  "dlrow olleh"
+  (string-reverse "hello world"))
+
+;; Test 12: Multiple spaces
+(test-eq "multiple spaces"
+  "  a  "
+  (string-reverse "  a  "))
+
+;; Test 13: Leading and trailing spaces
+(test-eq "leading and trailing spaces"
+  " abc "
+  (string-reverse " cba "))
+
+;; Test 14: String with punctuation
+(test-eq "string with punctuation"
+  "!dlrow ,olleh"
+  (string-reverse "hello, world!"))
+
+;; Test 15: String with special symbols
+(test-eq "string with special symbols"
+  ")(*&^%$#@!"
+  (string-reverse "!@#$%^&*()"))
+
+;; ============================================================
+;; Whitespace Tests
+;; ============================================================
+
+(print "")
+(print "=== Whitespace Tests ===")
+
+;; Test 16: Single space
+(test-eq "single space"
+  " "
+  (string-reverse " "))
+
+;; Test 17: Tab character
+(test-eq "tab character"
+  "\t"
+  (string-reverse "\t"))
+
+;; Test 18: Newline character
+(test-eq "newline character"
+  "\n"
+  (string-reverse "\n"))
+
+;; Test 19: Mixed whitespace
+(test-eq "mixed whitespace"
+  "\r\n\t "
+  (string-reverse " \t\n\r"))
+
+;; ============================================================
+;; Palindrome Tests
+;; ============================================================
+
+(print "")
+(print "=== Palindrome Tests ===")
+
+;; Test 20: Single character palindrome
+(test-eq "single char palindrome"
+  "a"
+  (string-reverse "a"))
+
+;; Test 21: Odd-length palindrome
+(test-eq "odd-length palindrome"
+  "radar"
+  (string-reverse "radar"))
+
+;; Test 22: Even-length palindrome
+(test-eq "even-length palindrome"
+  "abba"
+  (string-reverse "abba"))
+
+;; Test 23: Non-palindrome
+(test-eq "non-palindrome"
+  "cba"
+  (string-reverse "abc"))
+
+;; ============================================================
+;; Repeated Character Tests
+;; ============================================================
+
+(print "")
+(print "=== Repeated Character Tests ===")
+
+;; Test 24: All same characters
+(test-eq "all same characters"
+  "aaaaa"
+  (string-reverse "aaaaa"))
+
+;; Test 25: Two characters repeated
+(test-eq "two chars repeated"
+  "bababa"
+  (string-reverse "ababab"))
+
+;; Test 26: Patterned repetition
+(test-eq "patterned repetition"
+  "313"
+  (string-reverse "313"))
+
+;; ============================================================
+;; Edge Case Tests
+;; ============================================================
+
+(print "")
+(print "=== Edge Case Tests ===")
+
+;; Test 27: Long string
+(test-eq "long string"
+  "zyxwvutsrqponmlkjihgfedcba"
+  (string-reverse "abcdefghijklmnopqrstuvwxyz"))
+
+;; Test 28: Very long single character repeat
+(test-eq "long repeat"
+  "xxxxxxxxxx"
+  (string-reverse "xxxxxxxxxx"))
+
+;; Test 29: String with escape sequence
+(test-eq "escape sequence"
+  "n\"
+  (string-reverse "\n"))
+
+;; Test 30: String with brackets
+(test-eq "brackets"
+  "}])(["
+  (string-reverse "[{)}]"))
+
+;; ============================================================
+;; Idempotence Tests
+;; ============================================================
+
+(print "")
+(print "=== Idempotence Tests ===")
+
+;; Test 31: Double reverse returns original
+(define test-str "hello world")
+(test-eq "double reverse"
+  test-str
+  (string-reverse (string-reverse test-str)))
+
+;; Test 32: Triple reverse equals single reverse
+(test-eq "triple reverse equals single"
+  (string-reverse "abc")
+  (string-reverse (string-reverse (string-reverse "abc"))))
+
+;; ============================================================
+;; Unicode/ASCII Edge Cases
+;; ============================================================
+
+(print "")
+(print "=== Character Edge Cases ===")
+
+;; Test 33: ASCII max printable
+(test-eq "max printable"
+  "~"
+  (string-reverse "~"))
+
+;; Test 34: ASCII min printable
+(test-eq "min printable"
+  "!"
+  (string-reverse "!"))
+
+;; Test 35: String with digits and letters
+(test-eq "digits and letters"
+  "f9e8d7c6b5a"
+  (string-reverse "a5b6c7d8e9f"))
+
+;; ============================================================
+;; Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

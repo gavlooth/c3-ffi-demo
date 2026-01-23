@@ -178,6 +178,8 @@ Obj* mk_array_of_ints_region(Region* r, long* values, int count);
  */
 Obj* mk_dict_region_batch(Region* r, int initial_buckets);
 Obj* mk_dict_region(Region* r);
+Obj* mk_set_region(Region* r);  /* Issue 24: Set data structure */
+Obj* mk_datetime_region(Region* r, int64_t timestamp, int32_t tz_offset);  /* Issue 25: DateTime */
 Obj* mk_keyword_region(Region* r, const char* name);
 Obj* mk_tuple_region(Region* r, Obj** items, int count);
 Obj* mk_named_tuple_region(Region* r, Obj** keys, Obj** values, int count);

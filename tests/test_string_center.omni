@@ -1,0 +1,157 @@
+;; test_string_center.omni - Comprehensive tests for string-center primitive
+;;
+;; Tests prim_string_center function which centers a string within
+;; a given width, padding with optional character (default: space).
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+(define test-eq [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (equal? expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+;; ============================================================
+;; Basic Centering Tests
+;; ============================================================
+
+(print "")
+(print "=== Basic Centering Tests ===")
+
+;; Test 1: Center short string with default space padding
+(test-eq "basic center with spaces"
+  "  hello  "
+  (string-center "hello" 10))
+
+;; Test 2: Center string with odd width (uneven padding)
+;; total_pad = 7, left_pad = 3, right_pad = 4
+(test-eq "center with odd width"
+  "   hello    "
+  (string-center "hello" 12))
+
+;; Test 3: Center string that exactly matches width
+(test-eq "string equals width"
+  "hello"
+  (string-center "hello" 5))
+
+;; Test 4: Center string longer than width (no change)
+(test-eq "string longer than width"
+  "hello world"
+  (string-center "hello world" 5))
+
+;; ============================================================
+;; Custom Padding Characters
+;; ============================================================
+
+(print "")
+(print "=== Custom Padding Tests ===")
+
+;; Test 5: Center with asterisk padding
+(test-eq "center with asterisks"
+  "**hello**"
+  (string-center "hello" 9 "*"))
+
+;; Test 6: Center with dash padding
+(test-eq "center with dashes"
+  "---test---"
+  (string-center "test" 10 "-"))
+
+;; Test 7: Center with zero padding
+(test-eq "center with zeros"
+  "0000000"
+  (string-center "0" 7 "0"))
+
+;; ============================================================
+;; Edge Cases
+;; ============================================================
+
+(print "")
+(print "=== Edge Cases ===")
+
+;; Test 8: Center empty string
+(test-eq "empty string"
+  "     "
+  (string-center "" 5))
+
+;; Test 9: Center single character
+(test-eq "single character"
+  " x "
+  (string-center "x" 3))
+
+;; Test 10: Center with width of 0
+(test-eq "width 0 returns original"
+  "hello"
+  (string-center "hello" 0))
+
+;; Test 11: Center with width of 1
+(test-eq "width 1"
+  "h"
+  (string-center "hello" 1))
+
+;; Test 12: Center with negative width (treated as 0)
+(test-eq "negative width"
+  "hello"
+  (string-center "hello" -5))
+
+;; ============================================================
+;; Unicode and Special Characters
+;; ============================================================
+
+(print "")
+(print "=== Unicode and Special Characters ===")
+
+;; Test 13: Center string with unicode characters
+(test-eq "unicode characters"
+  " こんにちは  "
+  (string-center "こんにちは" 10))
+
+;; Test 14: Center string with mixed unicode and ascii
+(test-eq "mixed unicode"
+  "hello世界"
+  (string-center "hello世界" 8))
+
+;; ============================================================
+;; Large Width Tests
+;; ============================================================
+
+(print "")
+(print "=== Large Width Tests ===")
+
+;; Test 15: Center in very large width
+(test-eq "large width"
+  "                    hello                    "
+  (string-center "hello" 50))
+
+;; Test 16: Center with single character in large width
+(test-eq "single char large width"
+  "         a         "
+  (string-center "a" 17))
+
+;; ============================================================
+;; Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

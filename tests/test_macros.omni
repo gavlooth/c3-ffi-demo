@@ -1,0 +1,230 @@
+;; Test suite for OmniLisp Hygienic Macro System
+
+;; ============================================================
+;; Test 1: Basic 'when' macro
+;; ============================================================
+
+(define [syntax when]
+; REVIEWED:SYNTAX
+  [(when test body ...)
+   (if test (do body ...) nil])
+
+;; Test when with true condition
+(when true
+  (println "when: true branch executed"))
+
+;; Test when with false condition (should not print)
+(when false
+  (println "ERROR: when false should not execute"))
+
+;; Test when with multiple body expressions
+(when (= 1 1)
+  (println "when: first body")
+  (println "when: second body"))
+
+
+;; ============================================================
+;; Test 2: 'unless' macro (opposite of when)
+;; ============================================================
+
+(define [syntax unless]
+  [(unless test body ...)
+   (if test nil (do body ...))])
+
+(unless false
+  (println "unless: false condition executed"))
+
+(unless true
+  (println "ERROR: unless true should not execute"))
+
+
+;; ============================================================
+;; Test 3: 'cond' macro with literals
+;; ============================================================
+
+(define [syntax cond]
+  [literals else]
+  [(cond (else result)) result]
+  [(cond (test result))
+   (if test result nil)]
+  [(cond (test result) clause ...)
+   (if test result (cond clause ...))])
+
+(println (cond
+  ((= 1 2) "one equals two")
+  ((= 2 2) "two equals two")
+  (else "fallback")))
+
+(println (cond
+  ((= 1 1) "first match")
+  (else "should not reach")))
+
+
+;; ============================================================
+;; Test 4: 'let1' - single binding let
+;; ============================================================
+
+(define [syntax let1]
+  [(let1 (name value) body ...)
+   (let [name value] body ...)])
+
+(let1 (x 42)
+  ;; REVIEWED:SYNTAX
+  (println (str "let1: x = " x)))
+
+
+;; ============================================================
+;; Test 5: 'swap!' macro for swapping two boxes
+;; ============================================================
+
+(define [syntax swap!]
+  [(swap! a b)
+   (let [temp (unbox a)]
+     (set-box! a (unbox b))
+     (set-box! b temp))])
+
+; REVIEWED:SYNTAX
+(define box1 (box 10))
+(define box2 (box 20))
+(println (str "Before swap: box1=" (unbox box1) " box2=" (unbox box2)))
+(swap! box1 box2)
+(println (str "After swap: box1=" (unbox box1) " box2=" (unbox box2)))
+
+
+;; ============================================================
+;; Test 6: 'inc!' macro for incrementing a box
+;; ============================================================
+
+(define [syntax inc!]
+  [(inc! b) (set-box! b (+ (unbox b) 1))]
+  [(inc! b n) (set-box! b (+ (unbox b) n))])
+
+(define counter (box 0))
+(inc! counter)
+(println (str "After inc!: " (unbox counter)))
+(inc! counter 5)
+(println (str "After inc! 5: " (unbox counter)))
+
+
+;; ============================================================
+;; Test 7: 'while' loop macro
+;; ============================================================
+
+; REVIEWED:SYNTAX
+(define [syntax while]
+  [(while test body ...)
+; REVIEWED:SYNTAX
+   (letrec [loop (fn []
+                   (when test
+                     body ...
+                     (loop)))]
+     (loop))])
+
+(define i (box 0))
+(while (< (unbox i) 3)
+  (println (str "while loop: i=" (unbox i)))
+  (inc! i))
+
+
+;; ============================================================
+;; Test 8: 'for-range' macro
+;; ============================================================
+
+(define [syntax for-range]
+  [(for-range (var start end) body ...)
+   (let [_end end
+         _i (box start)]
+     (while (< (unbox _i) _end)
+       (let [var (unbox _i)]
+         body ...)
+       (inc! _i)))])
+
+(for-range (n 0 3)
+  (println (str "for-range: n=" n)))
+
+
+;; ============================================================
+;; Test 9: 'and2' macro (two-argument and)
+;; ============================================================
+
+(define [syntax and2]
+  [(and2 a b)
+   (if a b false)])
+
+(println (str "and2 true true: " (and2 true true)))
+(println (str "and2 true false: " (and2 true false)))
+(println (str "and2 false true: " (and2 false true)))
+
+
+;; ============================================================
+;; Test 10: 'or2' macro (two-argument or)
+;; ============================================================
+
+(define [syntax or2]
+  [(or2 a b)
+   (if a true b)])
+
+(println (str "or2 true false: " (or2 true false)))
+(println (str "or2 false true: " (or2 false true)))
+(println (str "or2 false false: " (or2 false false)))
+
+
+;; ============================================================
+;; Test 11: 'dotimes' macro
+;; ============================================================
+
+(define [syntax dotimes]
+  [(dotimes (var n) body ...)
+   (for-range (var 0 n) body ...)])
+
+(dotimes (j 3)
+  (println (str "dotimes: j=" j)))
+
+
+;; ============================================================
+;; Test 12: 'begin' / 'progn' macro
+;; ============================================================
+
+(define [syntax progn]
+  [(progn expr ...) (do expr ...)])
+
+(progn
+  (println "progn: first")
+  (println "progn: second"))
+
+
+;; ============================================================
+;; Test 13: 'assert' macro for testing
+;; ============================================================
+
+(define [syntax assert]
+  [(assert condition)
+   (unless condition
+     (error "Assertion failed"))]
+  [(assert condition message)
+   (unless condition
+     (error message))])
+
+(assert (= 1 1))
+(assert (> 5 3) "5 should be greater than 3")
+(println "All assertions passed!")
+
+
+;; ============================================================
+;; Test 14: Empty ellipsis (zero matches)
+;; ============================================================
+
+(define [syntax empty-test]
+  [(empty-test items ...)
+   (do items ... nil)])
+
+(empty-test)  ;; Should produce (do nil)
+(println "Empty ellipsis test passed")
+
+
+;; ============================================================
+;; Test Complete
+;; ============================================================
+
+(println "")
+(println "=== All macro tests completed ===")

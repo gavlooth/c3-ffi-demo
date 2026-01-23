@@ -1,0 +1,193 @@
+;; test_flatten.omni - Comprehensive tests for flatten primitive
+;;
+;; Tests prim_flatten function which flattens one level of nesting in collections.
+;; Supports both arrays and lists as input and handles nested collections.
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+(define test-eq [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (equal? expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+;; ============================================================
+;; Basic Flatten Tests - Arrays
+;; ============================================================
+
+(print "")
+(print "=== Basic Flatten Tests - Arrays ===")
+
+;; Test 1: Flatten empty array
+(test-eq "flatten empty array"
+  []
+  (flatten []))
+
+;; Test 2: Flatten single-level array (no nesting)
+(test-eq "flatten flat array"
+  [1 2 3]
+  (flatten [1 2 3]))
+
+;; Test 3: Flatten array of arrays
+(test-eq "flatten array of arrays"
+  [1 2 3 4 5 6]
+  (flatten [[1 2] [3 4] [5 6]]))
+
+;; Test 4: Flatten array with mixed nesting
+(test-eq "flatten mixed arrays"
+  [1 2 3 4 5]
+  (flatten [[1 2] 3 [4 5]]))
+
+;; Test 5: Flatten deeply nested array (only one level)
+(test-eq "flatten only one level"
+  [[1 2] [3 4]]
+  (flatten [[[1 2]] [[3 4]]]))
+
+;; ============================================================
+;; Flatten Tests - Lists
+;; ============================================================
+
+(print "")
+(print "=== Flatten Tests - Lists ===")
+
+;; Test 6: Flatten empty list
+(test-eq "flatten empty list"
+  ()
+  (flatten ()))
+
+;; Test 7: Flatten flat list
+(test-eq "flatten flat list"
+  '(1 2 3)
+  (flatten '(1 2 3)))
+
+;; Test 8: Flatten list of lists
+(test-eq "flatten list of lists"
+  '(1 2 3 4 5 6)
+  (flatten '((1 2) (3 4) (5 6))))
+
+;; Test 9: Flatten list with mixed nesting
+(test-eq "flatten mixed lists"
+  '(1 2 3 4 5)
+  (flatten '((1 2) 3 (4 5))))
+
+;; Test 10: Flatten deeply nested list (only one level)
+(test-eq "flatten list one level"
+  '((1 2) (3 4))
+  (flatten '(((1 2)) ((3 4)))))
+
+;; ============================================================
+;; Mixed Collection Tests
+;; ============================================================
+
+(print "")
+(print "=== Mixed Collection Tests ===")
+
+;; Test 11: Flatten array containing lists
+(test-eq "flatten array of lists"
+  [1 2 3 4]
+  (flatten [(list 1 2) (list 3 4)]))
+
+;; Test 12: Flatten list containing arrays
+(test-eq "flatten list of arrays"
+  '(1 2 3 4)
+  (flatten (list [1 2] [3 4])))
+
+;; Test 13: Flatten array with both arrays and lists
+(test-eq "flatten array mixed collections"
+  [1 2 3 4 5 6]
+  (flatten [[1 2] (list 3 4) [5 6]]))
+
+;; ============================================================
+;; Edge Cases
+;; ============================================================
+
+(print "")
+(print "=== Edge Cases ===")
+
+;; Test 14: Flatten array with empty nested arrays
+(test-eq "flatten array with empty nested"
+  [1 2 3]
+  (flatten [[1] [] [2 3]]))
+
+;; Test 15: Flatten array with only empty nested arrays
+(test-eq "flatten only empty arrays"
+  []
+  (flatten [[] [] []]))
+
+;; Test 16: Flatten array with single element nested arrays
+(test-eq "flatten single element nested"
+  [1 2 3]
+  (flatten [[1] [2] [3]]))
+
+;; Test 17: Flatten array with non-collection elements
+(test-eq "flatten with non-collections"
+  [1 2 3 "hello"]
+  (flatten [1 2 "hello"]))
+
+;; Test 18: Flatten list with empty nested lists
+(test-eq "flatten list with empty nested"
+  '(1 2 3)
+  (flatten '((1) () (2 3))))
+
+;; Test 19: Flatten with nil/nothing
+(test-eq "flatten with nil"
+  []
+  (flatten nothing))
+
+;; ============================================================
+;; Type Preservation Tests
+;; ============================================================
+
+(print "")
+(print "=== Type Preservation Tests ===")
+
+;; Test 20: Flatten preserves string types
+(test-eq "flatten strings"
+  ["a" "b" "c" "d"]
+  (flatten [["a" "b"] ["c" "d"]]))
+
+;; Test 21: Flatten preserves mixed types
+(test-eq "flatten mixed types"
+  [1 "two" 3.0 true]
+  (flatten [[1 "two"] [3.0 true]]))
+
+;; ============================================================
+;; Large Input Tests
+;; ============================================================
+
+(print "")
+(print "=== Large Input Tests ===")
+
+;; Test 22: Flatten large array
+(test-eq "flatten large array"
+  (collect-array (range 10))
+  (flatten [[0 1 2 3] [4 5 6 7] [8 9]]))
+
+;; ============================================================
+;; Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

@@ -117,8 +117,7 @@
 ;; ============================================================
 
 (println "\n--- Testing Symbols in Expressions ---")
-
-(define (test-fn x y) (+ x y))
+(define test-fn [x] [y] (+ x y))
 (println "Function call: " (test-fn 10 20))
 
 (let [x 5] [y 10]

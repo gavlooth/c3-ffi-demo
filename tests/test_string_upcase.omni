@@ -1,0 +1,228 @@
+;; test_string_upcase.omni - Comprehensive tests for string-upcase primitive
+;;
+;; Tests prim_string_upcase function (exposed as string-upcase in OmniLisp)
+;; which converts a string to uppercase.
+;;
+;; Run with: ./omni tests/test_string_upcase.omni
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+;; Helper to compare string equality
+(define test-string [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (equal? expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+;; Helper to compare numeric equality
+(define test-num [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (= expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+;; ============================================================
+;; Basic Uppercase Tests
+;; ============================================================
+
+(print "")
+(print "=== Basic Uppercase Tests ===")
+
+;; Test 1: Convert lowercase word to uppercase
+(test-string "lowercase to uppercase"
+  "HELLO"
+  (string-upcase "hello"))
+
+;; Test 2: Convert mixed case word to uppercase
+(test-string "mixed case to uppercase"
+  "HELLO"
+  (string-upcase "HeLLo"))
+
+;; Test 3: Convert uppercase word to uppercase (no change)
+(test-string "already uppercase"
+  "WORLD"
+  (string-upcase "WORLD"))
+
+;; ============================================================
+;; Single Character Tests
+;; ============================================================
+
+(print "")
+(print "=== Single Character Tests ===")
+
+;; Test 4: Single lowercase letter
+(test-string "single lowercase letter"
+  "A"
+  (string-upcase "a"))
+
+;; Test 5: Single uppercase letter (no change)
+(test-string "single uppercase letter"
+  "B"
+  (string-upcase "B"))
+
+;; Test 6: Single non-letter character
+(test-string "single digit"
+  "1"
+  (string-upcase "1"))
+
+;; ============================================================
+;; Empty String Tests
+;; ============================================================
+
+(print "")
+(print "=== Empty String Tests ===")
+
+;; Test 7: Empty string
+(test-string "empty string"
+  ""
+  (string-upcase ""))
+
+;; ============================================================
+;; Whitespace and Special Characters
+;; ============================================================
+
+(print "")
+(print "=== Whitespace and Special Characters ===")
+
+;; Test 8: String with spaces (preserves spaces)
+(test-string "string with spaces"
+  "HELLO WORLD"
+  (string-upcase "hello world"))
+
+;; Test 9: String with tabs
+(test-string "string with tabs"
+  "COL1\tCOL2"
+  (string-upcase "col1\tcol2"))
+
+;; Test 10: String with newlines
+(test-string "string with newlines"
+  "LINE1\nLINE2"
+  (string-upcase "line1\nline2"))
+
+;; Test 11: String with punctuation
+(test-string "string with punctuation"
+  "HELLO, WORLD!"
+  (string-upcase "hello, world!"))
+
+;; Test 12: String with special symbols
+(test-string "string with special symbols"
+  "$%^&*()"
+  (string-upcase "$%^&*()"))
+
+;; ============================================================
+;; Numeric and Alphanumeric Tests
+;; ============================================================
+
+(print "")
+(print "=== Numeric and Alphanumeric Tests ===")
+
+;; Test 13: String with digits
+(test-string "alphanumeric"
+  "ABC123XYZ"
+  (string-upcase "abc123xyz"))
+
+;; Test 14: String starting with number
+(test-string "starts with number"
+  "123ABC"
+  (string-upcase "123abc"))
+
+;; Test 15: Pure numeric string
+(test-string "pure numeric"
+  "12345"
+  (string-upcase "12345"))
+
+;; ============================================================
+;; Extended ASCII/Unicode Tests
+;; ============================================================
+
+(print "")
+(print "=== Character Range Tests ===")
+
+;; Test 16: All lowercase letters
+(test-string "all lowercase a-z"
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+  (string-upcase "abcdefghijklmnopqrstuvwxyz"))
+
+;; Test 17: String with underscores
+(test-string "underscores preserved"
+  "HELLO_WORLD_TEST"
+  (string-upcase "hello_world_test"))
+
+;; Test 18: String with hyphens
+(test-string "hyphens preserved"
+  "HELLO-WORLD"
+  (string-upcase "hello-world"))
+
+;; ============================================================
+;; Length Preservation Tests
+;; ============================================================
+
+(print "")
+(print "=== Length Preservation Tests ===")
+
+;; Test 19: Length is preserved (short string)
+(test-num "short string length preserved"
+  5
+  (string-length (string-upcase "hello")))
+
+;; Test 20: Length is preserved (long string)
+(test-num "long string length preserved"
+  26
+  (string-length (string-upcase "abcdefghijklmnopqrstuvwxyz")))
+
+;; ============================================================
+;; Edge Cases
+;; ============================================================
+
+(print "")
+(print "=== Edge Cases ===")
+
+;; Test 21: String with only spaces
+(test-string "only spaces"
+  "   "
+  (string-upcase "   "))
+
+;; Test 22: Single space
+(test-string "single space"
+  " "
+  (string-upcase " "))
+
+;; Test 23: String with mixed delimiters
+(test-string "mixed delimiters"
+  "A-B_C.D:E"
+  (string-upcase "a-b_c.d:e"))
+
+;; ============================================================
+;; Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

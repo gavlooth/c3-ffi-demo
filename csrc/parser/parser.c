@@ -99,7 +99,9 @@ enum {
 
     R_DICT,
 
-    R_TYPE_INNER, R_TYPE,
+    R_HASHSET, R_SET,  /* Issue 24: Set literal #set{1 2 3} */
+
+    R_TYPE_INNER, R_TYPE_NORMAL, R_KIND_SPLICE, R_HASHKIND, R_TYPE,
     R_PATH_SEGMENT, R_PATH_TAIL_ITEM, R_PATH_TAIL, R_PATH,
     R_METADATA,
 
@@ -346,6 +348,43 @@ static OmniValue* act_dict(PikaState* state, size_t pos, PikaMatch match) {
     return omni_new_dict();
 }
 
+/* Issue 24: Set literal #set{1 2 3} */
+static OmniValue* act_set(PikaState* state, size_t pos, PikaMatch match) {
+    /* Pattern: #set{ WS INNER } */
+    size_t current = pos;
+
+    /* Skip #set */
+    PikaMatch* hashset_m = pika_get_match(state, current, R_HASHSET);
+    if (!hashset_m || !hashset_m->matched) return omni_new_set();
+    current += hashset_m->len;
+
+    /* Skip { */
+    PikaMatch* brace_m = pika_get_match(state, current, R_LBRACE);
+    if (!brace_m || !brace_m->matched) return omni_new_set();
+    current += brace_m->len;
+
+    /* Skip WS */
+    PikaMatch* ws_m = pika_get_match(state, current, R_WS);
+    if (ws_m && ws_m->matched) current += ws_m->len;
+
+    /* Get inner list */
+    PikaMatch* inner_m = pika_get_match(state, current, R_ARRAY_INNER);
+    if (inner_m && inner_m->matched && inner_m->val) {
+        OmniValue* list = inner_m->val;
+        OmniValue* set = omni_new_set();
+
+        /* Iterate list adding each element */
+        OmniValue* p = list;
+        while (!omni_is_nil(p) && omni_is_cell(p)) {
+            OmniValue* elem = omni_car(p);
+            omni_set_add(set, elem);
+            p = omni_cdr(p);
+        }
+        return set;
+    }
+    return omni_new_set();
+}
+
 static OmniValue* act_quoted(PikaState* state, size_t pos, PikaMatch match) {
     char quote_char = state->input[pos];
     size_t expr_pos = pos + 1;
@@ -382,11 +421,37 @@ static OmniValue* act_quoted(PikaState* state, size_t pos, PikaMatch match) {
     return omni_nil;
 }
 
+/* Action for kind splice: {#kind expr} */
+static OmniValue* act_kind_splice(PikaState* state, size_t pos, PikaMatch match) {
+    (void)match;  /* unused */
+    size_t current = pos + 1;  /* skip { */
+
+    /* Skip whitespace after { */
+    PikaMatch* ws_m = pika_get_match(state, current, R_WS);
+    if (ws_m && ws_m->matched) current += ws_m->len;
+
+    /* Skip #kind */
+    current += 5;
+
+    /* Skip whitespace after #kind */
+    ws_m = pika_get_match(state, current, R_WS);
+    if (ws_m && ws_m->matched) current += ws_m->len;
+
+    /* Parse the expression */
+    PikaMatch* expr_m = pika_get_match(state, current, R_EXPR);
+    if (expr_m && expr_m->matched && expr_m->val) {
+        return omni_new_kind_splice(expr_m->val);
+    }
+
+    /* Fallback: empty kind splice */
+    return omni_new_kind_splice(omni_nil);
+}
+
 static OmniValue* act_type(PikaState* state, size_t pos, PikaMatch match) {
     size_t current = pos + 1; /* skip { */
     PikaMatch* ws_m = pika_get_match(state, current, R_WS);
     if (ws_m && ws_m->matched) current += ws_m->len;
-    
+
     PikaMatch* inner_m = pika_get_match(state, current, R_TYPE_INNER);
     if (inner_m && inner_m->matched && inner_m->val) {
         /* inner_m->val is a list of expressions inside { } */
@@ -1108,12 +1173,31 @@ void omni_grammar_init(void) {
     g_rule_ids[R_DICT] = ids(5, R_HASH, R_LBRACE, R_WS, R_ARRAY_INNER, R_RBRACE);
     g_rules[R_DICT] = (PikaRule){ PIKA_SEQ, .data.children = { g_rule_ids[R_DICT], 5 }, .action = act_dict };
 
+    /* Issue 24: SET = #set{ WS ARRAY_INNER } */
+    /* HASHSET = "#set" - terminal for set literal prefix */
+    g_rules[R_HASHSET] = (PikaRule){ PIKA_TERMINAL, .data.str = "#set" };
+
+    /* SET = #set { WS ARRAY_INNER } */
+    g_rule_ids[R_SET] = ids(5, R_HASHSET, R_LBRACE, R_WS, R_ARRAY_INNER, R_RBRACE);
+    g_rules[R_SET] = (PikaRule){ PIKA_SEQ, .data.children = { g_rule_ids[R_SET], 5 }, .action = act_set };
+
     /* TYPE_INNER = LIST_INNER */
     g_rules[R_TYPE_INNER] = g_rules[R_LIST_INNER];
 
-    /* TYPE = { WS TYPE_INNER } */
-    g_rule_ids[R_TYPE] = ids(4, R_LBRACE, R_WS, R_TYPE_INNER, R_RBRACE);
-    g_rules[R_TYPE] = (PikaRule){ PIKA_SEQ, .data.children = { g_rule_ids[R_TYPE], 4 }, .action = act_type };
+    /* TYPE_NORMAL = { WS TYPE_INNER } - regular type literal like {Int} */
+    g_rule_ids[R_TYPE_NORMAL] = ids(4, R_LBRACE, R_WS, R_TYPE_INNER, R_RBRACE);
+    g_rules[R_TYPE_NORMAL] = (PikaRule){ PIKA_SEQ, .data.children = { g_rule_ids[R_TYPE_NORMAL], 4 }, .action = act_type };
+
+    /* HASHKIND = "#kind" - terminal for kind splice keyword */
+    g_rules[R_HASHKIND] = (PikaRule){ PIKA_TERMINAL, .data.str = "#kind" };
+
+    /* KIND_SPLICE = { WS #kind WS EXPR WS } - computed kind {#kind (typeof x)} */
+    g_rule_ids[R_KIND_SPLICE] = ids(7, R_LBRACE, R_WS, R_HASHKIND, R_WS, R_EXPR, R_WS, R_RBRACE);
+    g_rules[R_KIND_SPLICE] = (PikaRule){ PIKA_SEQ, .data.children = { g_rule_ids[R_KIND_SPLICE], 7 }, .action = act_kind_splice };
+
+    /* TYPE = KIND_SPLICE / TYPE_NORMAL - try kind splice first, then regular type */
+    g_rule_ids[R_TYPE] = ids(2, R_KIND_SPLICE, R_TYPE_NORMAL);
+    g_rules[R_TYPE] = (PikaRule){ PIKA_ALT, .data.children = { g_rule_ids[R_TYPE], 2 } };
 
     /* PATH_SEGMENT = SYM / ARRAY */
     g_rule_ids[R_PATH_SEGMENT] = ids(2, R_SYM, R_ARRAY);
@@ -1208,8 +1292,8 @@ void omni_grammar_init(void) {
      * not as a path expression "1 . 5" (integer 1, dot, integer 5).
      * ANY_FLOAT handles signed floats (-3.14, +2.5) and partial floats (.5, 3.)
      */
-    g_rule_ids[R_EXPR] = ids(15, R_ANY_FLOAT, R_PATH, R_LIST, R_ARRAY, R_DICT, R_TYPE, R_METADATA, R_QUOTED, R_COLON_QUOTED_SYMBOL, R_STRING, R_FMT_STRING, R_CLF_STRING, R_NAMED_CHAR, R_HASH_VAL, R_ATOM);
-    g_rules[R_EXPR] = (PikaRule){ PIKA_ALT, .data.children = { g_rule_ids[R_EXPR], 15 } };
+    g_rule_ids[R_EXPR] = ids(16, R_ANY_FLOAT, R_PATH, R_LIST, R_ARRAY, R_SET, R_DICT, R_TYPE, R_METADATA, R_QUOTED, R_COLON_QUOTED_SYMBOL, R_STRING, R_FMT_STRING, R_CLF_STRING, R_NAMED_CHAR, R_HASH_VAL, R_ATOM);
+    g_rules[R_EXPR] = (PikaRule){ PIKA_ALT, .data.children = { g_rule_ids[R_EXPR], 16 } };
 
     /* PROGRAM_SEQ = EXPR WS PROGRAM_INNER */
     g_rule_ids[R_PROGRAM_SEQ] = ids(3, R_EXPR, R_WS, R_PROGRAM_INNER);

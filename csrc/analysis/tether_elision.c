@@ -9,9 +9,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+// REVIEWED:NAIVE
 static TetherPoint* find_matching_exit(TetherPoint* entry) {
     if (!entry || !entry->is_entry) return NULL;
-    
+
     TetherPoint* curr = entry->next;
     while (curr) {
         if (!curr->is_entry && strcmp(curr->tethered_var, entry->tethered_var) == 0) {

@@ -1,0 +1,145 @@
+;; test_as_patterns.omni - Tests for "as" pattern syntax
+;;
+;; TEST STATUS: UNWRITTEN/UNIMPLEMENTED FEATURE
+;;
+;; The "as" pattern syntax is documented in docs/SYNTAX.md:
+;;   (match [1 2]
+;;     [[x y] as pair] pair)     ; binds x=1, y=2, pair=[1 2]
+;;
+;; Expected behavior:
+;; - Pattern [[inner_pattern] as name] should:
+;;   1. Match value against inner_pattern
+;;   2. If match succeeds, bind destructured vars from inner_pattern
+;;   3. Also bind the whole matched value to 'name'
+;;   4. Return value from result expression
+;;
+;; Implementation status:
+;; - Runtime: IMPLEMENTED (runtime/src/runtime.c lines 687-709)
+;; - Codegen: PARTIALLY IMPLEMENTED (csrc/codegen/codegen.c lines 3041-3052)
+;; - Parser: BUGGY (pattern is truncated during parsing)
+;;
+;; Current bug: When compiling [[x y] as pair], the parser incorrectly
+;; transforms it to just [x y], dropping the "as pair" portion.
+;; This causes the generated code to:
+;; 1. Create pattern array with only 2 elements instead of 3
+;; 2. Generate code that treats 'as' as a variable name
+;; 3. Generate code that treats 'pair' as the result expression
+;;
+;; This test file documents expected behavior for when this feature is fixed.
+;;
+;; Related code:
+;; - docs/SYNTAX.md: lines 368-389 (as pattern documentation)
+;; - runtime/src/runtime.c: lines 687-709 (as pattern runtime support)
+;; - csrc/codegen/codegen.c: lines 3005-3013 (as keyword as reserved)
+;; - csrc/codegen/codegen.c: lines 3041-3052 (as pattern handling in extract_pattern_vars)
+
+;; ============================================================
+;; Expected Test Cases (when feature is implemented)
+;; ============================================================
+
+;; Test 1: Basic as pattern - bind whole array
+;; Expected: x=1, y=2, pair=[1 2], returns [1 2]
+;; (define test1
+;;   (match [1 2]
+;;     [[x y] as pair] pair))
+
+;; Test 2: As pattern with nested destructuring
+;; Expected: a=1, b=2, c=3, nested=[[1 2] 3]
+;; (define test2
+;;   (match [[1 2] 3]
+;;     [[[a b] c] as nested] nested))
+
+;; Test 3: As pattern with strings
+;; Expected: a="hello", b="world", words=["hello" "world"]
+;; (define test3
+;;   (match ["hello" "world"]
+;;     [[a b] as words] (count words)))
+
+;; Test 4: As pattern with guards
+;; Expected: Should only match when guard condition passes
+;; (define test4
+;;   (match [10 20]
+;;     [[x y] as pair :when (> x 5)] (count pair)
+;;     [_ 0]))
+
+;; Test 5: As pattern with wildcard in inner pattern
+;; Expected: Only y is bound, pair=[1 2], returns 102
+;; (define test5
+;;   (match [1 2]
+;;     [[_ y] as pair] (+ y (count pair))))
+
+;; Test 6: Multiple as patterns in nested structures
+;; Expected: x=1, y=2, outer=[1 2], inner=[1 2]
+;; (define test6
+;;   (match [1 2]
+;;     [[x y] as outer
+;;       [x y] as inner] (+ (count outer) (count inner))))
+
+;; ============================================================
+;; Documentation of Implementation Requirements
+;; ============================================================
+
+;; To implement "as" patterns correctly, the following changes are needed:
+
+;; 1. Parser Fix:
+;;    - When parsing match clause patterns, preserve the entire pattern structure
+;;    - Don't transform [[x y] as pair] into just [x y]
+;;    - The pattern should remain as 3-element array for codegen
+
+;; 2. Codegen Fix:
+;;    - When extract_pattern_vars detects an "as" pattern (lines 3041-3052),
+;;      ensure the pattern array passed to codegen_expr includes all 3 elements
+;;    - Current bug: pattern is truncated before reaching codegen_expr
+
+;; 3. Runtime: Already implemented correctly
+;;    - is_pattern_match_with_bindings correctly handles "as" patterns
+;;    - Lines 687-709 properly bind both inner vars and whole value
+
+;; ============================================================
+;; Why This Feature Matters
+;; ============================================================
+
+;; "As" patterns are critical for:
+;; - Logging/debugging: Access both parts and whole for inspection
+;; - Transformation: Keep original structure while modifying parts
+;; - Validation: Check structure properties while working with components
+;; - API design: Functions that need both context and details
+;;
+;; Example use case:
+;; (define (process-pair input)
+;;   (match input
+;;     [[x y] as pair]
+;;       (do
+;;         (println "Processing pair:" pair)
+;;         (println "  x:" x)
+;;         (println "  y:" y)
+;;         (if (> x 0) (str "positive") (str "non-positive")))))
+
+;; ============================================================
+;; Verification Notes
+;; ============================================================
+
+;; Current behavior (as of investigation date):
+;; - Parsing [[x y] as pair] results in pattern being treated as two separate items:
+;;   1. Pattern: [x y] (incorrect, should be [[x y] as pair])
+;;   2. Result: as pair (treating 'as' as variable name)
+;; - This causes compilation errors:
+;;   - 'o_as' undeclared (treating 'as' as variable)
+;;   - 'o_pair' undeclared (treating 'pair' as variable)
+;; - Generated C code only creates array with 2 elements instead of 3
+
+;; ============================================================
+;; Related Issues / TODOs
+;; ============================================================
+
+;; No existing TODOs or issues specifically reference "as" pattern problems,
+;; suggesting this feature may have been added to documentation but not
+;; fully integrated into the compiler.
+
+;; ============================================================
+;; Return Value
+;; ============================================================
+
+;; Return non-zero to indicate this is a placeholder test file
+;; for an unwritten feature.
+1

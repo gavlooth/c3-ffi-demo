@@ -1,0 +1,231 @@
+;; test_string_lines.omni - Tests for string-lines primitive
+;;
+;; Tests string-lines function which splits a string by newlines.
+;; Returns a list of lines without newline characters.
+;; Run with: ./omni tests/test_string_lines.omni
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+(define test-list [name] [expected-list] [actual-list]
+  (set! test-count (+ test-count 1))
+  ;; Compare lists by converting to strings for comparison
+  (if (= (string-join "," expected-list) (string-join "," actual-list))
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" (string-join "," expected-list))
+        (print "  Got:" (string-join "," actual-list)))))
+
+;; ============================================================
+;; Basic Line Splitting Tests
+;; ============================================================
+
+(print "")
+(print "=== Basic Line Splitting Tests ===")
+
+;; Test 1: Split by newline
+(test-list "split by newline"
+  '("line1" "line2" "line3")
+  (string-lines "line1\nline2\nline3"))
+
+;; Test 2: Split by CRLF (Windows style)
+(test-list "split by CRLF"
+  '("first" "second" "third")
+  (string-lines "first\r\nsecond\r\nthird"))
+
+;; Test 3: Mixed newline types
+(test-list "mixed newline types"
+  '("line1" "line2" "line3" "line4")
+  (string-lines "line1\nline2\r\nline3\nline4"))
+
+;; Test 4: Single line (no newline)
+(test-list "single line"
+  '("hello world")
+  (string-lines "hello world"))
+
+;; ============================================================
+;; Empty String and Edge Cases
+;; ============================================================
+
+(print "")
+(print "=== Empty String and Edge Cases ===")
+
+;; Test 5: Empty string
+(test-list "empty string"
+  '()
+  (string-lines ""))
+
+;; Test 6: Single newline
+(test-list "single newline"
+  '("" "")
+  (string-lines "\n"))
+
+;; Test 7: Only newlines
+(test-list "only newlines"
+  '("" "" "" "")
+  (string-lines "\n\n\n"))
+
+;; ============================================================
+;; Leading and Trailing Newlines
+;; ============================================================
+
+(print "")
+(print "=== Leading and Trailing Newlines ===")
+
+;; Test 8: Leading newline
+(test-list "leading newline"
+  '("" "content")
+  (string-lines "\ncontent"))
+
+;; Test 9: Trailing newline
+(test-list "trailing newline"
+  '("content" "")
+  (string-lines "content\n"))
+
+;; Test 10: Both leading and trailing
+(test-list "leading and trailing"
+  '("" "content" "")
+  (string-lines "\ncontent\n"))
+
+;; Test 11: Multiple leading newlines
+(test-list "multiple leading newlines"
+  '("" "" "" "text")
+  (string-lines "\n\n\ntext"))
+
+;; ============================================================
+;; Whitespace Handling
+;; ============================================================
+
+(print "")
+(print "=== Whitespace Handling ===")
+
+;; Test 12: Empty lines with spaces
+(test-list "empty lines"
+  '("line1" "" "line2" "" "line3")
+  (string-lines "line1\n\nline2\n\nline3"))
+
+;; Test 13: Lines with spaces
+(test-list "lines with leading/trailing spaces"
+  '("  indented  " "  another  " "  last  ")
+  (string-lines "  indented  \n  another  \n  last  \n"))
+
+;; Test 14: Tabs in lines
+(test-list "tabs in lines"
+  '("col1\tcol2" "col1\tcol2")
+  (string-lines "col1\tcol2\ncol1\tcol2"))
+
+;; ============================================================
+;; Special Characters in Lines
+;; ============================================================
+
+(print "")
+(print "=== Special Characters in Lines ===")
+
+;; Test 15: Special characters
+(test-list "special characters"
+  '("hello, world!" "test@example.com" "$100.00")
+  (string-lines "hello, world!\ntest@example.com\n$100.00"))
+
+;; Test 16: Quoted strings
+(test-list "quoted strings"
+  '("\"quoted\"" "'single'" "`backtick`")
+  (string-lines "\"quoted\"\n'single'\n`backtick`"))
+
+;; Test 17: Backslashes
+(test-list "backslashes"
+  '("path\\to\\file" "C:\\Windows\\System32")
+  (string-lines "path\\to\\file\nC:\\Windows\\System32"))
+
+;; ============================================================
+;; Long Lines
+;; ============================================================
+
+(print "")
+(print "=== Long Lines ===")
+
+;; Test 18: Very long single line
+(test-list "long line"
+  '("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+  (string-lines "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+
+;; ============================================================
+;; Consecutive Newlines
+;; ============================================================
+
+(print "")
+(print "=== Consecutive Newlines ===")
+
+;; Test 19: Two consecutive newlines
+(test-list "two consecutive newlines"
+  '("first" "" "second")
+  (string-lines "first\n\nsecond"))
+
+;; Test 20: Three consecutive newlines
+(test-list "three consecutive newlines"
+  '("first" "" "" "second")
+  (string-lines "first\n\n\nsecond"))
+
+;; ============================================================
+;; Mixed CRLF and LF
+;; ============================================================
+
+(print "")
+(print "=== Mixed CRLF and LF ===")
+
+;; Test 21: CRLF followed by LF
+(test-list "CRLF then LF"
+  '("line1" "line2" "line3")
+  (string-lines "line1\r\nline2\nline3"))
+
+;; Test 22: LF followed by CRLF
+(test-list "LF then CRLF"
+  '("line1" "line2" "line3")
+  (string-lines "line1\nline2\r\nline3"))
+
+;; ============================================================
+;; Real-world Examples
+;; ============================================================
+
+(print "")
+(print "=== Real-world Examples ===")
+
+;; Test 23: Simple CSV-like format
+(test-list "CSV-like format"
+  '("name,age,city" "Alice,30,NYC" "Bob,25,LA")
+  (string-lines "name,age,city\nAlice,30,NYC\nBob,25,LA"))
+
+;; Test 24: Log file format
+(test-list "log format"
+  '("INFO: Starting" "WARN: Low memory" "ERROR: Failed" "INFO: Done")
+  (string-lines "INFO: Starting\nWARN: Low memory\nERROR: Failed\nINFO: Done"))
+
+;; Test 25: Code-like indentation
+(test-list "code-like"
+  '("function main()" "  print('hello')" "  return 0")
+  (string-lines "function main()\n  print('hello')\n  return 0"))
+
+;; ============================================================
+;; Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

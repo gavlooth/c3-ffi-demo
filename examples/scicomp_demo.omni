@@ -8,9 +8,14 @@
 ; - Neural networks (LibTorch)
 ;
 ; Run with: ./omnilisp examples/scicomp_demo.omni
+; REVIEWED:SYNTAX
 
+; REVIEWED:SYNTAX
+; REVIEWED:SYNTAX
 (import SciComp.BLAS)
+; REVIEWED:SYNTAX
 (import SciComp.Linalg)
+; REVIEWED:SYNTAX
 ; (import SciComp.Torch)  ; Uncomment if LibTorch is installed
 
 (print "\n=== Scientific Computing Demo ===\n\n")
@@ -19,8 +24,10 @@
 ; Demo 1: Basic Vector Operations
 ; ===========================================
 
+; REVIEWED:SYNTAX
 (print "--- Demo 1: Vector Operations ---\n")
 
+; REVIEWED:SYNTAX
 (let ((x (vec-from-list '(1.0 2.0 3.0 4.0 5.0)))
       (y (vec-from-list '(5.0 4.0 3.0 2.0 1.0))))
 

@@ -39,6 +39,7 @@ typedef struct Generator Generator;
 typedef struct Promise Promise;
 typedef struct WorkerThread WorkerThread;
 typedef struct ThreadPool ThreadPool;
+typedef struct SelectWaiter SelectWaiter;  /* Forward declaration */
 
 /* ========== Continuation Frame Types ========== */
 
@@ -152,9 +153,15 @@ struct Fiber {
     Fiber* next;            /* Next in queue */
     Fiber* prev;            /* Previous in queue (for removal) */
 
-    /* Parking info */
+    /* Parking info (single-channel) */
     void* park_reason;      /* Channel/promise we're waiting on */
     Obj* park_value;        /* Value to send (for channel send) */
+
+    /* Select state (multi-channel) */
+    SelectWaiter** select_waiters;  /* Array of waiters (one per case) */
+    int select_count;               /* Number of cases */
+    int select_ready;               /* Index of completed case (-1 = none) */
+    bool in_select;                 /* True if parked in select() */
 
     /* Result */
     Obj* result;            /* Final result when FIBER_DONE */
@@ -256,6 +263,25 @@ struct ThreadPool {
     volatile uint64_t total_steals;
 };
 
+/* ========== Select Waiter (Multi-Channel Select) ========== */
+
+/*
+ * SelectWaiter: Node linking a fiber to a channel during select().
+ *
+ * When a fiber calls select() with multiple cases, one SelectWaiter
+ * is created per case and inserted into the channel's select waiter list.
+ * This allows a fiber to wait on multiple channels simultaneously.
+ *
+ * Design: Separate from regular waiters to minimize impact on common case.
+ */
+struct SelectWaiter {
+    Fiber* fiber;               /* The waiting fiber */
+    int case_index;             /* Index in the SelectCase array */
+    Obj* value;                 /* For send: value to send */
+    SelectWaiter* next;         /* Next waiter in channel's list */
+    SelectWaiter* prev;         /* Previous waiter (for O(1) removal) */
+};
+
 /* ========== Fiber Channel ========== */
 
 /*
@@ -270,9 +296,13 @@ struct FiberChannel {
     int head;
     int tail;
 
-    /* Wait queues (parked fibers) */
+    /* Wait queues (parked fibers) - single-channel blocking */
     Fiber* send_waiters;    /* Fibers waiting to send */
     Fiber* recv_waiters;    /* Fibers waiting to receive */
+
+    /* Select wait queues - multi-channel blocking */
+    SelectWaiter* select_send_waiters;  /* Select senders */
+    SelectWaiter* select_recv_waiters;  /* Select receivers */
 
     /* State */
     bool closed;

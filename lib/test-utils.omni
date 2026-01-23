@@ -1,0 +1,273 @@
+;; test-utils.omni - Shared test utilities library
+;;
+;; Provides common test helper functions to eliminate duplication
+;; across test files.
+;;
+;; Usage:
+;;   (import test-utils)
+;;   (test-eq "my test" expected actual)
+;;   (print-summary)
+
+;; ============================================================
+;; Test State
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+;; ============================================================
+;; Core Test Functions
+;; ============================================================
+
+;; Test equality using equal? (works for all types)
+; REVIEWED:SYNTAX
+(define (test-eq name expected actual)
+  (set! test-count (+ test-count 1))
+  (if (equal? expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+; REVIEWED:SYNTAX
+;; Test numeric equality using =
+(define (test-num name expected actual)
+  (set! test-count (+ test-count 1))
+  (if (= expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+; REVIEWED:SYNTAX
+;; Alias for test-num
+(define (test-int name expected actual)
+  (test-num name expected actual))
+
+; REVIEWED:SYNTAX
+;; Test boolean equality
+(define (test-bool name expected actual)
+  (set! test-count (+ test-count 1))
+  (if (eq expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+;; Test string equality
+(define (test-string name expected actual)
+  (set! test-count (+ test-count 1))
+  (if (equal? expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+;; Test approximate equality for floats
+(define (test-approx name expected actual tolerance)
+  (set! test-count (+ test-count 1))
+  (if (< (abs (- expected actual)) tolerance)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual)
+        (print "  Diff:" (abs (- expected actual))))))
+
+;; Test approximate equality with default tolerance
+(define (test-float name expected actual)
+  (test-approx name expected actual 1e-10))
+
+;; ============================================================
+;; Special Value Tests
+;; ============================================================
+
+;; Test that value is nothing
+(define (test-nothing name actual)
+  (set! test-count (+ test-count 1))
+  (if (nothing? actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected: nothing")
+        (print "  Got:" actual))))
+
+;; Test that value is NOT nothing
+(define (test-not-nothing name actual)
+  (set! test-count (+ test-count 1))
+  (if (not (nothing? actual))
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name "(expected non-nothing value)"))))
+
+;; Test that value is an error
+(define (test-error name actual)
+  (set! test-count (+ test-count 1))
+  (if (error? actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected: error")
+        (print "  Got:" actual))))
+
+;; Test that value is true
+(define (test-true name actual)
+  (set! test-count (+ test-count 1))
+  (if actual
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected: true")
+        (print "  Got: false"))))
+
+;; Test that value is false
+(define (test-false name actual)
+  (set! test-count (+ test-count 1))
+  (if (not actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected: false")
+        (print "  Got: true"))))
+
+;; ============================================================
+;; Collection Tests
+;; ============================================================
+
+;; Test array equality
+(define (test-array name expected actual)
+  (set! test-count (+ test-count 1))
+  (if (equal? expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+;; Test list equality
+(define (test-list name expected actual)
+  (set! test-count (+ test-count 1))
+  (if (equal? expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+;; Test dict equality
+(define (test-dict name expected actual)
+  (set! test-count (+ test-count 1))
+  (if (equal? expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+;; Test array length
+(define (test-array-length name expected-length actual-arr)
+  (set! test-count (+ test-count 1))
+  (if (= expected-length (array-length actual-arr))
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected length:" expected-length)
+        (print "  Got:" (array-length actual-arr)))))
+
+;; ============================================================
+;; Comparison Tests
+;; ============================================================
+
+;; Test that actual != expected
+(define (test-not-eq name not-expected actual)
+  (set! test-count (+ test-count 1))
+  (if (not (equal? not-expected actual))
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected NOT:" not-expected)
+        (print "  Got:" actual))))
+
+;; Test comparison result (for string-compare, etc.)
+(define (test-compare name expected actual)
+  (set! test-count (+ test-count 1))
+  (let ((matches (cond
+                   ((< expected 0) (< actual 0))
+                   ((> expected 0) (> actual 0))
+                   (else (= actual 0)))))
+    (if matches
+        (do
+          (set! pass-count (+ pass-count 1))
+          (print "PASS:" name))
+        (do
+          (set! fail-count (+ fail-count 1))
+          (print "FAIL:" name)
+          (print "  Expected sign:" expected)
+          (print "  Got:" actual)))))
+
+;; ============================================================
+;; Summary
+;; ============================================================
+
+;; Print test summary
+(define (print-summary)
+  (print "")
+  (print "==========================================")
+  (print "Total:" test-count "| Pass:" pass-count "| Fail:" fail-count)
+  (print "=========================================="))
+
+;; Reset test counters
+(define (reset-tests)
+  (set! test-count 0)
+  (set! pass-count 0)
+  (set! fail-count 0))

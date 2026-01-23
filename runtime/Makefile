@@ -15,6 +15,10 @@ SRCDIR = src
 INCDIR = include
 BUILDDIR = build
 BENCHDIR = bench
+PIKA_DIR = ../csrc/parser/pika_c
+
+# Pika parser object (for regex engine)
+PIKA_OBJ = $(PIKA_DIR)/pika.o
 
 # Source files - main runtime
 MAIN_SOURCES = $(wildcard $(SRCDIR)/*.c)
@@ -32,6 +36,9 @@ UTIL_OBJECTS = $(UTIL_SOURCES:$(SRCDIR)/util/%.c=$(BUILDDIR)/util/%.o)
 SOURCES = $(MAIN_SOURCES) $(MEMORY_SOURCES) $(UTIL_SOURCES)
 OBJECTS = $(MAIN_OBJECTS) $(MEMORY_OBJECTS) $(UTIL_OBJECTS)
 
+# All objects including pika dependency
+ALL_OBJECTS = $(OBJECTS) $(PIKA_OBJ)
+
 # Output
 STATIC_LIB = libomni.a
 SHARED_LIB = libomni.so
@@ -45,7 +52,11 @@ $(BUILDDIR):
 
 # Compile main source files
 $(BUILDDIR)/%.o: $(SRCDIR)/%.c $(INCDIR)/omni.h
-	$(CC) $(CFLAGS) -I$(INCDIR) -I$(SRCDIR) -c $< -o $@
+	$(CC) $(CFLAGS) -I$(INCDIR) -I$(SRCDIR) -I$(PIKA_DIR) -c $< -o $@
+
+# Ensure pika.o exists (build if needed)
+$(PIKA_OBJ):
+	$(CC) $(CFLAGS) -I$(PIKA_DIR) -c $(PIKA_DIR)/pika.c -o $@
 
 # Compile utility module files
 $(BUILDDIR)/util/%.o: $(SRCDIR)/util/%.c
@@ -55,8 +66,8 @@ $(BUILDDIR)/util/%.o: $(SRCDIR)/util/%.c
 $(BUILDDIR)/memory/%.o: $(SRCDIR)/memory/%.c
 	$(CC) $(CFLAGS) -I$(INCDIR) -I$(SRCDIR) -I$(SRCDIR)/memory -c $< -o $@
 
-# Build static library
-$(STATIC_LIB): $(OBJECTS)
+# Build static library (includes pika dependency)
+$(STATIC_LIB): $(ALL_OBJECTS)
 	$(AR) rcs $@ $^
 	@echo "Built static library: $@"
 

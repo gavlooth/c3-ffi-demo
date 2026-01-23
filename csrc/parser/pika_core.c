@@ -8,6 +8,7 @@
 #include "pika.h"
 #include <stdlib.h>
 #include <string.h>
+#include <wyhash.h>
 
 /* ============== Pattern Cache (T-wire-pika-compile-03) ============== */
 
@@ -41,15 +42,14 @@ static PatternCache* g_pattern_cache = NULL;
 /* Initial number of buckets for the pattern cache */
 #define PATTERN_CACHE_INITIAL_BUCKETS 32
 
-/* String hashing function (djb2 algorithm) */
+/*
+ * String hashing function using wyhash.
+ * wyhash is a high-quality hash that passes BigCrush/PractRand tests.
+ * See: https://github.com/wangyi-fudan/wyhash (public domain)
+ */
 static size_t hash_string(const char* str) {
     if (!str) return 0;
-    size_t hash = 5381;
-    int c;
-    while ((c = *str++)) {
-        hash = ((hash << 5) + hash) + c; /* hash * 33 + c */
-    }
-    return hash;
+    return (size_t)wyhash(str, strlen(str), 0, _wyp);
 }
 
 /* Compute hash for a rules array */

@@ -1,0 +1,175 @@
+;; test_string_substr.omni - Comprehensive tests for string-substr primitive
+;;
+;; Tests prim_string_substr function (exposed as string-substr in OmniLisp)
+;; which extracts substrings from strings with start index and optional length.
+;;
+;; Run with: ./omni tests/test_string_substr.omni
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+(define test-string [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (= expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+;; ============================================================
+;; Test 1: Basic substring extraction with positive indices
+;; ============================================================
+
+(print "")
+(print "=== Test 1: Basic Substring Extraction ===")
+
+;; Test 1: Substring from start
+(test-string "substring from start"
+  "hello"
+  (string-substr "hello world" 0 5))
+
+;; Test 2: Substring from middle
+(test-string "substring from middle"
+  "world"
+  (string-substr "hello world" 6 5))
+
+;; Test 3: Substring with length 1
+(test-string "single character"
+  "h"
+  (string-substr "hello" 0 1))
+
+;; Test 4: Substring at end
+(test-string "substring at end"
+  "world"
+  (string-substr "hello world" 6 -1))
+
+;; ============================================================
+;; Test 2: Negative start indices (counting from end)
+;; ============================================================
+
+(print "")
+(print "=== Test 2: Negative Start Indices ===")
+
+;; Test 5: Negative start index - last character
+(test-string "negative start: last character"
+  "o"
+  (string-substr "hello" -1 1))
+
+;; Test 6: Negative start index - last 3 characters
+(test-string "negative start: last 3 chars"
+  "llo"
+  (string-substr "hello" -3 3))
+
+;; Test 7: Negative start index - entire string
+(test-string "negative start: entire string"
+  "hello"
+  (string-substr "hello" -5 -1))
+
+;; Test 8: Negative start index with length
+(test-string "negative start with length"
+  "llo"
+  (string-substr "hello world" -3 3))
+
+;; ============================================================
+;; Test 3: Out-of-bounds handling
+;; ============================================================
+
+(print "")
+(print "=== Test 3: Out-of-Bounds Handling ===")
+
+;; Test 9: Start index beyond string length
+(test-string "start beyond length"
+  ""
+  (string-substr "hello" 10 5))
+
+;; Test 10: Negative start beyond beginning
+(test-string "negative start beyond beginning"
+  "h"
+  (string-substr "hello" -100 1))
+
+;; Test 11: Length beyond string end
+(test-string "length beyond string end"
+  "world"
+  (string-substr "hello world" 6 100))
+
+;; ============================================================
+;; Test 4: Empty string edge cases
+;; ============================================================
+
+(print "")
+(print "=== Test 4: Empty String Edge Cases ===")
+
+;; Test 12: Empty string
+(test-string "empty string"
+  ""
+  (string-substr "" 0 5))
+
+;; Test 13: Length 0 from middle
+(test-string "zero length substring"
+  ""
+  (string-substr "hello" 1 0))
+
+;; ============================================================
+;; Test 5: Full string extraction
+;; ============================================================
+
+(print "")
+(print "=== Test 5: Full String Extraction ===")
+
+;; Test 14: Extract entire string with explicit length
+(test-string "full string with explicit length"
+  "hello"
+  (string-substr "hello" 0 5))
+
+;; Test 15: Extract entire string with negative length
+(test-string "full string with negative length"
+  "hello"
+  (string-substr "hello" 0 -1))
+
+;; ============================================================
+;; Test 6: Boundary conditions
+;; ============================================================
+
+(print "")
+(print "=== Test 6: Boundary Conditions ===")
+
+;; Test 16: Start at string boundary
+(test-string "start at string length"
+  ""
+  (string-substr "hello" 5 10))
+
+;; Test 17: Substring of whitespace
+(test-string "substring of spaces"
+  "   "
+  (string-substr "   hello   " 0 3))
+
+;; Test 18: Substring with special characters
+(test-string "substring with special chars"
+  "world!"
+  (string-substr "hello world!" 6 6))
+
+;; ============================================================
+;; Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

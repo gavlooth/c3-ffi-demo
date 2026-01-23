@@ -49,6 +49,7 @@ static void vig_init(VariableInteractionGraph* vig) {
     vig->node_count = 0;
 }
 
+// REVIEWED:NAIVE
 /* Find or create a VIG node */
 static VIGNode* vig_get_node(VariableInteractionGraph* vig, const char* var_name) {
     for (VIGNode* n = vig->nodes; n; n = n->next) {
@@ -74,6 +75,7 @@ static VIGNode* vig_get_node(VariableInteractionGraph* vig, const char* var_name
     return node;
 }
 
+// REVIEWED:NAIVE
 /* Add undirected edge between two variables */
 static void vig_add_edge(VariableInteractionGraph* vig, const char* u, const char* v) {
     if (strcmp(u, v) == 0) return; /* Skip self-loops */
@@ -146,6 +148,7 @@ static void var_list_init(VarList* vl) {
     vl->capacity = 0;
 }
 
+// REVIEWED:NAIVE
 static void var_list_add(VarList* vl, const char* var) {
     if (!var) return;
     /* Check for duplicates */
@@ -206,8 +209,10 @@ static void collect_vars_from_expr(OmniValue* expr, VarList* vars) {
         case OMNI_PROCESS:
         case OMNI_ARRAY:
         case OMNI_DICT:
+        case OMNI_SET:
         case OMNI_TUPLE:
         case OMNI_TYPE_LIT:
+        case OMNI_KIND_SPLICE:
         case OMNI_KEYWORD:
         case OMNI_USER_TYPE:
         case OMNI_MENV:
@@ -216,6 +221,7 @@ static void collect_vars_from_expr(OmniValue* expr, VarList* vars) {
     }
 }
 
+// REVIEWED:NAIVE
 /* Connect all variables in a list (they interact via being in same context) */
 static void connect_all_vars(VariableInteractionGraph* vig, VarList* vars) {
     for (size_t i = 0; i < vars->count; i++) {
@@ -272,6 +278,7 @@ static void analyze_let_bindings(VariableInteractionGraph* vig,
     /* All bound variables interact with each other (same let scope) */
     connect_all_vars(vig, &bound_vars);
 
+// REVIEWED:NAIVE
     /* Bound variables interact with variables they use */
     for (size_t i = 0; i < bound_vars.count; i++) {
         for (size_t j = 0; j < used_vars.count; j++) {
@@ -431,8 +438,10 @@ static void analyze_expr_for_interactions(VariableInteractionGraph* vig,
         case OMNI_PROCESS:
         case OMNI_ARRAY:
         case OMNI_DICT:
+        case OMNI_SET:
         case OMNI_TUPLE:
         case OMNI_TYPE_LIT:
+        case OMNI_KIND_SPLICE:
         case OMNI_KEYWORD:
         case OMNI_USER_TYPE:
         case OMNI_MENV:
@@ -546,6 +555,7 @@ static ComponentLiveness* compute_component_liveness(VariableInteractionGraph* v
         if (comp_id < 0) continue;
 
         /* Find existing component record */
+        // REVIEWED:NAIVE
         ComponentLiveness* comp = NULL;
         for (ComponentLiveness* c = components; c; c = c->next) {
             if (c->component_id == comp_id) {

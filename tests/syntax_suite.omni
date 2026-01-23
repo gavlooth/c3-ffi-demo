@@ -2,18 +2,18 @@
 ;; OmniLisp Syntax Test Suite 
 ;; ============================================================ 
 
-(println "--- Testing 2. Bindings & Functions ---") 
+(println "--- Testing 2. Bindings & Functions ---")
 
 ;; 2.1 Function Definitions
-(define (add-v1 x y) (+ x y))
-(println "V1 (Scheme): " (add-v1 10 20))
+(define add-v1 [x] [y] (+ x y))
+(println "V1 (Canonical): " (add-v1 10 20))
 
 ;; Slot syntax: each param is its own slot [x] [y]
 (define add-v2 [x] [y] (+ x y))
 (println "V2 (Slot Syntax): " (add-v2 10 20))
 
-(define (add-v3 x y) (+ x y))
-(println "V3 (Scheme duplicate): " (add-v3 10 20))
+(define add-v3 [x] [y] (+ x y))
+(println "V3 (Canonical duplicate): " (add-v3 10 20))
 
 ;; Typed slot syntax: [param {Type}] for each parameter
 (define add-v4 [x {Int}] [y {Int}] {Int} (+ x y))
@@ -25,6 +25,7 @@
 ;; Lambdas
 (println "Lambda: " ((lambda [x] (* x x)) 5))
 (println "fn shorthand: " ((fn [x] (* x x)) 5))
+; REVIEWED:SYNTAX
 (println "-> shorthand: " ((-> [x] [y] (+ x y)) 1 2)) 
 
 ;; 2.2 Local Bindings 
@@ -58,8 +59,7 @@
 (define my-type Int)
 (println "First-class Kind reference: " my-type)
 (println "type? with Kind object: " (type? 100 my-type))
-
-(define (get-string-type) String)
+(define get-string-type [] String)
 (println "Kind returned from function: " (get-string-type))
 (println "type? with returned Kind: " (type? "hello" (get-string-type)))
 (println "\n--- Testing 6. Pattern Matching ---")
@@ -111,8 +111,8 @@
   [greeting "hello"]) 
 (println "Grammar defined: " simple) 
 
-(println "\n--- Testing 8. Metadata ---") 
-(define ^:hot version 1.0) 
+(println "\n--- Testing 8. Metadata ---")
+(define ^:hot version 1.0)
 (println "Metadata var: " version) 
 
 (println "\nSUCCESS: Syntax suite complete.") 

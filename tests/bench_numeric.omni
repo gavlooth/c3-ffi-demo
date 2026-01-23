@@ -2,7 +2,7 @@
 ;; Basic tests to verify numeric operations work
 
 ;; Test integer arithmetic
-(define (test-int-ops)
+(define test-int-ops []
   (let ((a 10)
         (b 20))
     (println "Int Add: " (+ a b))
@@ -11,7 +11,7 @@
     (println "Int Div: " (/ b a))))
 
 ;; Test float arithmetic
-(define (test-float-ops)
+(define test-float-ops []
   (let ((x 10.5)
         (y 2.0))
     (println "Float Add: " (+ x y))
@@ -20,7 +20,7 @@
     (println "Float Div: " (/ x y))))
 
 ;; Test comparison operations
-(define (test-comparisons)
+(define test-comparisons []
   (let ((a 10)
         (b 20))
     (println "10 < 20: " (< a b))
@@ -30,7 +30,7 @@
     (println "10 >= 5: " (>= a 5))))
 
 ;; Main test runner
-(define (run-tests)
+(define run-tests []
   (println "==========================================")
   (println "Numeric Operation Tests")
   (println "==========================================")

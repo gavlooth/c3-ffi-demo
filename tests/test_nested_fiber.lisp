@@ -7,6 +7,7 @@
     (println "Inner: running")
     42)))
   (define result (resume inner))
+; REVIEWED:SYNTAX
   (println "Outer: inner returned")
   (println result)
   (+ result 10))))

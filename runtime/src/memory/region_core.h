@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 #include <pthread.h>
 #include "../../../third_party/arena/arena_config.h"
 
@@ -40,8 +41,16 @@ typedef struct Region Region;
 // Region Control Block (RCB)
 // The logical owner of a memory region.
 struct Region {
-    Arena arena;                // The physical storage (bump allocator)
+    Arena arena;                // The physical storage (bump allocator) - general purpose
     InlineBuffer inline_buf;    // Fast inline buffer for small objects (< 64 bytes)
+
+    /* Issue 15 P4: Size-Class Segregation for cache locality
+     * Separate arenas for different object sizes improve cache behavior:
+     * - pair_arena: For TYPE_ID_PAIR (cons cells) - small, fixed-size, frequently traversed
+     * - container_arena: For TYPE_ID_ARRAY, TYPE_ID_STRING, TYPE_ID_DICT - larger, variable-size
+     */
+    Arena pair_arena;           // Dedicated arena for pairs (better list traversal cache locality)
+    Arena container_arena;      // Dedicated arena for arrays/strings/dicts
 
     /* OPTIMIZATION (T-opt-region-metadata): Region-level type metadata */
     struct TypeMetadata* type_table;   /* Centralized metadata (one per region) */
@@ -298,14 +307,34 @@ static inline void* region_alloc_typed(Region* r, TypeID type_id, size_t size) {
         /* Fall through to arena if inline buffer exhausted */
     }
 
-    /* SLOW PATH: Arena allocation for large or non-inlineable types */
-    /* Issue 2 P3: Update accounting for arena allocation and track chunk count */
-    ArenaChunk* before = r->arena.end;
-    void* ptr = arena_alloc(&r->arena, size);
+    /* SLOW PATH: Arena allocation for large or non-inlineable types
+     * Issue 15 P4: Route to size-class segregated arenas for better cache locality
+     */
+    Arena* target_arena;
+    switch (type_id) {
+        case TYPE_ID_PAIR:
+            /* Pairs go to dedicated pair_arena for list traversal cache locality */
+            target_arena = &r->pair_arena;
+            break;
+        case TYPE_ID_ARRAY:
+        case TYPE_ID_STRING:
+        case TYPE_ID_DICT:
+            /* Container types go to dedicated container_arena */
+            target_arena = &r->container_arena;
+            break;
+        default:
+            /* All other types go to general arena */
+            target_arena = &r->arena;
+            break;
+    }
 
-    if (r->arena.end != before) {
+    /* Issue 2 P3: Update accounting for arena allocation and track chunk count */
+    ArenaChunk* before = target_arena->end;
+    void* ptr = arena_alloc(target_arena, size);
+
+    if (target_arena->end != before) {
         r->chunk_count++;
-        r->last_arena_end = r->arena.end;
+        r->last_arena_end = target_arena->end;
     }
 
     r->bytes_allocated_total += size;
@@ -314,6 +343,53 @@ static inline void* region_alloc_typed(Region* r, TypeID type_id, size_t size) {
     }
 
     return ptr;
+}
+
+/*
+ * region_realloc - Reallocate memory while preserving region membership
+ *
+ * Issue 10 P1: Region-aware reallocation that keeps objects in their original region.
+ *
+ * @param r: The region to allocate from (must be same as original allocation's region)
+ * @param oldptr: Pointer to existing allocation (may be NULL)
+ * @param oldsz: Size of existing allocation in bytes
+ * @param newsz: Requested new size in bytes
+ * @return: Pointer to reallocated memory, or NULL on failure
+ *
+ * Behavior:
+ *   - If newsz <= oldsz: Returns oldptr unchanged (no-op optimization)
+ *   - If newsz > oldsz: Allocates new space in region, copies data, returns new pointer
+ *   - If oldptr is NULL: Equivalent to region_alloc(r, newsz)
+ *   - Old memory is NOT freed (region-based allocation - freed on region_exit)
+ *
+ * IMPORTANT: The caller must ensure 'r' is the same region that oldptr was
+ * allocated from. Violating this will cause the object to change region membership.
+ *
+ * Example:
+ *   Obj** data = region_alloc(r, 8 * sizeof(Obj*));
+ *   // ... fill data ...
+ *   data = region_realloc(r, data, 8 * sizeof(Obj*), 16 * sizeof(Obj*));
+ *   // data now has capacity for 16 pointers, still in region r
+ */
+static inline void* region_realloc(Region* r, void* oldptr, size_t oldsz, size_t newsz) {
+    if (!r) return NULL;
+
+    /* If shrinking or same size, return existing pointer (no-op) */
+    if (newsz <= oldsz && oldptr != NULL) {
+        return oldptr;
+    }
+
+    /* Allocate new space in the same region */
+    void* newptr = region_alloc(r, newsz);
+    if (!newptr) return NULL;
+
+    /* Copy old data if present */
+    if (oldptr && oldsz > 0) {
+        memcpy(newptr, oldptr, oldsz);
+    }
+
+    /* Note: Old memory is not freed - CTRR model frees on region_exit */
+    return newptr;
 }
 
 // -- Region Reference (Smart Pointer) --

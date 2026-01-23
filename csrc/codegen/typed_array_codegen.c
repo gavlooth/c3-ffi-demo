@@ -103,6 +103,7 @@ void generate_typed_array_alloc(CodeGenContext* ctx,
                                int* dimensions) {
     if (!ctx || !var_name || !type_name) return;
 
+// REVIEWED:NAIVE
     /* Build dimensions array initialization */
     char dims_init[256] = "";
     if (dimensions && rank > 0) {
@@ -151,6 +152,7 @@ void generate_typed_array_get(CodeGenContext* ctx,
     char* c_type = get_c_type_name(elem_type);
     char* get_fn = get_typed_array_get_function(elem_type);
 
+// REVIEWED:NAIVE
     /* Build indices array */
     char indices_buf[256] = "";
     if (elem_type->kind == TYPE_KIND_ARRAY && elem_type->array.rank > 0) {
@@ -178,6 +180,7 @@ void generate_typed_array_set(CodeGenContext* ctx,
 
     char* set_fn = get_typed_array_set_function(elem_type);
 
+// REVIEWED:NAIVE
     /* Build indices array */
     char indices_buf[256] = "";
     if (elem_type->kind == TYPE_KIND_ARRAY && elem_type->array.rank > 0) {

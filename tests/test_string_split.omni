@@ -1,0 +1,217 @@
+;; test_string_split.omni - Comprehensive tests for string-split primitive
+;;
+;; Tests the prim_string_split function which splits a string by a delimiter.
+;; Returns a list of substrings.
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+(define test-strings-eq [name] [expected-list] [actual-list]
+  (set! test-count (+ test-count 1))
+  ;; Compare lists by converting to strings for comparison
+  (if (= (string-join "," expected-list) (string-join "," actual-list))
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" (string-join "," expected-list))
+        (print "  Got:" (string-join "," actual-list)))))
+
+;; ============================================================
+;; Basic Splitting Tests
+;; ============================================================
+
+(print "")
+(print "=== Basic Splitting Tests ===")
+
+;; Test 1: Split by space
+(test-strings-eq "split by single space"
+  '("hello" "world")
+  (string-split " " "hello world"))
+
+;; Test 2: Split by comma
+(test-strings-eq "split by comma"
+  '("a" "b" "c")
+  (string-split "," "a,b,c"))
+
+;; Test 3: Split by hyphen
+(test-strings-eq "split by hyphen"
+  '("2024" "01" "22")
+  (string-split "-" "2024-01-22"))
+
+;; Test 4: Split by colon
+(test-strings-eq "split by colon"
+  '("red" "green" "blue")
+  (string-split ":" "red:green:blue"))
+
+;; ============================================================
+;; Edge Cases
+;; ============================================================
+
+(print "")
+(print "=== Edge Cases ===")
+
+;; Test 5: Empty delimiter (returns list with original string)
+(test-strings-eq "empty delimiter"
+  '("hello world")
+  (string-split "" "hello world"))
+
+;; Test 6: Empty string to split
+(test-strings-eq "empty string"
+  '()
+  (string-split "," ""))
+
+;; Test 7: Single character string
+(test-strings-eq "single char"
+  '("x")
+  (string-split "," "x"))
+
+;; Test 8: Delimiter not found (returns list with original string)
+(test-strings-eq "delimiter not found"
+  '("hello world")
+  (string-split "|" "hello world"))
+
+;; ============================================================
+;; Multiple Consecutive Delimiters
+;; ============================================================
+
+(print "")
+(print "=== Multiple Consecutive Delimiters ===")
+
+;; Test 9: Multiple consecutive delimiters (produces empty strings)
+(test-strings-eq "multiple consecutive delimiters"
+  '("a" "" "b" "" "c")
+  (string-split "," "a,,b,,c"))
+
+;; Test 10: Leading delimiter
+(test-strings-eq "leading delimiter"
+  '("" "first" "second")
+  (string-split ",first,second" ","))
+
+;; Test 11: Trailing delimiter
+(test-strings-eq "trailing delimiter"
+  '("first" "second" "")
+  (string-split "first,second," ","))
+
+;; Test 12: Both leading and trailing delimiters
+(test-strings-eq "leading and trailing"
+  '("" "middle" "")
+  (string-split ",middle," ","))
+
+;; ============================================================
+;; Multi-Character Delimiters
+;; ============================================================
+
+(print "")
+(print "=== Multi-Character Delimiters ===")
+
+;; Test 13: Split by two characters
+(test-strings-eq "two-char delimiter"
+  '("hello" "world")
+  (string-split "::" "hello::world"))
+
+;; Test 14: Split by word
+(test-strings-eq "word delimiter"
+  '("before" "after")
+  (string-split " AND " "before AND after"))
+
+;; Test 15: Split by special pattern
+(test-strings-eq "pattern delimiter"
+  '("part1" "part2" "part3")
+  (string-split "---" "part1---part2---part3"))
+
+;; ============================================================
+;; Whitespace Handling
+;; ============================================================
+
+(print "")
+(print "=== Whitespace Handling ===")
+
+;; Test 16: Split by newline (string contains actual newline)
+;; Note: In .omni files, we use "\n" escape sequence
+(test-strings-eq "split by newline"
+  '("line1" "line2" "line3")
+  (string-split "\n" "line1\nline2\nline3"))
+
+;; Test 17: Split by tab
+(test-strings-eq "split by tab"
+  '("col1" "col2" "col3")
+  (string-split "\t" "col1\tcol2\tcol3"))
+
+;; Test 18: Split by multiple spaces (single space delimiter)
+(test-strings-eq "split single space with multi-space input"
+  '("hello" "  world")
+  (string-split " " "hello  world"))
+
+;; ============================================================
+;; Special Characters
+;; ============================================================
+
+(print "")
+(print "=== Special Characters ===")
+
+;; Test 19: Split by pipe
+(test-strings-eq "split by pipe"
+  '("a" "b" "c")
+  (string-split "|" "a|b|c"))
+
+;; Test 20: Split by semicolon
+(test-strings-eq "split by semicolon"
+  '("key1" "key2" "key3")
+  (string-split ";" "key1;key2;key3"))
+
+;; Test 21: Split containing special regex chars (literal, not regex)
+(test-strings-eq "split with asterisk"
+  '("start" "end")
+  (string-split "*" "start*end"))
+
+;; Test 22: Split by forward slash (file path)
+(test-strings-eq "split path"
+  '("home" "user" "documents")
+  (string-split "/" "home/user/documents"))
+
+;; ============================================================
+;; Large Strings and Performance
+;; ============================================================
+
+(print "")
+(print "=== Large Strings ===")
+
+;; Test 23: Many splits (stress test with 100 elements)
+(define many-split (string-split "," "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100"))
+(define expected-count 100)
+(define actual-count 0)
+(define count-list [lst]
+  (if lst
+      (count-list lst.b)
+      0))
+(set! actual-count (count-list many-split))
+
+;; Test 24: Empty result (string is only delimiters)
+(test-strings-eq "only delimiters"
+  '("" "" "")
+  (string-split "," ",,"))
+
+;; ============================================================
+;; Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

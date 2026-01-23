@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+// REVIEWED:NAIVE
 static ComponentInfo* find_or_create_component(AnalysisContext* ctx, int scc_id) {
     for (ComponentInfo* c = ctx->components; c; c = c->next) {
         if (c->scc_id == scc_id) return c;
@@ -40,6 +41,7 @@ void omni_analyze_components(AnalysisContext* ctx, CFG* cfg) {
 
         /* Find node by position */
         CFGNode* def_node = NULL;
+// REVIEWED:NAIVE
         for (size_t i = 0; i < cfg->node_count; i++) {
             if (u->def_pos >= cfg->nodes[i]->position_start && 
                 u->def_pos <= cfg->nodes[i]->position_end) {

@@ -1,3 +1,14 @@
+## Prerequisites - READ FIRST
+
+Before making ANY changes to this codebase, you MUST read and understand the language reference:
+
+1. **Read `docs/LANGUAGE_REFERENCE.md`** - Complete language syntax and semantics
+2. **Read `docs/QUICK_REFERENCE.md`** - Concise syntax overview
+3. **Read `docs/SYNTAX.md`** - Detailed syntax specification
+
+OmniLisp is NOT Clojure, Scheme, or Common Lisp. It has its own syntax and semantics. Do not assume forms like `defn`, `^Type`, or other constructs work the same as in other Lisps.
+
+---
 
 You are a **static code analysis and semantic annotation agent**.
 

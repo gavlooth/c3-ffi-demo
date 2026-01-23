@@ -1,0 +1,62 @@
+;; test_string_capitalize.omni - Test for string-capitalize primitive
+;;
+;; Tests prim_string_capitalize function which capitalizes first letter
+;; and lowercases the rest.
+;;
+;; Run with: ./omni tests/test_string_capitalize.omni
+
+(print "")
+(print "=== Testing string-capitalize primitive ===")
+(print "")
+
+;; Test 1: Lowercase
+(print "Test 1: Lowercase 'hello'")
+(define result1 (string-capitalize "hello"))
+(print "  Result: '" result1 "'")
+(if (string=? result1 "Hello")
+    (print "  Status: PASS ✓")
+    (print "  Status: FAIL ✗"))
+
+(print "")
+
+;; Test 2: UPPERCASE
+(print "Test 2: UPPERCASE 'HELLO'")
+(define result2 (string-capitalize "HELLO"))
+(print "  Result: '" result2 "'")
+(if (string=? result2 "Hello")
+    (print "  Status: PASS ✓")
+    (print "  Status: FAIL ✗"))
+
+(print "")
+
+;; Test 3: Mixed case
+(print "Test 3: Mixed case 'hELLO'")
+(define result3 (string-capitalize "hELLO"))
+(print "  Result: '" result3 "'")
+(if (string=? result3 "Hello")
+    (print "  Status: PASS ✓")
+    (print "  Status: FAIL ✗"))
+
+(print "")
+
+;; Test 4: Empty string
+(print "Test 4: Empty string ''")
+(define result4 (string-capitalize ""))
+(print "  Result: '" result4 "'")
+(if (string=? result4 "")
+    (print "  Status: PASS ✓")
+    (print "  Status: FAIL ✗"))
+
+(print "")
+
+;; Test 5: Multi-word
+(print "Test 5: Multi-word 'hello world'")
+(define result5 (string-capitalize "hello world"))
+(print "  Result: '" result5 "'")
+(if (string=? result5 "Hello world")
+    (print "  Status: PASS ✓")
+    (print "  Status: FAIL ✗"))
+
+(print "")
+(print "=== Tests Complete ===")
+0

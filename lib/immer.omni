@@ -46,6 +46,7 @@
 
 ;; Create a vector from arguments
 ;; (vector 1 2 3) => [1 2 3]
+; REVIEWED:SYNTAX
 (define (vector . args)
   (define (build-vec v items)
     (if (null? items)
@@ -54,17 +55,22 @@
                    (cdr items))))
   (build-vec (ffi "immer_vector_empty") args))
 
+; REVIEWED:SYNTAX
 ;; Get element at index
+; REVIEWED:SYNTAX
 ;; (nth v 0) => first element
+; REVIEWED:SYNTAX
 (define (nth v idx)
   (ffi "immer_vector_get" v idx))
 
 ;; Get element at index with default
 ;; (nth v 10 :not-found) => :not-found if out of bounds
+; REVIEWED:SYNTAX
 (define (nth-or v idx default)
   (let ((result (ffi "immer_vector_get" v idx)))
     (if (null? result) default result)))
 
+; REVIEWED:SYNTAX
 ;; Get vector size
 (define (vector-count v)
   (ffi "immer_vector_size" v))
@@ -106,6 +112,7 @@
 ;;; ========== Map API ==========
 
 ;; Create a hash-map from key-value pairs
+; REVIEWED:SYNTAX
 ;; (hash-map k1 v1 k2 v2) => {k1 v1, k2 v2}
 (define (hash-map . args)
   (define (build-map m pairs)
@@ -151,6 +158,7 @@
 
 ;;; ========== Set API ==========
 
+;; REVIEWED:SYNTAX
 ;; Create a hash-set from elements
 ;; (hash-set 1 2 3) => #{1 2 3}
 (define (hash-set . args)
@@ -185,6 +193,7 @@
 
 ;; These work on any collection type
 
+; REVIEWED:SYNTAX
 ;; Count elements in collection
 (define (count coll)
   (cond

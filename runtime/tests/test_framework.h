@@ -20,6 +20,7 @@ extern const char* current_suite;
 
 /* Test suite runner declarations */
 extern void run_region_accounting_tests(void);
+extern void run_regex_tests(void);
 
 /* Colors for output */
 #define RED     "\033[31m"

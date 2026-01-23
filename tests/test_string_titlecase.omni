@@ -1,0 +1,195 @@
+;; test_string_titlecase.omni - Test for string-titlecase primitive
+;;
+;; Tests prim_string_titlecase function which capitalizes first letter
+;; of each word and lowercases the rest.
+;;
+;; Run with: ./omni tests/test_string_titlecase.omni
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+(define test-name [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (string=? expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+;; ============================================================
+;; Basic Title Case Tests
+;; ============================================================
+
+(print "")
+(print "=== Basic Title Case Tests ===")
+
+;; Test 1: Single word lowercase
+(test-name "single word lowercase"
+  "Hello"
+  (string-titlecase "hello"))
+
+;; Test 2: Single word uppercase
+(test-name "single word uppercase"
+  "Hello"
+  (string-titlecase "HELLO"))
+
+;; Test 3: Single word mixed case
+(test-name "single word mixed case"
+  "Hello"
+  (string-titlecase "hELLo"))
+
+;; ============================================================
+;; Multi-Word Tests
+;; ============================================================
+
+(print "")
+(print "=== Multi-Word Tests ===")
+
+;; Test 4: Two words
+(test-name "two words"
+  "Hello World"
+  (string-titlecase "hello world"))
+
+;; Test 5: Three words
+(test-name "three words"
+  "Hello World Test"
+  (string-titlecase "hello world test"))
+
+;; Test 6: Multiple spaces between words
+(test-name "multiple spaces"
+  "Hello  World"
+  (string-titlecase "hello  world"))
+
+;; Test 7: Words with mixed case
+(test-name "words mixed case"
+  "Hello World Test"
+  (string-titlecase "hELLo wORLD tEST"))
+
+;; ============================================================
+;; Edge Cases
+;; ============================================================
+
+(print "")
+(print "=== Edge Cases ===")
+
+;; Test 8: Empty string
+(test-name "empty string"
+  ""
+  (string-titlecase ""))
+
+;; Test 9: Single character
+(test-name "single character"
+  "A"
+  (string-titlecase "a"))
+
+;; Test 10: All uppercase words
+(test-name "all uppercase"
+  "HELLO WORLD"
+  (string-titlecase "HELLO WORLD"))
+
+;; Test 11: All lowercase words
+(test-name "all lowercase"
+  "Hello World"
+  (string-titlecase "hello world"))
+
+;; Test 12: Already title case
+(test-name "already title case"
+  "Hello World"
+  (string-titlecase "Hello World"))
+
+;; ============================================================
+;; Whitespace Handling
+;; ============================================================
+
+(print "")
+(print "=== Whitespace Handling ===")
+
+;; Test 13: Leading whitespace
+(test-name "leading whitespace"
+  " Hello"
+  (string-titlecase " hello"))
+
+;; Test 14: Trailing whitespace
+(test-name "trailing whitespace"
+  "Hello "
+  (string-titlecase "hello "))
+
+;; Test 15: Leading and trailing whitespace
+(test-name "leading and trailing whitespace"
+  " Hello "
+  (string-titlecase " hello "))
+
+;; Test 16: Single space between words
+(test-name "single space"
+  "Hello World"
+  (string-titlecase "hello world"))
+
+;; Test 17: Tab character
+(test-name "tab character"
+  "Hello\tWorld"
+  (string-titlecase "hello\tworld"))
+
+;; ============================================================
+;; Special Characters
+;; ============================================================
+
+(print "")
+(print "=== Special Characters ===")
+
+;; Test 18: Numbers in string
+(test-name "numbers in string"
+  "Hello 123 World"
+  (string-titlecase "hello 123 world"))
+
+;; Test 19: Punctuation (stays as-is)
+(test-name "punctuation"
+  "Hello, World!"
+  (string-titlecase "hello, world!"))
+
+;; Test 20: String with apostrophe
+(test-name "apostrophe"
+  "Don't Stop"
+  (string-titlecase "don't stop"))
+
+;; ============================================================
+;; Long Strings
+;; ============================================================
+
+(print "")
+(print "=== Long Strings ===")
+
+;; Test 21: Long sentence
+(test-name "long sentence"
+  "The Quick Brown Fox Jumps Over The Lazy Dog"
+  (string-titlecase "the quick brown fox jumps over the lazy dog"))
+
+;; Test 22: Multiple consecutive spaces
+(test-name "consecutive spaces"
+  "A  B   C    D"
+  (string-titlecase "a  b   c    d"))
+
+;; ============================================================
+;; Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

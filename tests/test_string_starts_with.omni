@@ -1,0 +1,321 @@
+;; test_string_starts_with.omni - Comprehensive tests for string-starts-with primitive
+;;
+;; Tests prim_string_starts_with function (exposed as string-starts-with in OmniLisp)
+;; which returns true if a string starts with the given prefix.
+;;
+;; Run with: ./omni tests/test_string_starts_with.omni
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+(define test-bool name expected actual
+  (do
+    (set! test-count (+ test-count 1))
+    (if (= expected actual)
+        (do
+          (set! pass-count (+ pass-count 1))
+          (print "PASS:" name))
+        (do
+          (set! fail-count (+ fail-count 1))
+          (print "FAIL:" name)
+          (print "  Expected:" expected)
+          (print "  Got:" actual)))))
+
+;; ============================================================
+;; Basic Starts With Tests
+;; ============================================================
+
+(print "")
+(print "=== Basic Starts With Tests ===")
+
+;; Test 1: String starts with prefix
+(test-bool "starts with prefix"
+  1
+  (string-starts-with "hello world" "hello"))
+
+;; Test 2: String starts with single character
+(test-bool "starts with single char"
+  1
+  (string-starts-with "apple" "a"))
+
+;; Test 3: String starts with multi-character prefix
+(test-bool "starts with multi-char prefix"
+  1
+  (string-starts-with "programming" "prog"))
+
+;; Test 4: Entire string is the prefix
+(test-bool "string equals prefix"
+  1
+  (string-starts-with "hello" "hello"))
+
+;; Test 5: String does not start with prefix
+(test-bool "does not start with"
+  0
+  (string-starts-with "hello world" "world"))
+
+;; Test 6: Prefix appears but not at start
+(test-bool "prefix in middle"
+  0
+  (string-starts-with "hello world" "world"))
+
+;; ============================================================
+;; Empty String Tests
+;; ============================================================
+
+(print "")
+(print "=== Empty String Tests ===")
+
+;; Test 7: Empty string starts with empty string
+(test-bool "both empty"
+  1
+  (string-starts-with "" ""))
+
+;; Test 8: Non-empty string starts with empty prefix
+(test-bool "empty prefix"
+  1
+  (string-starts-with "hello" ""))
+
+;; Test 9: Empty string does not start with non-empty prefix
+(test-bool "empty string, non-empty prefix"
+  0
+  (string-starts-with "" "hello"))
+
+;; ============================================================
+;; Single Character Tests
+;; ============================================================
+
+(print "")
+(print "=== Single Character Tests ===")
+
+;; Test 10: Single char string starts with itself
+(test-bool "single char starts with itself"
+  1
+  (string-starts-with "a" "a"))
+
+;; Test 11: Single char string does not start with different char
+(test-bool "single char, different prefix"
+  0
+  (string-starts-with "a" "b"))
+
+;; Test 12: Single char string starts with empty prefix
+(test-bool "single char, empty prefix"
+  1
+  (string-starts-with "x" ""))
+
+;; ============================================================
+;; Case Sensitivity Tests
+;; ============================================================
+
+(print "")
+(print "=== Case Sensitivity Tests ===")
+
+;; Test 13: Case sensitive match
+(test-bool "case sensitive - uppercase"
+  1
+  (string-starts-with "Hello" "Hello"))
+
+;; Test 14: Case sensitive - no match
+(test-bool "case sensitive - wrong case"
+  0
+  (string-starts-with "Hello" "hello"))
+
+;; Test 15: Mixed case exact match
+(test-bool "mixed case exact"
+  1
+  (string-starts-with "HeLLo" "HeLLo"))
+
+;; Test 16: Mixed case no match
+(test-bool "mixed case no match"
+  0
+  (string-starts-with "HeLLo" "HELLO"))
+
+;; ============================================================
+;; Special Character Tests
+;; ============================================================
+
+(print "")
+(print "=== Special Character Tests ===")
+
+;; Test 17: Starts with space
+(test-bool "starts with space"
+  1
+  (string-starts-with " hello" " "))
+
+;; Test 18: Starts with newline
+(test-bool "starts with newline"
+  1
+  (string-starts-with "\nhello" "\n"))
+
+;; Test 19: Starts with tab
+(test-bool "starts with tab"
+  1
+  (string-starts-with "\thello" "\t"))
+
+;; Test 20: Starts with punctuation
+(test-bool "starts with punctuation"
+  1
+  (string-starts-with "!hello" "!"))
+
+;; Test 21: Starts with special chars
+(test-bool "starts with special chars"
+  1
+  (string-starts-with "@#$hello" "@#$"))
+
+;; ============================================================
+;; Prefix Longer Than String
+;; ============================================================
+
+(print "")
+(print "=== Prefix Longer Than String ===")
+
+;; Test 22: Prefix longer than string
+(test-bool "prefix longer than string"
+  0
+  (string-starts-with "hi" "hello"))
+
+;; Test 23: Much longer prefix
+(test-bool "much longer prefix"
+  0
+  (string-starts-with "a" "aaaaaaaaaaaaaaaaaa"))
+
+;; Test 24: One character difference in length
+(test-bool "prefix one char longer"
+  0
+  (string-starts-with "hello" "hello!"))
+
+;; ============================================================
+;; Numeric String Tests
+;; ============================================================
+
+(print "")
+(print "=== Numeric String Tests ===")
+
+;; Test 25: Numeric string starts with number
+(test-bool "numeric prefix"
+  1
+  (string-starts-with "12345" "123"))
+
+;; Test 26: Numeric string starts with digit
+(test-bool "starts with digit"
+  1
+  (string-starts-with "42" "4"))
+
+;; Test 27: Mixed alphanumeric prefix
+(test-bool "alphanumeric prefix"
+  1
+  (string-starts-with "test123" "test"))
+
+;; ============================================================
+;; Repeated Character Tests
+;; ============================================================
+
+(print "")
+(print "=== Repeated Character Tests ===")
+
+;; Test 28: Repeated character prefix
+(test-bool "repeated char prefix"
+  1
+  (string-starts-with "aaaaa" "aaa"))
+
+;; Test 29: Pattern repetition
+(test-bool "pattern repetition"
+  1
+  (string-starts-with "abcabcabc" "abcabc"))
+
+;; Test 30: Exact repeated string
+(test-bool "exact repeated string"
+  1
+  (string-starts-with "abcabc" "abcabc"))
+
+;; ============================================================
+;; Whitespace Tests
+;; ============================================================
+
+(print "")
+(print "=== Whitespace Tests ===")
+
+;; Test 31: Multiple leading spaces
+(test-bool "multiple leading spaces"
+  1
+  (string-starts-with "  hello" "  "))
+
+;; Test 32: Leading and trailing whitespace
+(test-bool "leading whitespace only"
+  1
+  (string-starts-with "  hello " "  "))
+
+;; Test 33: Tab and space combination
+(test-bool "tab and space"
+  1
+  (string-starts-with "\t hello" "\t "))
+
+;; ============================================================
+;; Path-like Strings
+;; ============================================================
+
+(print "")
+(print "=== Path-like Strings ===")
+
+;; Test 34: Absolute path prefix
+(test-bool "absolute path prefix"
+  1
+  (string-starts-with "/home/user/docs" "/home/user"))
+
+;; Test 35: Windows path prefix
+(test-bool "windows path prefix"
+  1
+  (string-starts-with "C:\\Users\\test" "C:\\Users"))
+
+;; Test 36: URL prefix
+(test-bool "URL prefix"
+  1
+  (string-starts-with "https://example.com/path" "https://"))
+
+;; ============================================================
+;; Edge Cases
+;; ============================================================
+
+(print "")
+(print "=== Edge Cases ===")
+
+;; Test 37: Very long string, short prefix
+(test-bool "very long string, short prefix"
+  1
+  (string-starts-with "a very long string with many words and characters" "a very"))
+
+;; Test 38: Prefix matches entire string
+(test-bool "prefix matches entire string"
+  1
+  (string-starts-with "exact match" "exact match"))
+
+;; Test 39: Mismatch within prefix
+(test-bool "mismatch within prefix"
+  0
+  (string-starts-with "hello world" "hello worx"))
+
+;; Test 40: Special characters in prefix
+(test-bool "special chars in prefix"
+  1
+  (string-starts-with "<!-- comment -->" "<!--"))
+
+;; ============================================================
+;; Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

@@ -96,6 +96,10 @@ typedef struct CodeGenContext {
 
     /* Phase 0: FFI counter for unique ccall site identifiers */
     int ffi_counter;           /* Unique ID for FFI call sites (dlopen/dlsym caching) */
+
+    /* Module compilation mode */
+    bool shared_mode;          /* Generate shared library init function instead of main() */
+    const char* module_name;   /* Module name for init function (e.g., "mymodule" -> _omni_module_mymodule_init) */
 } CodeGenContext;
 
 /* ============== Code Generator API ============== */
@@ -128,6 +132,12 @@ void omni_codegen_runtime_header(CodeGenContext* ctx);
 
 /* Generate the main function wrapper */
 void omni_codegen_main(CodeGenContext* ctx, OmniValue** exprs, size_t count);
+
+/* Generate module init function for shared library mode */
+void omni_codegen_module_init(CodeGenContext* ctx, OmniValue** exprs, size_t count);
+
+/* Set shared mode for module compilation */
+void omni_codegen_set_shared_mode(CodeGenContext* ctx, const char* module_name);
 
 /* ============== Expression Compilation ============== */
 

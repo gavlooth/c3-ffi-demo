@@ -88,8 +88,8 @@ typedef enum {
     TYPE_ID_THREAD,
     TYPE_ID_ERROR,
     TYPE_ID_ATOM,
-    TYPE_ID_RESERVED_14,      /* Was TYPE_ID_TUPLE - REMOVED 2026-01-15 */
-    TYPE_ID_RESERVED_15,      /* Was TYPE_ID_NAMED_TUPLE - REMOVED 2026-01-15 */
+    TYPE_ID_SET,              /* Set data structure (Issue 24) */
+    TYPE_ID_DATETIME,         /* DateTime (Issue 25) */
     TYPE_ID_GENERIC,
     TYPE_ID_KIND,
     TYPE_ID_NOTHING,

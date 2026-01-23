@@ -1,0 +1,218 @@
+;; test_string_pad_left.omni - Comprehensive tests for string-pad-left
+;;
+;; Tests prim_string_pad_left function (exposed as string-pad-left in OmniLisp)
+;; which pads strings on the left with a specified character (default space)
+;; to reach a target width.
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+(define test-eq [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (equal? expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+;; ============================================================
+;; Basic Padding Tests (Default Space)
+;; ============================================================
+
+(print "")
+(print "=== Basic Padding Tests (Default Space) ===")
+
+;; Test 1: Pad string to width 10
+(test-eq "pad to width 10"
+  "     hello"
+  (string-pad-left "hello" 10))
+
+;; Test 2: Pad string to width 5 (no padding needed)
+(test-eq "pad to width 5 (no padding)"
+  "hello"
+  (string-pad-left "hello" 5))
+
+;; Test 3: Pad empty string
+(test-eq "pad empty string"
+  "     "
+  (string-pad-left "" 5))
+
+;; Test 4: Pad single character
+(test-eq "pad single character"
+  "    a"
+  (string-pad-left "a" 5))
+
+;; Test 5: Pad to width 0
+(test-eq "pad to width 0"
+  "hello"
+  (string-pad-left "hello" 0))
+
+;; ============================================================
+;; Custom Padding Character Tests
+;; ============================================================
+
+(print "")
+(print "=== Custom Padding Character Tests ===")
+
+;; Test 6: Pad with zeros
+(test-eq "pad with zeros"
+  "00000123"
+  (string-pad-left "123" 8 "0"))
+
+;; Test 7: Pad with dots
+(test-eq "pad with dots"
+  "..hello"
+  (string-pad-left "hello" 7 "."))
+
+;; Test 8: Pad with asterisks
+(test-eq "pad with asterisks"
+  "***test"
+  (string-pad-left "test" 7 "*"))
+
+;; Test 9: Pad with hyphen
+(test-eq "pad with hyphen"
+  "---data"
+  (string-pad-left "data" 7 "-"))
+
+;; Test 10: Pad with underscore
+(test-eq "pad with underscore"
+  "____file"
+  (string-pad-left "file" 8 "_"))
+
+;; ============================================================
+;; Edge Cases and Boundary Tests
+;; ============================================================
+
+(print "")
+(print "=== Edge Cases and Boundary Tests ===")
+
+;; Test 11: String longer than width (no change)
+(test-eq "string longer than width"
+  "verylongstring"
+  (string-pad-left "verylongstring" 5))
+
+;; Test 12: String exactly equals width (no change)
+(test-eq "string equals width"
+  "exact"
+  (string-pad-left "exact" 5))
+
+;; Test 13: Pad with multi-char string (only first char used)
+(test-eq "pad with multi-char string"
+  "aaaaatest"
+  (string-pad-left "test" 9 "ab"))
+
+;; Test 14: Padding with empty string (defaults to space)
+(test-eq "pad with empty string"
+  "   test"
+  (string-pad-left "test" 7 ""))
+
+;; ============================================================
+;; Large Padding Tests
+;; ============================================================
+
+(print "")
+(print "=== Large Padding Tests ===")
+
+;; Test 15: Large padding (20 spaces)
+(test-eq "large padding"
+  "                    test"
+  (string-pad-left "test" 25))
+
+;; Test 16: Large padding with zeros
+(test-eq "large padding with zeros"
+  "00000000000000000123"
+  (string-pad-left "123" 21 "0"))
+
+;; ============================================================
+;; Special Character Padding Tests
+;; ============================================================
+
+(print "")
+(print "=== Special Character Padding Tests ===")
+
+;; Test 17: Pad with tab character
+(test-eq "pad with tab"
+  "\t\ttest"
+  (string-pad-left "test" 6 "\t"))
+
+;; Test 18: Pad with newline
+(test-eq "pad with newline"
+  "\n\nhello"
+  (string-pad-left "hello" 7 "\n"))
+
+;; Test 19: Pad with digit
+(test-eq "pad with digit"
+  "111value"
+  (string-pad-left "value" 8 "1"))
+
+;; Test 20: Pad with letter
+(test-eq "pad with letter"
+  "xxxxdata"
+  (string-pad-left "data" 8 "x"))
+
+;; ============================================================
+;; Unicode and Character Edge Cases
+;; ============================================================
+
+(print "")
+(print "=== Unicode and Character Edge Cases ===")
+
+;; Test 21: Pad with symbol character
+(test-eq "pad with symbol"
+  "$$$price"
+  (string-pad-left "price" 8 "$"))
+
+;; Test 22: Pad with plus sign
+(test-eq "pad with plus"
+  "++++10"
+  (string-pad-left "10" 6 "+"))
+
+;; Test 23: Pad with equals sign
+(test-eq "pad with equals"
+  "====value"
+  (string-pad-left "value" 9 "="))
+
+;; ============================================================
+;; Non-Destructive Test
+;; ============================================================
+
+(print "")
+(print "=== Non-Destructive Test ===")
+
+;; Test 24: Original string unchanged after padding
+(define original "hello")
+(define padded (string-pad-left original 10 "0"))
+(test-eq "original string unchanged"
+  "hello"
+  original)
+
+;; Test 25: Padded string is correct
+(test-eq "padded string correct"
+  "00000hello"
+  padded)
+
+;; ============================================================
+;; Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

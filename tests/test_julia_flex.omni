@@ -15,7 +15,7 @@
 ;; For now, skip type mismatch tests
 
 (println "\n--- Testing Function Type Enforcement ---")
-(define (add-ints x {Int} y {Int}) {Int}
+(define add-ints [x {Int}] [y {Int}] {Int}
   (+ x y))
 
 (println "add-ints (10 20): " (add-ints 10 20))
@@ -23,7 +23,7 @@
 ;; Type mismatch tests removed - will use algebraic effects
 
 (println "\n--- Testing Julia-style Flex (Implicit Any in params) ---")
-(define (flex-add a b)
+(define flex-add [a] [b]
   (+ a b))
 
 (println "Flex add (ints): " (flex-add 5 5))

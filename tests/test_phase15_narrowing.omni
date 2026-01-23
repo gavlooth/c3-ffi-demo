@@ -4,16 +4,18 @@
 ;; Test 1: Simple non-escaping variable in if-then branch
 ;; Variable x is defined in the then branch and doesn't escape
 ;; Should be stack-allocated
+; REVIEWED:SYNTAX
 (define test1-simple-non-escaping
   (lambda (cond)
     (if cond
         (let [x 42]
-          (+ x 10))  ; x doesn't escape the if-then branch
+          (+ x 10))  ; x doesn't escape to if-then branch
         0)))
 
 ;; Test 2: Variable that escapes to parent scope
 ;; Variable y is defined in the then branch and returned
 ;; Should be region-allocated (escapes via RETURN)
+; REVIEWED:SYNTAX
 (define test2-escaping-return
   (lambda (cond)
     (if cond
@@ -22,7 +24,7 @@
         0)))
 
 ;; Test 3: Non-escaping variable in let body
-;; Variable z is defined in let but doesn't escape the let body
+;; Variable z is defined in let but doesn't escape to let body
 ;; Should be stack-allocated
 (define test3-let-non-escaping
   (lambda (n)
@@ -89,7 +91,7 @@
         0)))
 
 ;; Test 10: Variable used in computation but returned indirectly
-;; The result of computation escapes, not the original variable
+;; The result of computation escapes, but not to original variable
 (define test10-indirect-escape
   (lambda (n)
     (let [x (* n 2)]

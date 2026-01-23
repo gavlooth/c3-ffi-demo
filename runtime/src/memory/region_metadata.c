@@ -898,8 +898,23 @@ static void init_core_type_metadata(Region* r) {
         .debug_info = "Atom (symbol-like)"
     };
 
-    /* TYPE_ID_RESERVED_14 (Was TYPE_ID_TUPLE - REMOVED 2026-01-15)
-     * Tuples are deprecated - use arrays instead */
+    /* TYPE_ID_SET (Issue 24: Set data structure) */
+    r->type_table[TYPE_ID_SET] = (TypeMetadata){
+        .name = "Set",
+        .type_id = TYPE_ID_SET,
+        .size = sizeof(struct Obj),
+        .alignment = 8,
+        .num_pointer_fields = 1,
+        .pointer_offsets = {offsetof(struct Obj, ptr)},
+        .can_inline = true,
+        .inline_threshold = 64,
+        .clone = clone_dict,            /* CTRR: set uses same clone as dict (hashmap-based) */
+        .trace = trace_dict,            /* CTRR: trace hashmap entries */
+        .destroy = NULL,
+        .equals = NULL,
+        .hash = NULL,
+        .debug_info = "Set data structure (Issue 24)"
+    };
 
     /* TYPE_ID_RESERVED_15 (Was TYPE_ID_NAMED_TUPLE - REMOVED 2026-01-15)
      * Named tuples are deprecated - use dicts instead */

@@ -65,6 +65,7 @@ ConditionType* condition_type_register(
     return type;
 }
 
+// REVIEWED:NAIVE
 ConditionType* condition_type_lookup(const char* name) {
     for (ConditionType* t = condition_registry; t; t = t->next) {
         if (strcmp(t->name, name) == 0) {
@@ -74,6 +75,7 @@ ConditionType* condition_type_lookup(const char* name) {
     return NULL;
 }
 
+// REVIEWED:NAIVE
 ConditionType* condition_type_lookup_id(uint32_t id) {
     for (ConditionType* t = condition_registry; t; t = t->next) {
         if (t->id == id) {
@@ -201,6 +203,7 @@ Condition* condition_create_with_message(ConditionType* type, const char* messag
     return cond;
 }
 
+// REVIEWED:NAIVE
 static ConditionSlot* find_slot(Condition* cond, const char* name) {
     for (ConditionSlot* s = cond->slots; s; s = s->next) {
         if (strcmp(s->name, name) == 0) {
@@ -412,6 +415,7 @@ Condition* make_unbound_variable(const char* name) {
     return cond;
 }
 
+// TESTED - runtime/tests/test_condition_additions.c
 Condition* make_undefined_function(const char* name) {
     Condition* cond = condition_create(COND_UNDEFINED_FUNCTION);
     if (!cond) return NULL;
@@ -427,6 +431,7 @@ Condition* make_undefined_function(const char* name) {
 Condition* make_division_by_zero(void) {
     return condition_create_with_message(
         COND_DIVISION_BY_ZERO,
+// TESTED - runtime/tests/test_condition_additions.c
         "Division by zero"
     );
 }
@@ -435,6 +440,7 @@ Condition* make_ffi_error(const char* message, const char* function_name) {
     Condition* cond = condition_create(COND_FFI_ERROR);
     if (!cond) return NULL;
 
+// TESTED - runtime/tests/test_condition_additions.c
     condition_set_slot_string(cond, "message", message);
     if (function_name) {
         condition_set_slot_string(cond, "function", function_name);
@@ -459,11 +465,11 @@ Condition* make_memory_error(const char* message, void* address) {
 
 #include "effect.h"
 #include "../include/omni.h"
+#include "memory/region_core.h"  /* For region_alloc inline function */
 
 /* Forward declaration */
 extern Region* _global_region;
 extern void _ensure_global_region(void);
-extern Obj* region_alloc(Region* r, size_t size);
 
 /*
  * mk_condition_obj - Wrap a Condition struct in an Obj
@@ -483,6 +489,44 @@ Obj* mk_condition_obj(Condition* cond) {
     obj->mark = 1;
 
     return obj;
+}
+
+/*
+ * mk_ffi_load_error - Create FFI load error as Obj*
+ *
+ * Issue 19: ccall error handling
+ * Creates an FFI error condition wrapped in an Obj* that can be returned
+ * from generated ccall code when dlopen/dlsym fails.
+ *
+ * This allows Lisp code to detect and handle FFI failures:
+ *   (let [result (ccall "nonexistent.so" "foo" [] {CInt})]
+ *     (if (condition? result)
+ *         (handle-error result)
+ *         (use-result result)))
+ */
+Obj* mk_ffi_load_error(const char* library, const char* function) {
+    /* Build error message */
+    char msg[512];
+    snprintf(msg, sizeof(msg), "FFI: could not load '%s' from '%s'",
+             function ? function : "(unknown)",
+             library ? library : "(unknown)");
+
+    /* Create FFI error condition */
+    Condition* cond = make_ffi_error(msg, function);
+    if (!cond) {
+        /* Fallback: return NOTHING if condition creation fails */
+        extern Obj omni_nothing_obj;
+        return &omni_nothing_obj;
+    }
+
+    /* Wrap as Obj* for return to Lisp code */
+    Obj* result = mk_condition_obj(cond);
+    if (!result) {
+        extern Obj omni_nothing_obj;
+        return &omni_nothing_obj;
+    }
+
+    return result;
 }
 
 /*

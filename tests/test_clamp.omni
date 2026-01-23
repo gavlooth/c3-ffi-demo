@@ -1,0 +1,177 @@
+;; test_clamp.omni - Test clamp function
+;;
+;; The clamp function constrains a value between min and max.
+;; (clamp x min max) returns min if x < min, max if x > max, otherwise x.
+;; Run with: ./omni tests/test_clamp.omni
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+(define test-eq [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (= expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+(define test-approx [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (let ((tolerance 1e-10))
+    (if (and (number? expected)
+             (number? actual)
+             (<= (abs (- expected actual)) tolerance))
+        (do
+          (set! pass-count (+ pass-count 1))
+          (print "PASS:" name))
+        (do
+          (set! fail-count (+ fail-count 1))
+          (print "FAIL:" name)
+          (print "  Expected:" expected)
+          (print "  Got:" actual)
+          (print "  Diff:" (abs (- expected actual)))))))
+
+;; ============================================================
+;; Test 1: Clamp value within range (identity case)
+;; Tests that clamp returns value unchanged when it's within bounds
+;; ============================================================
+
+(test-eq "clamp within range" 5 (clamp 5 0 10))
+
+;; ============================================================
+;; Test 2: Clamp value below minimum
+;; Tests that clamp returns min when value is below range
+;; ============================================================
+
+(test-eq "clamp below min" 0 (clamp -5 0 10))
+
+;; ============================================================
+;; Test 3: Clamp value above maximum
+;; Tests that clamp returns max when value is above range
+;; ============================================================
+
+(test-eq "clamp above max" 10 (clamp 20 0 10))
+
+;; ============================================================
+;; Test 4: Clamp value equals minimum (boundary)
+;; Tests that clamp handles value at lower boundary
+;; ============================================================
+
+(test-eq "clamp at min" 5 (clamp 5 5 10))
+
+;; ============================================================
+;; Test 5: Clamp value equals maximum (boundary)
+;; Tests that clamp handles value at upper boundary
+;; ============================================================
+
+(test-eq "clamp at max" 10 (clamp 10 0 10))
+
+;; ============================================================
+;; Test 6: Clamp with negative range
+;; Tests that clamp works correctly with negative values
+;; ============================================================
+
+(test-eq "clamp negative range" -5 (clamp -5 -10 0))
+(test-eq "clamp negative below" -10 (clamp -15 -10 0))
+(test-eq "clamp negative above" 0 (clamp 5 -10 0))
+
+;; ============================================================
+;; Test 7: Clamp with zero range
+;; Tests that clamp works when range contains zero
+;; ============================================================
+
+(test-eq "clamp zero range low" 0 (clamp -5 0 5))
+(test-eq "clamp zero range mid" 0 (clamp 0 0 5))
+(test-eq "clamp zero range high" 5 (clamp 5 0 5))
+
+;; ============================================================
+;; Test 8: Clamp with floating point values
+;; Tests that clamp works correctly with floats
+;; ============================================================
+
+(test-approx "clamp float within" 5.5 (clamp 5.5 0.0 10.0))
+(test-approx "clamp float below min" 0.0 (clamp -2.5 0.0 10.0))
+(test-approx "clamp float above max" 10.0 (clamp 15.5 0.0 10.0))
+(test-approx "clamp float negative" -2.5 (clamp -2.5 -5.0 0.0))
+
+;; ============================================================
+;; Test 9: Clamp with mixed int/float (should promote to float)
+;; Tests type coercion in clamp
+;; ============================================================
+
+(test-approx "clamp mixed promote to float" 5.0 (clamp 5 0.0 10.0))
+
+;; ============================================================
+;; Test 10: Clamp with large positive values
+;; Tests clamp with large integers
+;; ============================================================
+
+(test-eq "clamp large positive within" 500 (clamp 500 0 1000))
+(test-eq "clamp large positive above" 1000 (clamp 2000 0 1000))
+
+;; ============================================================
+;; Test 11: Clamp with large negative values
+;; Tests clamp with large negative integers
+;; ============================================================
+
+(test-eq "clamp large negative within" -500 (clamp -500 -1000 0))
+(test-eq "clamp large negative below" -1000 (clamp -2000 -1000 0))
+
+;; ============================================================
+;; Test 12: Clamp asymmetric range
+;; Tests that clamp works with non-symmetric ranges
+;; ============================================================
+
+(test-eq "clamp asymmetric within" 5 (clamp 5 2 8))
+(test-eq "clamp asymmetric below" 2 (clamp 0 2 8))
+(test-eq "clamp asymmetric above" 8 (clamp 10 2 8))
+
+;; ============================================================
+;; Test 13: Clamp with single point range (min == max)
+;; Tests that clamp returns only valid value
+;; ============================================================
+
+(test-eq "clamp single point" 7 (clamp 5 7 7))
+(test-eq "clamp single point at" 7 (clamp 7 7 7))
+(test-eq "clamp single point above" 7 (clamp 10 7 7))
+
+;; ============================================================
+;; Test 14: Clamp with very small decimal values
+;; Tests precision with tiny floats
+;; ============================================================
+
+(test-approx "clamp tiny positive" 0.001 (clamp 0.001 0.0 1.0))
+(test-approx "clamp tiny negative" -0.001 (clamp -0.001 -1.0 0.0))
+
+;; ============================================================
+;; Test 15: Clamp at LONG_MIN boundary (edge case)
+;; Tests behavior with minimum long value
+;; ============================================================
+
+(test-eq "clamp LONG_MIN edge" -9223372036854775807 (clamp -9223372036854775808 -9223372036854775807 0))
+
+;; ============================================================
+;; Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

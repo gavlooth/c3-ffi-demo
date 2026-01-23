@@ -135,6 +135,7 @@ bool type_is_compatible(ConcreteType* a, ConcreteType* b) {
             return type_is_compatible(a->closure.return_type,
                                      b->closure.return_type);
 
+// REVIEWED:NAIVE
         case TYPE_KIND_UNION:
             /* Unions are compatible if all members are compatible */
             if (a->type_union.member_count != b->type_union.member_count) {

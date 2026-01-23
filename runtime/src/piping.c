@@ -18,6 +18,7 @@
 
 /* ============== Pipe Operator ============== */
 
+// TESTED - tests/test_pipe_operator.lisp
 /*
  * prim_pipe: Pipe operator for function chaining
  *
@@ -33,34 +34,28 @@
  * Note: This is a runtime primitive. The compiler should optimize
  * pipe chains to avoid intermediate allocations.
  */
+/*
+ * Issue 29: Properly implemented pipe operator to call closures.
+ */
 Obj* prim_pipe(Obj* value, Obj* func) {
     if (!func) return value;
 
     /* Check if func is a closure (lambda/function) */
     if (IS_BOXED(func) && func->tag == TAG_CLOSURE) {
-        /* Apply the function to the value */
-        /* For now, we use a simple approach. In a full implementation,
-         * this would call the closure with the value as argument. */
+        Closure* c = (Closure*)func->ptr;
+        if (!c || !c->fn) return value;
 
-        /* Extract closure environment and code */
-        Closure* closure = (Closure*)func->ptr;
-        if (!closure) return value;
-
-        /* For primitive functions stored as symbols, we'd look them up
-         * and apply them. This is a simplified version. */
-
-        /* Placeholder: Just return the value for now */
-        /* The compiler would handle actual function application */
-        return value;
+        /* Create single-element args list and call prim_apply */
+        Obj* args = mk_pair(value, NULL);
+        Obj* result = prim_apply(func, args);
+        return result ? result : value;
     }
 
-    /* If func is a symbol, look up the function and apply it */
+    /* If func is a symbol, we cannot look it up at runtime without
+     * an environment reference. The compiler should resolve symbols
+     * to closures before calling prim_pipe. */
     if (IS_BOXED(func) && func->tag == TAG_SYM) {
-        const char* func_name = (const char*)func->ptr;
-
-        /* This would need to look up the function in the environment
-         * and apply it to the value. For now, it's a placeholder. */
-
+        /* Symbol resolution requires compiler support. Return value unchanged. */
         return value;
     }
 
@@ -149,6 +144,8 @@ Obj* prim_compose_many(Obj* functions) {
  * Note: This is typically handled by the reader/parser, which
  * converts .field to (dot-field 'field obj). This primitive
  * does the actual field lookup.
+ *
+ * Issue 29: Properly implemented to access dict fields and pair components.
  */
 Obj* prim_dot_field(Obj* field_name, Obj* obj) {
     if (!field_name || !obj) return NULL;
@@ -163,29 +160,51 @@ Obj* prim_dot_field(Obj* field_name, Obj* obj) {
 
     if (!field) return NULL;
 
-    /* Construct accessor function name: obj-field */
-    /* For example, .x becomes point-x */
-    size_t len = strlen(field) + 20;  /* Enough for "get--" + field */
-    char* accessor = malloc(len);
-    strcpy(accessor, "get-");
-    strcat(accessor, field);
+    /* Handle dicts - look up field by name */
+    if (IS_BOXED(obj) && obj->tag == TAG_DICT) {
+        return dict_get_by_name(obj, field);
+    }
 
-    /* This would need to look up the accessor function and call it.
-     * For now, this is a placeholder that returns NULL. */
+    /* Handle pairs - support car/cdr/a/b/first/rest accessors */
+    if (IS_BOXED(obj) && obj->tag == TAG_PAIR) {
+        if (strcmp(field, "car") == 0 || strcmp(field, "a") == 0 ||
+            strcmp(field, "first") == 0 || strcmp(field, "head") == 0) {
+            return obj->a;
+        }
+        if (strcmp(field, "cdr") == 0 || strcmp(field, "b") == 0 ||
+            strcmp(field, "rest") == 0 || strcmp(field, "tail") == 0) {
+            return obj->b;
+        }
+    }
 
-    free(accessor);
+    /* Handle arrays - support numeric string indices and length */
+    if (IS_BOXED(obj) && obj->tag == TAG_ARRAY) {
+        if (strcmp(field, "length") == 0 || strcmp(field, "len") == 0) {
+            return mk_int(array_length(obj));
+        }
+        /* Try parsing as index */
+        char* endptr;
+        long idx = strtol(field, &endptr, 10);
+        if (*endptr == '\0') {
+            return array_get(obj, (int)idx);
+        }
+    }
 
-    /* In a full implementation, we'd:
-     * 1. Look up the accessor function (e.g., get-x or point-x)
-     * 2. Call it with obj as argument
-     * 3. Return the result
-     */
+    /* Handle strings - support length accessor */
+    if (IS_BOXED(obj) && obj->tag == TAG_STRING) {
+        if (strcmp(field, "length") == 0 || strcmp(field, "len") == 0) {
+            const char* s = (const char*)obj->ptr;
+            return mk_int(s ? (int)strlen(s) : 0);
+        }
+    }
 
     return NULL;
 }
 
 /*
  * prim_dot_field_chain: Chain multiple field accesses
+ * 
+ * TESTED - tests/test_dot_field_chain.lisp
  *
  * Args: obj, field_names (list of symbols)
  * Returns: The nested field value
@@ -220,6 +239,8 @@ Obj* prim_dot_field_chain(Obj* obj, Obj* field_names) {
  * Example:
  *   (method-chain obj [(add . 5) (mul . 2)])
  *   Equivalent to: (mul (add obj 5) 2)
+ *
+ * Issue 29: Properly implemented method chaining.
  */
 Obj* prim_method_chain(Obj* obj, Obj* method_calls) {
     Obj* current = obj;
@@ -229,14 +250,30 @@ Obj* prim_method_chain(Obj* obj, Obj* method_calls) {
         Obj* call_spec = calls->a;
 
         if (IS_BOXED(call_spec) && call_spec->tag == TAG_PAIR) {
-            Obj* method_name = call_spec->a;
-            Obj* method_args = call_spec->b;
+            Obj* method = call_spec->a;
+            Obj* extra_args = call_spec->b;
 
-            /* Call the method with current as first argument */
-            /* (method-name current . method-args) */
-
-            /* For now, this is a placeholder */
-            /* In a full implementation, we'd look up and call the method */
+            /* If method is a closure, call it with current as first arg */
+            if (IS_BOXED(method) && method->tag == TAG_CLOSURE) {
+                /* Build args list: (current . extra_args) */
+                Obj* full_args = mk_pair(current, extra_args);
+                Obj* result = prim_apply(method, full_args);
+                if (result) {
+                    current = result;
+                }
+            }
+            /* If method is a symbol/string, try field access followed by call */
+            else if (IS_BOXED(method) && (method->tag == TAG_SYM || method->tag == TAG_STRING)) {
+                /* First try as field accessor (for dict method lookup) */
+                Obj* field_value = prim_dot_field(method, current);
+                if (field_value && IS_BOXED(field_value) && field_value->tag == TAG_CLOSURE) {
+                    /* Found a closure in the field - call it with extra args */
+                    Obj* result = prim_apply(field_value, extra_args);
+                    if (result) {
+                        current = result;
+                    }
+                }
+            }
         }
 
         calls = calls->b;
@@ -285,12 +322,59 @@ Obj* prim_flip(Obj* func) {
  *
  * Example:
  *   (apply + [1 2 3]) = 6
+ *
+ * Issue 29: Properly implemented to call closure function pointers.
  */
 Obj* prim_apply(Obj* func, Obj* args) {
     if (!func) return NULL;
 
-    /* This would need to call the function with the given args
-     * For now, it's a placeholder */
+    /* Handle closures */
+    if (IS_BOXED(func) && func->tag == TAG_CLOSURE) {
+        Closure* c = (Closure*)func->ptr;
+        if (!c || !c->fn) return NULL;
+
+        /* Count arguments in the list */
+        int argc = 0;
+        Obj* cur = args;
+        while (cur && IS_BOXED(cur) && cur->tag == TAG_PAIR) {
+            argc++;
+            cur = cur->b;
+        }
+
+        /* Build argument array */
+        Obj** argv = NULL;
+        if (argc > 0) {
+            argv = malloc(argc * sizeof(Obj*));
+            if (!argv) return NULL;
+
+            cur = args;
+            for (int i = 0; i < argc && cur && IS_BOXED(cur) && cur->tag == TAG_PAIR; i++) {
+                argv[i] = cur->a;
+                cur = cur->b;
+            }
+        }
+
+        /* Arity check */
+        if (c->arity >= 0 && c->arity != argc) {
+            if (argv) free(argv);
+            return NULL;  /* Arity mismatch */
+        }
+
+        /* Call the closure */
+        Obj* result;
+        if (c->region_aware && c->fn_region) {
+            /* Region-aware function */
+            omni_ensure_global_region();
+            Region* r = omni_get_global_region();
+            result = c->fn_region(r, c->captures, argv, argc);
+        } else {
+            /* Legacy function */
+            result = c->fn(c->captures, argv, argc);
+        }
+
+        if (argv) free(argv);
+        return result;
+    }
 
     return NULL;
 }

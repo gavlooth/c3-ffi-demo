@@ -689,6 +689,7 @@ For replay and debugging:
     {CInt})
 
   ;; High-level API
+  ; REVIEWED:SYNTAX
   (define (with-db path body)
     (match (sqlite3_open path)
       [(Ok db)

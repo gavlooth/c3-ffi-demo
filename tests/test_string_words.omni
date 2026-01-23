@@ -1,0 +1,259 @@
+;; test_string_words.omni - Comprehensive tests for string-words primitive
+;;
+;; Tests prim_string_words function which splits a string into words
+;; based on whitespace (spaces, tabs, newlines). Returns a list of words.
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+(define test-strings [name] [expected-list] [actual-list]
+  (do
+    (set! test-count (+ test-count 1))
+    ;; Compare lists by converting to strings for comparison
+    (if (= (string-join "," expected-list) (string-join "," actual-list))
+        (do
+          (set! pass-count (+ pass-count 1))
+          (print "PASS:" name))
+        (do
+          (set! fail-count (+ fail-count 1))
+          (print "FAIL:" name)
+          (print "  Expected:" (string-join "," expected-list))
+          (print "  Got:" (string-join "," actual-list))))))
+
+;; ============================================================
+;; Basic Word Splitting Tests
+;; ============================================================
+
+(print "")
+(print "=== Basic Word Splitting Tests ===")
+
+;; Test 1: Simple space-separated words
+(test-strings "simple space-separated"
+  '("hello" "world")
+  (string-words "hello world"))
+
+;; Test 2: Multiple words
+(test-strings "multiple words"
+  '("the" "quick" "brown" "fox")
+  (string-words "the quick brown fox"))
+
+;; Test 3: Single word (no spaces)
+(test-strings "single word"
+  '("hello")
+  (string-words "hello"))
+
+;; ============================================================
+;; Whitespace Handling Tests
+;; ============================================================
+
+(print "")
+(print "=== Whitespace Handling Tests ===")
+
+;; Test 4: Multiple consecutive spaces
+(test-strings "multiple consecutive spaces"
+  '("hello" "world")
+  (string-words "hello    world"))
+
+;; Test 5: Leading spaces
+(test-strings "leading spaces"
+  '("hello" "world")
+  (string-words "  hello world"))
+
+;; Test 6: Trailing spaces
+(test-strings "trailing spaces"
+  '("hello" "world")
+  (string-words "hello world  "))
+
+;; Test 7: Leading and trailing spaces
+(test-strings "leading and trailing spaces"
+  '("hello" "world")
+  (string-words "  hello world  "))
+
+;; Test 8: Tab character
+(test-strings "tab character"
+  '("hello" "world")
+  (string-words "hello\tworld"))
+
+;; Test 9: Multiple tabs
+(test-strings "multiple tabs"
+  '("hello" "world")
+  (string-words "hello\t\tworld"))
+
+;; Test 10: Mixed whitespace (spaces and tabs)
+(test-strings "mixed spaces and tabs"
+  '("hello" "world" "test")
+  (string-words "hello \t world\ttest"))
+
+;; Test 11: Newline character
+(test-strings "newline character"
+  '("hello" "world")
+  (string-words "hello\nworld"))
+
+;; Test 12: Mixed whitespace types (space, tab, newline)
+(test-strings "mixed whitespace types"
+  '("hello" "world" "test")
+  (string-words "hello \n \t world \ttest"))
+
+;; ============================================================
+;; Empty String Tests
+;; ============================================================
+
+(print "")
+(print "=== Empty String Tests ===")
+
+;; Test 13: Empty string
+(test-strings "empty string"
+  '()
+  (string-words ""))
+
+;; Test 14: Only whitespace (spaces)
+(test-strings "only spaces"
+  '()
+  (string-words "     "))
+
+;; Test 15: Only whitespace (mixed)
+(test-strings "only whitespace mixed"
+  '()
+  (string-words " \t\n \r "))
+
+;; ============================================================
+;; Special Characters and Punctuation
+;; ============================================================
+
+(print "")
+(print "=== Special Characters Tests ===")
+
+;; Test 16: Words with punctuation
+(test-strings "words with punctuation"
+  '("hello," "world!" "test?")
+  (string-words "hello, world! test?"))
+
+;; Test 17: Words with apostrophes
+(test-strings "words with apostrophes"
+  '("don't" "can't" "it's")
+  (string-words "don't can't it's"))
+
+;; Test 18: Words with hyphens
+(test-strings "words with hyphens"
+  '("state-of-the-art" "well-known")
+  (string-words "state-of-the-art well-known"))
+
+;; Test 19: Words with underscores
+(test-strings "words with underscores"
+  '("hello_world" "test_var")
+  (string-words "hello_world test_var"))
+
+;; Test 20: Words with periods
+(test-strings "words with periods"
+  '("example.com" "U.S.A.")
+  (string-words "example.com U.S.A."))
+
+;; ============================================================
+;; Numeric String Tests
+;; ============================================================
+
+(print "")
+(print "=== Numeric String Tests ===")
+
+;; Test 21: Numeric words
+(test-strings "numeric words"
+  '("123" "456" "789")
+  (string-words "123 456 789"))
+
+;; Test 22: Alphanumeric words
+(test-strings "alphanumeric words"
+  '("test123" "abc456" "xyz789")
+  (string-words "test123 abc456 xyz789"))
+
+;; Test 23: Decimal numbers
+(test-strings "decimal numbers"
+  '("3.14" "2.71" "1.41")
+  (string-words "3.14 2.71 1.41"))
+
+;; ============================================================
+;; Case Sensitivity Tests
+;; ============================================================
+
+(print "")
+(print "=== Case Sensitivity Tests ===")
+
+;; Test 24: Mixed case words
+(test-strings "mixed case"
+  '("Hello" "World" "TEST")
+  (string-words "Hello World TEST"))
+
+;; Test 25: All uppercase
+(test-strings "all uppercase"
+  '("HELLO" "WORLD")
+  (string-words "HELLO WORLD"))
+
+;; Test 26: All lowercase
+(test-strings "all lowercase"
+  '("hello" "world")
+  (string-words "hello world"))
+
+;; ============================================================
+;; Special String Cases
+;; ============================================================
+
+(print "")
+(print "=== Special String Cases ===")
+
+;; Test 27: Single character words
+(test-strings "single character words"
+  '("a" "b" "c")
+  (string-words "a b c"))
+
+;; Test 28: Very long word (no spaces)
+(test-strings "very long word"
+  '("supercalifragilisticexpialidocious")
+  (string-words "supercalifragilisticexpialidocious"))
+
+;; Test 29: Unicode/special ASCII characters
+(test-strings "special ASCII characters"
+  '("hello" "world" "@#$%")
+  (string-words "hello world @#$%"))
+
+;; ============================================================
+;; Edge Cases
+;; ============================================================
+
+(print "")
+(print "=== Edge Cases ===")
+
+;; Test 30: Word with leading zeros
+(test-strings "leading zeros"
+  '("001" "002" "003")
+  (string-words "001 002 003"))
+
+;; Test 31: Words with equals sign
+(test-strings "words with equals"
+  '("key=value" "name=test")
+  (string-words "key=value name=test"))
+
+;; Test 32: Words with colon
+(test-strings "words with colon"
+  '("name:value" "id:123")
+  (string-words "name:value id:123"))
+
+;; ============================================================
+;; Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

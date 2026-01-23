@@ -1,0 +1,249 @@
+;; test_string_replace_first.omni - Comprehensive tests for string-replace-first primitive
+;;
+;; Tests prim_string_replace_first function (exposed as string-replace-first in OmniLisp)
+;; which replaces ONLY the first occurrence of a substring with another substring.
+;;
+;; Run with: ./omni tests/test_string_replace_first.omni
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+(define test-string [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (equal? expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+;; ============================================================
+;; Basic Replacement Tests (First Occurrence Only)
+;; ============================================================
+
+(print "")
+(print "=== Basic Replacement Tests (First Only) ===")
+
+;; Test 1: Replace single occurrence (only one exists)
+(test-string "replace single occurrence"
+  "hello world"
+  (string-replace-first "foo" "world" "hello foo"))
+
+;; Test 2: Replace first occurrence (multiple exist)
+(test-string "replace first of multiple"
+  "dog cat cat"
+  (string-replace-first "cat" "dog" "cat cat cat"))
+
+;; Test 3: Replace first occurrence at start
+(test-string "replace first at start"
+  "XYZhello hello"
+  (string-replace-first "hello" "XYZ" "hello hello"))
+
+;; Test 4: Replace first occurrence at end
+(test-string "replace first at end"
+  "hello helloXYZ"
+  (string-replace-first "hello" "XYZ" "hello hello"))
+
+;; ============================================================
+;; Multiple Occurrences - Only First Replaced
+;; ============================================================
+
+(print "")
+(print "=== Multiple Occurrences Tests (First Only) ===")
+
+;; Test 5: Three occurrences, only first replaced
+(test-string "three occurrences, first replaced"
+  "X Y Y"
+  (string-replace-first "Y" "X" "Y Y Y"))
+
+;; Test 6: Consecutive occurrences, only first replaced
+(test-string "consecutive, first replaced"
+  "X Y Y"
+  (string-replace-first "Y" "X" "Y Y Y"))
+
+;; Test 7: Many occurrences, only first replaced
+(test-string "many occurrences, first replaced"
+  "X 1 1 1 1 1 1"
+  (string-replace-first "1" "X" "1 1 1 1 1 1 1"))
+
+;; ============================================================
+;; Empty String Tests
+;; ============================================================
+
+(print "")
+(print "=== Empty String Tests ===")
+
+;; Test 8: Empty old string (should return unchanged)
+(test-string "empty old string"
+  "hello world"
+  (string-replace-first "" "XYZ" "hello world"))
+
+;; Test 9: Empty new string (delete first occurrence)
+(test-string "empty new string (delete first)"
+  "hello  world"
+  (string-replace-first "foo" "" "hello foo world"))
+
+;; Test 10: Empty input string
+(test-string "empty input string"
+  ""
+  (string-replace-first "foo" "bar" ""))
+
+;; ============================================================
+;; No Match Tests
+;; ============================================================
+
+(print "")
+(print "=== No Match Tests ===")
+
+;; Test 11: Pattern not found
+(test-string "pattern not found"
+  "hello world"
+  (string-replace-first "xyz" "abc" "hello world"))
+
+;; Test 12: Case-sensitive no match
+(test-string "case-sensitive no match"
+  "Hello World"
+  (string-replace-first "hello" "hi" "Hello World"))
+
+;; Test 13: Single character no match
+(test-string "single char no match"
+  "abc"
+  (string-replace-first "x" "y" "abc"))
+
+;; ============================================================
+;; Multi-character Patterns
+;; ============================================================
+
+(print "")
+(print "=== Multi-character Patterns ===")
+
+;; Test 14: Replace first space with multi-char string
+(test-string "multi-char replacement, first only"
+  "hello___world world"
+  (string-replace-first " " "___" "hello world world"))
+
+;; Test 15: Replace first longer substring
+(test-string "replace first longer substring"
+  "HELLO world"
+  (string-replace-first "hello" "HELLO" "hello world"))
+
+;; Test 16: Replace first word with phrase
+(test-string "replace first word with phrase"
+  "I really enjoy eating apples"
+  (string-replace-first "like" "really enjoy eating" "I like apples"))
+
+;; ============================================================
+;; Special Character Tests
+;; ============================================================
+
+(print "")
+(print "=== Special Character Tests ===")
+
+;; Test 17: Replace first space
+(test-string "replace first space"
+  "hello-world world"
+  (string-replace-first " " "-" "hello world world"))
+
+;; Test 18: Replace first newline
+(test-string "replace first newline"
+  "line1Xline2\nline3"
+  (string-replace-first "\n" "X" "line1\nline2\nline3"))
+
+;; Test 19: Replace first tab
+(test-string "replace first tab"
+  "col1Xcol2\tcol3"
+  (string-replace-first "\t" "X" "col1\tcol2\tcol3"))
+
+;; Test 20: Replace first special character
+(test-string "replace first comma"
+  "hello.world, test"
+  (string-replace-first "," "." "hello.world, test"))
+
+;; ============================================================
+;; Numeric String Tests
+;; ============================================================
+
+(print "")
+(print "=== Numeric String Tests ===")
+
+;; Test 21: Replace first numeric substring
+(test-string "numeric substring, first only"
+  "value: 42 42"
+  (string-replace-first "XXX" "42" "value: XXX 42"))
+
+;; Test 22: Replace first number in string
+(test-string "replace first number"
+  "a-b-c"
+  (string-replace-first "1" "-" "a1b1c"))
+
+;; Test 23: Replace first decimal point
+(test-string "replace first decimal"
+  "3,14.14"
+  (string-replace-first "." "," "3.14.14"))
+
+;; ============================================================
+;; Edge Cases
+;; ============================================================
+
+(print "")
+(print "=== Edge Cases ===")
+
+;; Test 24: Same string as pattern
+(test-string "same string as pattern"
+  "REPLACEMENT world"
+  (string-replace-first "PATTERN" "REPLACEMENT" "PATTERN world"))
+
+;; Test 25: Replacement contains search pattern
+(test-string "replacement contains pattern, first only"
+  "XXa a"
+  (string-replace-first "a" "Xa" "a a"))
+
+;; Test 26: Single character replacement
+(test-string "single char replacement, first only"
+  "Xbc b"
+  (string-replace-first "a" "X" "abc b"))
+
+;; Test 27: Replace first occurrence of entire string
+(test-string "replace entire string"
+  "NEW"
+  (string-replace-first "OLD" "NEW" "OLD"))
+
+;; Test 28: Replace with identical string (no-op)
+(test-string "identical replacement"
+  "hello world hello"
+  (string-replace-first "hello world" "hello world" "hello world hello"))
+
+;; Test 29: First occurrence is only one
+(test-string "first is only occurrence"
+  "X Y Z"
+  (string-replace-first "Y" "X" "X Y Z"))
+
+;; Test 30: Pattern at beginning, multiple occurrences
+(test-string "pattern at start, multiple"
+  "REPLACED test test"
+  (string-replace-first "test" "REPLACED" "test test test"))
+
+;; ============================================================
+;; Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

@@ -1,0 +1,228 @@
+;; test_string_lowcase.omni - Comprehensive tests for string-lowcase primitive
+;;
+;; Tests prim_string_lowcase function (exposed as string-lowcase in OmniLisp)
+;; which converts a string to lowercase.
+;;
+;; Run with: ./omni tests/test_string_lowcase.omni
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+;; Helper to compare string equality
+(define test-string [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (equal? expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+;; Helper to compare numeric equality
+(define test-num [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (= expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+;; ============================================================
+;; Basic Lowercase Tests
+;; ============================================================
+
+(print "")
+(print "=== Basic Lowercase Tests ===")
+
+;; Test 1: Convert uppercase word to lowercase
+(test-string "uppercase to lowercase"
+  "hello"
+  (string-lowcase "HELLO"))
+
+;; Test 2: Convert mixed case word to lowercase
+(test-string "mixed case to lowercase"
+  "hello"
+  (string-lowcase "HeLLo"))
+
+;; Test 3: Convert lowercase word to lowercase (no change)
+(test-string "already lowercase"
+  "world"
+  (string-lowcase "world"))
+
+;; ============================================================
+;; Single Character Tests
+;; ============================================================
+
+(print "")
+(print "=== Single Character Tests ===")
+
+;; Test 4: Single uppercase letter
+(test-string "single uppercase letter"
+  "a"
+  (string-lowcase "A"))
+
+;; Test 5: Single lowercase letter (no change)
+(test-string "single lowercase letter"
+  "b"
+  (string-lowcase "b"))
+
+;; Test 6: Single non-letter character
+(test-string "single digit"
+  "1"
+  (string-lowcase "1"))
+
+;; ============================================================
+;; Empty String Tests
+;; ============================================================
+
+(print "")
+(print "=== Empty String Tests ===")
+
+;; Test 7: Empty string
+(test-string "empty string"
+  ""
+  (string-lowcase ""))
+
+;; ============================================================
+;; Whitespace and Special Characters
+;; ============================================================
+
+(print "")
+(print "=== Whitespace and Special Characters ===")
+
+;; Test 8: String with spaces (preserves spaces)
+(test-string "string with spaces"
+  "hello world"
+  (string-lowcase "HELLO WORLD"))
+
+;; Test 9: String with tabs
+(test-string "string with tabs"
+  "col1\tcol2"
+  (string-lowcase "COL1\tCOL2"))
+
+;; Test 10: String with newlines
+(test-string "string with newlines"
+  "line1\nline2"
+  (string-lowcase "LINE1\nLINE2"))
+
+;; Test 11: String with punctuation
+(test-string "string with punctuation"
+  "hello, world!"
+  (string-lowcase "HELLO, WORLD!"))
+
+;; Test 12: String with special symbols
+(test-string "string with special symbols"
+  "$%^&*()"
+  (string-lowcase "$%^&*()"))
+
+;; ============================================================
+;; Numeric and Alphanumeric Tests
+;; ============================================================
+
+(print "")
+(print "=== Numeric and Alphanumeric Tests ===")
+
+;; Test 13: String with digits
+(test-string "alphanumeric"
+  "abc123xyz"
+  (string-lowcase "ABC123XYZ"))
+
+;; Test 14: String starting with number
+(test-string "starts with number"
+  "123abc"
+  (string-lowcase "123ABC"))
+
+;; Test 15: Pure numeric string
+(test-string "pure numeric"
+  "12345"
+  (string-lowcase "12345"))
+
+;; ============================================================
+;; Extended ASCII/Unicode Tests
+;; ============================================================
+
+(print "")
+(print "=== Character Range Tests ===")
+
+;; Test 16: All uppercase letters
+(test-string "all uppercase A-Z"
+  "abcdefghijklmnopqrstuvwxyz"
+  (string-lowcase "ABCDEFGHIJKLMNOPQRSTUVWXYZ"))
+
+;; Test 17: String with underscores
+(test-string "underscores preserved"
+  "hello_world_test"
+  (string-lowcase "HELLO_WORLD_TEST"))
+
+;; Test 18: String with hyphens
+(test-string "hyphens preserved"
+  "hello-world"
+  (string-lowcase "HELLO-WORLD"))
+
+;; ============================================================
+;; Length Preservation Tests
+;; ============================================================
+
+(print "")
+(print "=== Length Preservation Tests ===")
+
+;; Test 19: Length is preserved (short string)
+(test-num "short string length preserved"
+  5
+  (string-length (string-lowcase "HELLO")))
+
+;; Test 20: Length is preserved (long string)
+(test-num "long string length preserved"
+  26
+  (string-length (string-lowcase "ABCDEFGHIJKLMNOPQRSTUVWXYZ")))
+
+;; ============================================================
+;; Edge Cases
+;; ============================================================
+
+(print "")
+(print "=== Edge Cases ===")
+
+;; Test 21: String with only spaces
+(test-string "only spaces"
+  "   "
+  (string-lowcase "   "))
+
+;; Test 22: Single space
+(test-string "single space"
+  " "
+  (string-lowcase " "))
+
+;; Test 23: String with mixed delimiters
+(test-string "mixed delimiters"
+  "a-b_c.d:e"
+  (string-lowcase "A-B_C.D:E"))
+
+;; ============================================================
+;; Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

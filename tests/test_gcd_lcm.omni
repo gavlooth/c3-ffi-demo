@@ -1,0 +1,208 @@
+;; test_gcd_lcm.omni - Test gcd and lcm functions
+;;
+;; The gcd function computes the greatest common divisor of two integers.
+;; The lcm function computes the least common multiple of two integers.
+;; Run with: ./omni tests/test_gcd_lcm.omni
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+(define test-eq [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (= expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+(define test-true [name] [actual]
+  (set! test-count (+ test-count 1))
+  (if actual
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected: true")
+        (print "  Got: false"))))
+
+(define test-false [name] [actual]
+  (set! test-count (+ test-count 1))
+  (if (not actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected: false")
+        (print "  Got: true"))))
+
+;; ============================================================
+;; Test 1: GCD Basic Cases
+;; ============================================================
+
+(print "")
+(print "=== Test 1: GCD Basic Cases ===")
+
+;; Test 1.1: gcd of two positive numbers
+(test-eq "gcd(48, 18) = 6" 6 (gcd 48 18))
+
+;; Test 1.2: gcd of coprime numbers
+(test-eq "gcd(17, 13) = 1" 1 (gcd 17 13))
+
+;; Test 1.3: gcd where one divides the other
+(test-eq "gcd(10, 5) = 5" 5 (gcd 10 5))
+(test-eq "gcd(7, 21) = 7" 7 (gcd 7 21))
+
+;; Test 1.4: gcd with zero
+(test-eq "gcd(0, 5) = 5" 5 (gcd 0 5))
+(test-eq "gcd(5, 0) = 5" 5 (gcd 5 0))
+(test-eq "gcd(0, 0) = 0" 0 (gcd 0 0))
+
+;; Test 1.5: gcd with 1 (1 is coprime with everything)
+(test-eq "gcd(1, 100) = 1" 1 (gcd 1 100))
+(test-eq "gcd(42, 1) = 1" 1 (gcd 42 1))
+
+;; ============================================================
+;; Test 2: GCD Edge Cases
+;; ============================================================
+
+(print "")
+(print "=== Test 2: GCD Edge Cases ===")
+
+;; Test 2.1: gcd of same numbers
+(test-eq "gcd(7, 7) = 7" 7 (gcd 7 7))
+
+;; Test 2.2: gcd with large numbers
+(test-eq "gcd(1071, 462) = 21" 21 (gcd 1071 462))
+
+;; Test 2.3: gcd of powers of 2
+(test-eq "gcd(8, 16) = 8" 8 (gcd 8 16))
+(test-eq "gcd(32, 8) = 8" 8 (gcd 32 8))
+
+;; Test 2.4: gcd with identical large numbers
+(test-eq "gcd(123456, 123456) = 123456" 123456 (gcd 123456 123456))
+
+;; ============================================================
+;; Test 3: GCD with Negative Numbers
+;; ============================================================
+
+(print "")
+(print "=== Test 3: GCD with Negative Numbers ===")
+
+;; Test 3.1: gcd with one negative (should be positive)
+(test-eq "gcd(-48, 18) = 6" 6 (gcd -48 18))
+(test-eq "gcd(48, -18) = 6" 6 (gcd 48 -18))
+
+;; Test 3.2: gcd with both negative (should be positive)
+(test-eq "gcd(-48, -18) = 6" 6 (gcd -48 -18))
+
+;; Test 3.3: gcd of negative zero
+(test-eq "gcd(-0, 5) = 5" 5 (gcd -0 5))
+
+;; ============================================================
+;; Test 4: LCM Basic Cases
+;; ============================================================
+
+(print "")
+(print "=== Test 4: LCM Basic Cases ===")
+
+;; Test 4.1: lcm of two positive numbers
+(test-eq "lcm(4, 6) = 12" 12 (lcm 4 6))
+
+;; Test 4.2: lcm of coprime numbers
+(test-eq "lcm(3, 5) = 15" 15 (lcm 3 5))
+
+;; Test 4.3: lcm where one divides the other
+(test-eq "lcm(4, 8) = 8" 8 (lcm 4 8))
+(test-eq "lcm(6, 3) = 6" 6 (lcm 6 3))
+
+;; Test 4.4: lcm with zero
+(test-eq "lcm(0, 5) = 0" 0 (lcm 0 5))
+(test-eq "lcm(5, 0) = 0" 0 (lcm 5 0))
+(test-eq "lcm(0, 0) = 0" 0 (lcm 0 0))
+
+;; ============================================================
+;; Test 5: LCM Edge Cases
+;; ============================================================
+
+(print "")
+(print "=== Test 5: LCM Edge Cases ===")
+
+;; Test 5.1: lcm of same numbers
+(test-eq "lcm(7, 7) = 7" 7 (lcm 7 7))
+
+;; Test 5.2: lcm of powers of 2
+(test-eq "lcm(4, 8) = 8" 8 (lcm 4 8))
+(test-eq "lcm(8, 16) = 16" 16 (lcm 8 16))
+
+;; Test 5.3: lcm with large numbers
+(test-eq "lcm(21, 6) = 42" 42 (lcm 21 6))
+
+;; Test 5.4: lcm of 1 with any number
+(test-eq "lcm(1, 100) = 100" 100 (lcm 1 100))
+(test-eq "lcm(42, 1) = 42" 42 (lcm 42 1))
+
+;; ============================================================
+;; Test 6: LCM with Negative Numbers
+;; ============================================================
+
+(print "")
+(print "=== Test 6: LCM with Negative Numbers ===")
+
+;; Test 6.1: lcm with one negative
+(test-eq "lcm(-4, 6) = -12" -12 (lcm -4 6))
+(test-eq "lcm(4, -6) = -12" -12 (lcm 4 -6))
+
+;; Test 6.2: lcm with both negative
+(test-eq "lcm(-4, -6) = 12" 12 (lcm -4 -6))
+
+;; ============================================================
+;; Test 7: GCD-LCM Relationship Property
+;; ============================================================
+
+(print "")
+(print "=== Test 7: GCD-LCM Relationship ===")
+
+;; Property: gcd(a,b) * lcm(a,b) = |a * b|
+;; Test 7.1: Verify relationship with small numbers
+(define a1 12)
+(define b1 18)
+(define g1 (gcd a1 b1))
+(define l1 (lcm a1 b1))
+(test-eq "gcd*lcm = a*b (12,18)" (* a1 b1) (* g1 l1))
+
+;; Test 7.2: Verify relationship with larger numbers
+(define a2 24)
+(define b2 36)
+(define g2 (gcd a2 b2))
+(define l2 (lcm a2 b2))
+(test-eq "gcd*lcm = a*b (24,36)" (* a2 b2) (* g2 l2))
+
+;; ============================================================
+;; Test Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

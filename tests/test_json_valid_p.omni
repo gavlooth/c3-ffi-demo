@@ -1,0 +1,315 @@
+;; test_json_valid_p.omni - Comprehensive tests for json-valid-p primitive
+;;
+;; Tests prim_json_valid_p function (exposed as json-valid-p in OmniLisp)
+;; which validates if a string is properly formatted JSON.
+;;
+;; Returns: true if string is valid JSON, false otherwise
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+;; REVIEWED:SYNTAX
+(define test-bool [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (= expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+;; ============================================================
+;; Valid JSON Tests
+;; ============================================================
+
+(print "")
+(print "=== Valid JSON Tests ===")
+
+;; Test 1: Null value
+(test-bool "valid null"
+  true
+  (json-valid-p "null"))
+
+;; Test 2: Boolean true
+(test-bool "valid boolean true"
+  true
+  (json-valid-p "true"))
+
+;; Test 3: Boolean false
+(test-bool "valid boolean false"
+  true
+  (json-valid-p "false"))
+
+;; Test 4: Integer
+(test-bool "valid integer"
+  true
+  (json-valid-p "42"))
+
+;; Test 5: Negative integer
+(test-bool "valid negative integer"
+  true
+  (json-valid-p "-123"))
+
+;; Test 6: Float
+(test-bool "valid float"
+  true
+  (json-valid-p "3.14"))
+
+;; Test 7: Float with exponent
+(test-bool "valid float with exponent"
+  true
+  (json-valid-p "1.5e10"))
+
+;; Test 8: Negative float with exponent
+(test-bool "valid negative float with exponent"
+  true
+  (json-valid-p "-1.5e-10"))
+
+;; Test 9: Empty string
+(test-bool "valid empty string"
+  true
+  (json-valid-p "\"\""))
+
+;; Test 10: Simple string
+(test-bool "valid string"
+  true
+  (json-valid-p "\"hello\""))
+
+;; Test 11: String with escaped characters
+(test-bool "valid string with escapes"
+  true
+  (json-valid-p "\"hello\\nworld\\t!\""))
+
+;; Test 12: Empty array
+(test-bool "valid empty array"
+  true
+  (json-valid-p "[]"))
+
+;; Test 13: Array of numbers
+(test-bool "valid array of numbers"
+  true
+  (json-valid-p "[1, 2, 3]"))
+
+;; Test 14: Array of mixed types
+(test-bool "valid array of mixed types"
+  true
+  (json-valid-p "[1, \"two\", true, null]"))
+
+;; Test 15: Nested arrays
+(test-bool "valid nested arrays"
+  true
+  (json-valid-p "[[1, 2], [3, 4]]"))
+
+;; Test 16: Empty object
+(test-bool "valid empty object"
+  true
+  (json-valid-p "{}"))
+
+;; Test 17: Simple object
+(test-bool "valid simple object"
+  true
+  (json-valid-p "{\"name\": \"Alice\"}"))
+
+;; Test 18: Object with multiple keys
+(test-bool "valid object with multiple keys"
+  true
+  (json-valid-p "{\"name\": \"Alice\", \"age\": 30}"))
+
+;; Test 19: Nested objects
+(test-bool "valid nested objects"
+  true
+  (json-valid-p "{\"user\": {\"name\": \"Bob\", \"age\": 25}}"))
+
+;; Test 20: Complex nested structure
+(test-bool "valid complex nested structure"
+  true
+  (json-valid-p "{\"users\": [{\"name\": \"Alice\", \"id\": 1}, {\"name\": \"Bob\", \"id\": 2}], \"count\": 2}"))
+
+;; ============================================================
+;; Invalid JSON Tests
+;; ============================================================
+
+(print "")
+(print "=== Invalid JSON Tests ===")
+
+;; Test 21: Unclosed string
+(test-bool "invalid unclosed string"
+  false
+  (json-valid-p "\"hello"))
+
+;; Test 22: Unclosed array
+(test-bool "invalid unclosed array"
+  false
+  (json-valid-p "[1, 2, 3"))
+
+;; Test 23: Unclosed object
+(test-bool "invalid unclosed object"
+  false
+  (json-valid-p "{\"name\": \"Alice\""))
+
+;; Test 24: Missing comma in array
+(test-bool "invalid array without comma"
+  false
+  (json-valid-p "[1 2 3]"))
+
+;; Test 25: Trailing comma in array (invalid in JSON)
+(test-bool "invalid trailing comma in array"
+  false
+  (json-valid-p "[1, 2, 3,]"))
+
+;; Test 26: Missing comma in object
+(test-bool "invalid object without comma"
+  false
+  (json-valid-p "{\"name\" \"Alice\"}"))
+
+;; Test 27: Trailing comma in object (invalid in JSON)
+(test-bool "invalid trailing comma in object"
+  false
+  (json-valid-p "{\"name\": \"Alice\",}"))
+
+;; Test 28: Missing value in object
+(test-bool "invalid object missing value"
+  false
+  (json-valid-p "{\"name\":}"))
+
+;; Test 29: Missing colon in object
+(test-bool "invalid object missing colon"
+  false
+  (json-valid-p "{\"name\" \"Alice\"}"))
+
+;; Test 30: Unquoted string (must be quoted in JSON)
+(test-bool "invalid unquoted string"
+  false
+  (json-valid-p "hello"))
+
+;; Test 31: Undefined bareword (not a JSON literal)
+(test-bool "invalid undefined literal"
+  false
+  (json-valid-p "undefined"))
+
+;; Test 32: NaN (not valid JSON)
+(test-bool "invalid NaN"
+  false
+  (json-valid-p "NaN"))
+
+;; Test 33: Infinity (not valid JSON)
+(test-bool "invalid Infinity"
+  false
+  (json-valid-p "Infinity"))
+
+;; Test 34: Single quote strings (must be double quotes)
+(test-bool "invalid single quote string"
+  false
+  (json-valid-p "'hello'"))
+
+;; Test 35: Missing key name in object
+(test-bool "invalid object missing key"
+  false
+  (json-valid-p "{: \"value\"}"))
+
+;; Test 36: Trailing garbage after valid JSON
+(test-bool "invalid trailing garbage"
+  false
+  (json-valid-p "null garbage"))
+
+;; Test 37: Trailing comma after valid JSON
+(test-bool "invalid trailing comma"
+  false
+  (json-valid-p "true,"))
+
+;; Test 38: Multiple values without container
+(test-bool "invalid multiple values"
+  false
+  (json-valid-p "true false"))
+
+;; ============================================================
+;; Edge Case Tests
+;; ============================================================
+
+(print "")
+(print "=== Edge Case Tests ===")
+
+;; Test 39: Very large integer
+(test-bool "valid large integer"
+  true
+  (json-valid-p "9223372036854775807"))
+
+;; Test 40: Very small negative integer
+(test-bool "valid very negative integer"
+  true
+  (json-valid-p "-9223372036854775808"))
+
+;; Test 41: Float with many decimal places
+(test-bool "valid float with many decimals"
+  true
+  (json-valid-p "3.141592653589793"))
+
+;; Test 42: Scientific notation uppercase E
+(test-bool "valid uppercase E in exponent"
+  true
+  (json-valid-p "1.5E10"))
+
+;; Test 43: Scientific notation with plus sign
+(test-bool "valid exponent with plus"
+  true
+  (json-valid-p "1.5e+10"))
+
+;; Test 44: Empty object with whitespace
+(test-bool "valid object with whitespace"
+  true
+  (json-valid-p "{  }"))
+
+;; Test 45: Empty array with whitespace
+(test-bool "valid array with whitespace"
+  true
+  (json-valid-p "[  ]"))
+
+;; Test 46: Deeply nested structure
+(test-bool "valid deeply nested structure"
+  true
+  (json-valid-p "{\"a\": {\"b\": {\"c\": {\"d\": 42}}}}"))
+
+;; Test 47: Array containing empty objects
+(test-bool "valid array with empty objects"
+  true
+  (json-valid-p "[{}, {}]"))
+
+;; Test 48: Object containing empty arrays
+(test-bool "valid object with empty arrays"
+  true
+  (json-valid-p "{\"items\": [], \"values\": []}"))
+
+;; Test 49: String with Unicode escape
+(test-bool "valid Unicode escape"
+  true
+  (json-valid-p "\"\\u0041\""))
+
+;; Test 50: String with all escape sequences
+(test-bool "valid all escape sequences"
+  true
+  (json-valid-p "\"\\\" \\\\ \\/ \\b \\f \\n \\r \\t\""))
+
+;; ============================================================
+;; Test Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

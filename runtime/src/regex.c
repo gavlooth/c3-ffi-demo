@@ -51,6 +51,7 @@ static Obj* cstr_to_obj(const char* s) {
  *   - input_obj: Input string to search
  * Returns: First matched substring as string, or NULL if no match
  */
+// TESTED
 Obj* prim_re_match(Obj* pattern_obj, Obj* input_obj) {
     const char* pattern = obj_to_cstr(pattern_obj);
     const char* input = obj_to_cstr(input_obj);
@@ -82,6 +83,7 @@ Obj* prim_re_match(Obj* pattern_obj, Obj* input_obj) {
  *   - input_obj: Input string to search
  * Returns: List of matched substrings (as strings)
  */
+// TESTED
 Obj* prim_re_find_all(Obj* pattern_obj, Obj* input_obj) {
     const char* pattern = obj_to_cstr(pattern_obj);
     const char* input = obj_to_cstr(input_obj);
@@ -111,6 +113,7 @@ Obj* prim_re_find_all(Obj* pattern_obj, Obj* input_obj) {
  *   - input_obj: Input string to split
  * Returns: List of substrings
  */
+// TESTED
 Obj* prim_re_split(Obj* pattern_obj, Obj* input_obj) {
     const char* pattern = obj_to_cstr(pattern_obj);
     const char* input = obj_to_cstr(input_obj);
@@ -147,6 +150,7 @@ Obj* prim_re_split(Obj* pattern_obj, Obj* input_obj) {
  *   - global_obj: If true (not NULL/not false), replace all occurrences
  * Returns: Modified string
  */
+// TESTED
 Obj* prim_re_replace(Obj* pattern_obj, Obj* replacement_obj, Obj* input_obj, Obj* global_obj) {
     const char* pattern = obj_to_cstr(pattern_obj);
     const char* replacement = obj_to_cstr(replacement_obj);
@@ -180,6 +184,7 @@ Obj* prim_re_replace(Obj* pattern_obj, Obj* replacement_obj, Obj* input_obj, Obj
  *   - input_obj: Input string
  * Returns: Boolean - true if entire string matches, false otherwise
  */
+// TESTED
 Obj* prim_re_fullmatch(Obj* pattern_obj, Obj* input_obj) {
     const char* pattern = obj_to_cstr(pattern_obj);
     const char* input = obj_to_cstr(input_obj);

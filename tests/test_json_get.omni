@@ -1,0 +1,267 @@
+;; test_json_get.omni - Comprehensive tests for json-get primitive
+;;
+;; Tests the prim_json_get function (exposed as json-get in OmniLisp)
+;; which retrieves nested values from JSON data using dot-separated paths.
+;;
+;; Path syntax examples:
+;;   "user.name"          -> dict key access
+;;   "items.0"            -> array index access
+;;   "user.address.city"   -> nested dict access
+;;   "data.items.2.id"     -> mixed dict/array traversal
+
+;; ============================================================
+;; Test Framework
+;; ============================================================
+
+(define test-count 0)
+(define pass-count 0)
+(define fail-count 0)
+
+(define test-name [name] [expected] [actual]
+  (set! test-count (+ test-count 1))
+  (if (equal? expected actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected:" expected)
+        (print "  Got:" actual))))
+
+(define test-nothing [name] [actual]
+  (set! test-count (+ test-count 1))
+  (if (nothing? actual)
+      (do
+        (set! pass-count (+ pass-count 1))
+        (print "PASS:" name))
+      (do
+        (set! fail-count (+ fail-count 1))
+        (print "FAIL:" name)
+        (print "  Expected: nothing")
+        (print "  Got:" actual))))
+
+;; ============================================================
+;; Test Data Setup
+;; ============================================================
+
+(define simple-dict #{:name "Alice" :age 30})
+(define nested-dict
+  #{:user
+      #{:name "Bob"
+        :address
+          #{:city "New York"
+           :zip "10001"}}
+    :id 123})
+
+(define mixed-data
+  #{:items
+      [1 2 3]
+    :name "test"
+    :nested
+      #{:data [10 20 30]}})
+
+;; ============================================================
+;; Basic Dict Access Tests
+;; ============================================================
+
+(print "")
+(print "=== Basic Dict Access Tests ===")
+
+;; Test 1: Single-level dict key access
+(test-name "single-level dict key"
+  "Alice"
+  (json-get simple-dict "name"))
+
+;; Test 2: Single-level dict key (different key)
+(test-name "single-level dict key (age)"
+  30
+  (json-get simple-dict "age"))
+
+;; ============================================================
+;; Nested Dict Access Tests
+;; ============================================================
+
+(print "")
+(print "=== Nested Dict Access Tests ===")
+
+;; Test 3: Two-level nested dict access
+(test-name "two-level nested dict"
+  "Bob"
+  (json-get nested-dict "user.name"))
+
+;; Test 4: Three-level nested dict access
+(test-name "three-level nested dict"
+  "New York"
+  (json-get nested-dict "user.address.city"))
+
+;; Test 5: Three-level nested dict (zip)
+(test-name "three-level nested dict (zip)"
+  "10001"
+  (json-get nested-dict "user.address.zip"))
+
+;; Test 6: Sibling key access at same level
+(test-name "sibling key access"
+  123
+  (json-get nested-dict "id"))
+
+;; ============================================================
+;; Array Index Access Tests
+;; ============================================================
+
+(print "")
+(print "=== Array Index Access Tests ===")
+
+;; Test 7: Array first element
+(test-name "array first element"
+  1
+  (json-get mixed-data "items.0"))
+
+;; Test 8: Array middle element
+(test-name "array middle element"
+  2
+  (json-get mixed-data "items.1"))
+
+;; Test 9: Array last element
+(test-name "array last element"
+  3
+  (json-get mixed-data "items.2"))
+
+;; ============================================================
+;; Mixed Dict/Array Access Tests
+;; ============================================================
+
+(print "")
+(print "=== Mixed Dict/Array Access Tests ===")
+
+;; Test 10: Dict to array access
+(test-name "dict to array access"
+  10
+  (json-get mixed-data "nested.data.0"))
+
+;; Test 11: Dict to array access (middle element)
+(test-name "dict to array access (middle)"
+  20
+  (json-get mixed-data "nested.data.1"))
+
+;; Test 12: Dict to array access (last element)
+(test-name "dict to array access (last)"
+  30
+  (json-get mixed-data "nested.data.2"))
+
+;; ============================================================
+;; Error Cases and Edge Cases
+;; ============================================================
+
+(print "")
+(print "=== Error Cases and Edge Cases Tests ===")
+
+;; Test 13: Missing top-level key (should return nothing)
+(test-nothing "missing top-level key"
+  (json-get simple-dict "missing"))
+
+;; Test 14: Missing nested key (should return nothing)
+(test-nothing "missing nested key"
+  (json-get nested-dict "user.missing"))
+
+;; Test 15: Missing deep nested key (should return nothing)
+(test-nothing "missing deep nested key"
+  (json-get nested-dict "user.address.missing"))
+
+;; Test 16: Invalid array index (out of bounds)
+(test-nothing "invalid array index (out of bounds)"
+  (json-get mixed-data "items.10"))
+
+;; Test 17: Invalid array index (negative)
+(test-nothing "invalid array index (negative)"
+  (json-get mixed-data "items.-1"))
+
+;; Test 18: Array index on dict (should return nothing)
+(test-nothing "array index on dict"
+  (json-get simple-dict "name.0"))
+
+;; Test 19: Dict key on array element (should return nothing)
+(test-nothing "dict key on array element"
+  (json-get mixed-data "items.0.key"))
+
+;; Test 20: Empty path (should return original data)
+(test-name "empty path returns original"
+  "Alice"
+  (json-get simple-dict ""))
+
+;; Test 21: Path component type mismatch (array expected, got dict)
+(test-nothing "path type mismatch (array on dict)"
+  (json-get nested-dict "user.0"))
+
+;; Test 22: Invalid array index (non-numeric)
+(test-nothing "non-numeric array index"
+  (json-get mixed-data "items.abc"))
+
+;; ============================================================
+;; Deep Nesting Tests
+;; ============================================================
+
+(print "")
+(print "=== Deep Nesting Tests ===")
+
+(define deep-data
+  #{:level1
+      #{:level2
+          #{:level3
+              #{:level4
+                  #{:value "deep"}}}}})
+
+;; Test 23: Very deep nesting (5 levels)
+(test-name "very deep nesting (5 levels)"
+  "deep"
+  (json-get deep-data "level1.level2.level3.level4.value"))
+
+;; ============================================================
+;; Array of Objects Tests
+;; ============================================================
+
+(print "")
+(print "=== Array of Objects Tests ===")
+
+(define users-array
+  #{:users
+      [#{:name "Alice" :id 1}
+       #{:name "Bob" :id 2}
+       #{:name "Charlie" :id 3}]})
+
+;; Test 24: Access object in array by index
+(test-name "access object in array"
+  "Alice"
+  (json-get users-array "users.0.name"))
+
+;; Test 25: Access object in array (different index)
+(test-name "access object in array (index 1)"
+  "Bob"
+  (json-get users-array "users.1.name"))
+
+;; Test 26: Access object field in array (last element)
+(test-name "access object in array (last element)"
+  "Charlie"
+  (json-get users-array "users.2.name"))
+
+;; Test 27: Access object id in array
+(test-name "access object id in array"
+  2
+  (json-get users-array "users.1.id"))
+
+;; ============================================================
+;; Test Results
+;; ============================================================
+
+(print "")
+(print "=== Test Results ===")
+(print "Total:" test-count)
+(print "Passed:" pass-count)
+(print "Failed:" fail-count)
+
+(if (= fail-count 0)
+    (print "ALL TESTS PASSED!")
+    (print "SOME TESTS FAILED"))
+
+;; Return count of failures (0 = success)
+fail-count

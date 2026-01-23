@@ -80,6 +80,7 @@ static void strongconnect(CFGNode* v, TarjanState* state) {
     }
 }
 
+// TESTED
 void omni_compute_scc(CFG* cfg) {
     if (!cfg) return;
 
