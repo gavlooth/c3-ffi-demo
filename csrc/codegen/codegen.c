@@ -5214,6 +5214,44 @@ static void codegen_apply(CodeGenContext* ctx, OmniValue* expr) {
             omni_codegen_emit_raw(ctx, ")");
             return;
         }
+        if (strcmp(name, "take-while") == 0) {
+            omni_codegen_emit_raw(ctx, "prim_take_while(");
+            if (!omni_is_nil(args)) {
+                OmniValue* fn_arg = omni_car(args);
+                if (is_lambda_expr(fn_arg)) {
+                    codegen_lambda_as_closure(ctx, fn_arg);  /* Generate closure wrapper */
+                } else {
+                    codegen_expr(ctx, fn_arg);  /* Regular expression (closure obj) */
+                }
+                omni_codegen_emit_raw(ctx, ", ");
+                if (!omni_is_nil(omni_cdr(args))) {
+                    codegen_expr(ctx, omni_car(omni_cdr(args)));  /* coll */
+                } else {
+                    omni_codegen_emit_raw(ctx, "NIL");
+                }
+            }
+            omni_codegen_emit_raw(ctx, ")");
+            return;
+        }
+        if (strcmp(name, "drop-while") == 0) {
+            omni_codegen_emit_raw(ctx, "prim_drop_while(");
+            if (!omni_is_nil(args)) {
+                OmniValue* fn_arg = omni_car(args);
+                if (is_lambda_expr(fn_arg)) {
+                    codegen_lambda_as_closure(ctx, fn_arg);  /* Generate closure wrapper */
+                } else {
+                    codegen_expr(ctx, fn_arg);  /* Regular expression (closure obj) */
+                }
+                omni_codegen_emit_raw(ctx, ", ");
+                if (!omni_is_nil(omni_cdr(args))) {
+                    codegen_expr(ctx, omni_car(omni_cdr(args)));  /* coll */
+                } else {
+                    omni_codegen_emit_raw(ctx, "NIL");
+                }
+            }
+            omni_codegen_emit_raw(ctx, ")");
+            return;
+        }
         if (strcmp(name, "fold") == 0 || strcmp(name, "foldl") == 0) {
             omni_codegen_emit_raw(ctx, "list_fold_region(_local_region, ");
             if (!omni_is_nil(args)) {

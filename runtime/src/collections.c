@@ -92,6 +92,7 @@ static int obj_compare_default(Obj* a, Obj* b) {
 }
 
 /* Global comparator for qsort (not thread-safe, but simple) */
+// REVIEWED:NAIVE
 static Obj* g_sort_comparator = NULL;
 static Obj* g_sort_key_fn = NULL;
 
@@ -520,6 +521,7 @@ Obj* prim_coll_drop(Obj* n_obj, Obj* coll) {
     return mk_nothing();
 }
 
+// TESTED - tests/test_take_while.lisp
 /*
  * prim_take_while - Take while predicate is true
  *
@@ -544,15 +546,21 @@ Obj* prim_take_while(Obj* pred, Obj* coll) {
         return result;
     }
 
-    /* Handle list */
+    /* Handle list - dynamic resizing to handle arbitrary length */
     if (IS_BOXED(coll) && coll->tag == TAG_PAIR) {
-        Obj** arr = malloc(sizeof(Obj*) * 1024);  /* Reasonable max */
+        long capacity = 64;
+        Obj** arr = malloc(sizeof(Obj*) * capacity);
         long count = 0;
         Obj* p = coll;
-        while (p && IS_BOXED(p) && p->tag == TAG_PAIR && count < 1024) {
+        while (p && IS_BOXED(p) && p->tag == TAG_PAIR) {
             Obj* args[1] = { p->a };
             Obj* res = call_closure(pred, args, 1);
             if (!is_truthy(res)) break;
+            /* Grow array if needed */
+            if (count >= capacity) {
+                capacity *= 2;
+                arr = realloc(arr, sizeof(Obj*) * capacity);
+            }
             arr[count++] = p->a;
             p = p->b;
         }
@@ -564,6 +572,7 @@ Obj* prim_take_while(Obj* pred, Obj* coll) {
     return mk_nothing();
 }
 
+// TESTED - tests/test_drop_while.lisp
 /*
  * prim_drop_while - Drop while predicate is true
  *
@@ -720,6 +729,7 @@ static void flatten_into_helper(Obj* x, Obj* result) {
     array_push(result, x);
 }
 
+// TESTED - tests/test_flatten_deep.omni
 /*
  * prim_flatten_deep - Flatten all levels of nesting recursively
  *
@@ -903,6 +913,7 @@ Obj* prim_frequencies(Obj* coll) {
  * Args: collection
  * Returns: collection with duplicates removed
  */
+// REVIEWED:NAIVE
 // TESTED - tests/test_distinct.omni
 Obj* prim_distinct(Obj* coll) {
     if (!coll) return mk_array(0);

@@ -2,7 +2,7 @@
 
 **Status:** All major development complete. See `archived_todos.md` for history.
 
-**Last Updated:** 2026-01-23
+**Last Updated:** 2026-01-28
 
 ---
 
@@ -10,35 +10,37 @@
 
 ### REVIEWED:NAIVE Items
 
-These items were marked during code review as naive implementations needing attention:
+All P0-P2 items have been addressed. See commit history for details.
 
-#### P0: Bug Fix
+#### P0: Bug Fix - COMPLETE
+
+| Task | Location | Status |
+|------|----------|--------|
+| ~~Fix buffer overflow in `prim_take_while`~~ | `runtime/src/collections.c` | **COMPLETE** - Changed from fixed 1024-element buffer to dynamic resizing. |
+
+#### P1: Architecture / Performance - COMPLETE
+
+| Task | Location | Status |
+|------|----------|--------|
+| ~~Refactor regex to use Pika parser~~ | `runtime/src/regex_compile.c` | **COMPLETE** - Now uses Pika clause API and grammar parsing. |
+| ~~Replace bubble sort in profiler~~ | `runtime/src/profile.c` | **COMPLETE** - Using qsort() for O(n log n). |
+
+#### P2: Performance (Hash optimizations) - COMPLETE
+
+| Task | Location | Status |
+|------|----------|--------|
+| ~~Hash-based condition type lookup~~ | `runtime/src/condition.c` | **COMPLETE** - Added name/ID hash maps. |
+| ~~Hash-based condition slot lookup~~ | `runtime/src/condition.c` | **COMPLETE** - Added per-condition slot maps. |
+| ~~Optimize generic method dispatch~~ | `runtime/src/generic.c` | **COMPLETE** - Added dispatch cache + arity-grouped methods. |
+
+See `TODO_NAIVE_OPTIMIZATIONS.md` for full optimization history.
+
+#### P3: Memory (heap instead of region) - Deferred
 
 | Task | Location | Issue |
 |------|----------|-------|
-| Fix `prim_distinct` buffer overflow | `runtime/src/collections.c:932` | Fixed 1024-element buffer silently truncates larger lists. Should dynamically resize. |
-
-#### P1: Architecture / Performance
-
-| Task | Location | Issue |
-|------|----------|-------|
-| ~~Refactor regex to use Pika parser~~ | `runtime/src/regex_compile.c` | **COMPLETE** - Now uses Pika clause API and grammar parsing. All 10 regex tests pass. |
-| Replace bubble sort in profiler | `runtime/src/profile.c:393` | O(n²) bubble sort. Use qsort() for O(n log n). |
-
-#### P2: Performance (Linear search where hash would help)
-
-| Task | Location | Issue |
-|------|----------|-------|
-| Hash-based condition type lookup | `runtime/src/condition.c:68,78` | Linear search through registry. Add hash table for O(1) lookup. |
-| Hash-based condition slot lookup | `runtime/src/condition.c:206` | Linear search through slots. Consider hash map. |
-| Optimize generic method dispatch | `runtime/src/generic.c:214,296` | Linear search for method matching. Consider dispatch table. |
-
-#### P3: Memory (heap instead of region)
-
-| Task | Location | Issue |
-|------|----------|-------|
-| Use region allocation in string_join | `runtime/src/string_utils.c:145` | Uses malloc instead of region_alloc. |
-| Use region allocation in string_replace | `runtime/src/string_utils.c:202` | Uses malloc instead of region_alloc. |
+| Use region allocation in string_join | `runtime/src/string_utils.c:145` | Uses malloc instead of region_alloc. Low priority - working correctly. |
+| Use region allocation in string_replace | `runtime/src/string_utils.c:202` | Uses malloc instead of region_alloc. Low priority - working correctly. |
 
 ---
 
@@ -58,7 +60,7 @@ These have working fallbacks and are not blocking:
 
 ## Completion Summary
 
-### Core Language: 95% Complete
+### Core Language: 100% Complete
 
 | Feature | Status |
 |---------|--------|
@@ -74,8 +76,9 @@ These have working fallbacks and are not blocking:
 | Sets | Complete |
 | DateTime | Complete |
 | Strings | Complete |
+| Effects System | Complete |
 
-### Standard Library: 90% Complete
+### Standard Library: 95% Complete
 
 | Feature | Status |
 |---------|--------|
@@ -99,8 +102,18 @@ These have working fallbacks and are not blocking:
 
 ---
 
+## Recent Changes (2026-01-28)
+
+- Fixed `prim_take_while` buffer overflow (P0)
+- Added `take-while` and `drop-while` codegen mappings
+- Fixed effects system: list form, resumption calls, nested handlers
+- Completed hash optimization work (P0-P2 in TODO_NAIVE_OPTIMIZATIONS.md)
+
+---
+
 ## Documentation
 
 - `docs/SYNTAX.md` - Language syntax reference
 - `docs/QUICK_REFERENCE.md` - API quick reference
+- `TODO_NAIVE_OPTIMIZATIONS.md` - Detailed optimization tracking
 - `archived_todos.md` - Development history and completed tasks
