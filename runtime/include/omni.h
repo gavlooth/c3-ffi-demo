@@ -823,6 +823,7 @@ Obj* prim_int(Obj* x);
 Obj* prim_float(Obj* x);
 Obj* prim_char(Obj* x);
 Obj* prim_sym(Obj* x);
+Obj* prim_nothing_p(Obj* x);
 
 /* ========== Type Introspection ========== */
 
@@ -1647,6 +1648,13 @@ Obj* prim_apply(Obj* func, Obj* args);
 Obj* prim_partial(Obj* func, Obj* fixed_args);
 
 /* ========== Phase 22: Module and Import System ========== */
+
+/* Module registry globals - shared by main program and dlopen'd modules */
+struct Module;
+struct StrMap;
+extern struct Module* g_module_registry;
+extern struct StrMap* g_module_map;
+extern struct Module* g_current_module;
 
 /* Module management */
 Obj* prim_module_begin(Obj* name_obj);

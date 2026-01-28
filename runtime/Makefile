@@ -19,6 +19,8 @@ PIKA_DIR = ../csrc/parser/pika_c
 
 # Pika parser object (for regex engine)
 PIKA_OBJ = $(PIKA_DIR)/pika.o
+# PIC version for shared library
+PIKA_PIC_OBJ = $(BUILDDIR)/pika_pic.o
 
 # Source files - main runtime
 MAIN_SOURCES = $(wildcard $(SRCDIR)/*.c)
@@ -58,6 +60,10 @@ $(BUILDDIR)/%.o: $(SRCDIR)/%.c $(INCDIR)/omni.h
 $(PIKA_OBJ):
 	$(CC) $(CFLAGS) -I$(PIKA_DIR) -c $(PIKA_DIR)/pika.c -o $@
 
+# Build PIC version of pika for shared library
+$(PIKA_PIC_OBJ): $(PIKA_DIR)/pika.c
+	$(CC) $(CFLAGS) -fPIC -I$(PIKA_DIR) -c $< -o $@
+
 # Compile utility module files
 $(BUILDDIR)/util/%.o: $(SRCDIR)/util/%.c
 	$(CC) $(CFLAGS) -I$(INCDIR) -I$(SRCDIR) -c $< -o $@
@@ -71,9 +77,9 @@ $(STATIC_LIB): $(ALL_OBJECTS)
 	$(AR) rcs $@ $^
 	@echo "Built static library: $@"
 
-# Build shared library (optional)
-shared: $(BUILDDIR) $(OBJECTS)
-	$(CC) -shared $(OBJECTS) -o $(SHARED_LIB) $(LDFLAGS)
+# Build shared library (optional) - uses PIC pika object
+shared: $(BUILDDIR) $(OBJECTS) $(PIKA_PIC_OBJ)
+	$(CC) -shared $(OBJECTS) $(PIKA_PIC_OBJ) -o $(SHARED_LIB) $(LDFLAGS)
 	@echo "Built shared library: $(SHARED_LIB)"
 
 # ========== Benchmark Targets ==========

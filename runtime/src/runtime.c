@@ -2729,6 +2729,7 @@ Obj* prim_int(Obj* x) { return mk_bool(is_int(x)); }
 Obj* prim_float(Obj* x) { return mk_bool(x && IS_BOXED(x) && x->tag == TAG_FLOAT); }
 Obj* prim_char(Obj* x) { return mk_bool(is_char_val(x)); }
 Obj* prim_sym(Obj* x) { return mk_bool(x && IS_BOXED(x) && x->tag == TAG_SYM); }
+Obj* prim_nothing_p(Obj* x) { return mk_bool(is_nothing(x)); }
 
 /* Conversion */
 Obj* char_to_int(Obj* c) { return mk_int(obj_to_char(c)); }

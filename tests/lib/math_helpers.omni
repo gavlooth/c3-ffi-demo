@@ -1,0 +1,16 @@
+;; math_helpers.omni - Test module for require auto-loading
+;;
+;; This module exports simple math utilities to test the require system.
+
+(module-begin "math_helpers")
+
+(define double-value (fn [x] (* x 2)))
+(define triple-value (fn [x] (* x 3)))
+(define square-value (fn [x] (* x x)))
+
+(export 'double double-value)
+(export 'triple triple-value)
+(export 'square square-value)
+(export 'pi 3.14159)
+
+(module-end)

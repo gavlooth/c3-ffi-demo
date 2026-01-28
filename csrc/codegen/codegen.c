@@ -1569,6 +1569,12 @@ static void codegen_sym(CodeGenContext* ctx, OmniValue* expr) {
         else if (strcmp(name, "module-ref") == 0) omni_codegen_emit_raw(ctx, "prim_module_ref");
         else if (strcmp(name, "module-exports") == 0) omni_codegen_emit_raw(ctx, "prim_module_exports");
         else if (strcmp(name, "module-list") == 0) omni_codegen_emit_raw(ctx, "prim_module_list");
+        else if (strcmp(name, "module-get") == 0) omni_codegen_emit_raw(ctx, "prim_module_get");
+        else if (strcmp(name, "module-begin") == 0) omni_codegen_emit_raw(ctx, "prim_module_begin");
+        else if (strcmp(name, "module-end") == 0) omni_codegen_emit_raw(ctx, "prim_module_end");
+        /* Predicates */
+        else if (strcmp(name, "nothing?") == 0) omni_codegen_emit_raw(ctx, "prim_nothing_p");
+        else if (strcmp(name, "not") == 0) omni_codegen_emit_raw(ctx, "prim_not");
         else {
             char* mangled = omni_codegen_mangle(name);
             omni_codegen_emit_raw(ctx, "%s", mangled);
@@ -3914,7 +3920,7 @@ static void codegen_import(CodeGenContext* ctx, OmniValue* expr) {
 /*
  * codegen_export - Generate code for export statement
  *
- * Syntax: (export sym value)
+ * Syntax: (export sym value) or (export 'sym value)
  *         (export sym)  ; exports current binding
  *
  * Generates: prim_export(mk_sym("sym"), value)
@@ -3928,6 +3934,18 @@ static void codegen_export(CodeGenContext* ctx, OmniValue* expr) {
     }
 
     OmniValue* sym_name = omni_car(args);
+
+    /* Handle quoted symbols: (export 'sym value) -> (quote sym) */
+    if (omni_is_cell(sym_name)) {
+        OmniValue* head = omni_car(sym_name);
+        if (omni_is_sym(head) && head->str_val && strcmp(head->str_val, "quote") == 0) {
+            OmniValue* rest = omni_cdr(sym_name);
+            if (omni_is_cell(rest)) {
+                sym_name = omni_car(rest);
+            }
+        }
+    }
+
     if (!omni_is_sym(sym_name)) {
         fprintf(stderr, "export: first argument must be a symbol\n");
         omni_codegen_emit_raw(ctx, "NIL");
@@ -3952,7 +3970,7 @@ static void codegen_export(CodeGenContext* ctx, OmniValue* expr) {
 /*
  * codegen_require - Generate code for require statement
  *
- * Syntax: (require module-name)
+ * Syntax: (require module-name) or (require 'module-name)
  *
  * Generates: prim_require(mk_sym("module-name"))
  */
@@ -3965,6 +3983,18 @@ static void codegen_require(CodeGenContext* ctx, OmniValue* expr) {
     }
 
     OmniValue* module_name = omni_car(args);
+
+    /* Handle quoted symbols: (require 'module-name) -> (quote module-name) */
+    if (omni_is_cell(module_name)) {
+        OmniValue* head = omni_car(module_name);
+        if (omni_is_sym(head) && head->str_val && strcmp(head->str_val, "quote") == 0) {
+            OmniValue* rest = omni_cdr(module_name);
+            if (omni_is_cell(rest)) {
+                module_name = omni_car(rest);
+            }
+        }
+    }
+
     if (!omni_is_sym(module_name) && !(omni_is_string(module_name))) {
         fprintf(stderr, "require: module name must be a symbol or string\n");
         omni_codegen_emit_raw(ctx, "NIL");
@@ -6178,10 +6208,11 @@ void omni_codegen_module_init(CodeGenContext* ctx, OmniValue** exprs, size_t cou
             continue;
         }
 
-        /* Skip (module name) or (defmodule ...) declarations - already handled by module init */
+        /* Skip module-related declarations - already handled by module init */
         if (omni_is_cell(expr) && omni_is_sym(omni_car(expr))) {
             const char* head = omni_car(expr)->str_val;
-            if (strcmp(head, "module") == 0 || strcmp(head, "defmodule") == 0) {
+            if (strcmp(head, "module") == 0 || strcmp(head, "defmodule") == 0 ||
+                strcmp(head, "module-begin") == 0 || strcmp(head, "module-end") == 0) {
                 continue;
             }
         }

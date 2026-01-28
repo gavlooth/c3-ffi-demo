@@ -146,6 +146,20 @@ static char* module_find_file(const char* module_name) {
 
     /* Buffer for constructing full paths */
     char full_path[4096];
+    struct stat st;
+
+    /* First check OMNI_MODULE_PATH environment variable */
+    const char* module_path = getenv("OMNI_MODULE_PATH");
+    if (module_path) {
+        for (int i = 0; g_module_extensions[i]; i++) {
+            snprintf(full_path, sizeof(full_path), "%s/%s%s",
+                     module_path, base_name, g_module_extensions[i]);
+            if (stat(full_path, &st) == 0 && S_ISREG(st.st_mode)) {
+                free(base_name);
+                return strdup(full_path);
+            }
+        }
+    }
 
     /* Try each search path */
     for (ModulePath* mp = g_module_paths; mp; mp = mp->next) {
@@ -155,7 +169,6 @@ static char* module_find_file(const char* module_name) {
                      mp->path, base_name, g_module_extensions[i]);
 
             /* Check if file exists and is readable */
-            struct stat st;
             if (stat(full_path, &st) == 0 && S_ISREG(st.st_mode)) {
                 free(base_name);
                 return strdup(full_path);
@@ -168,7 +181,6 @@ static char* module_find_file(const char* module_name) {
         snprintf(full_path, sizeof(full_path), "%s%s",
                  base_name, g_module_extensions[i]);
 
-        struct stat st;
         if (stat(full_path, &st) == 0 && S_ISREG(st.st_mode)) {
             free(base_name);
             return strdup(full_path);
@@ -258,14 +270,14 @@ typedef struct Module {
     struct Module* next;     /* Next in global registry */
 } Module;
 
-/* Global module registry */
-static Module* g_module_registry = NULL;
+/* Global module registry - NOT static so dlopen'd modules share the registry */
+Module* g_module_registry = NULL;
 
-/* Optimization: O(1) module lookup by name */
-static StrMap* g_module_map = NULL;
+/* Optimization: O(1) module lookup by name - NOT static for shared registry */
+StrMap* g_module_map = NULL;
 
-/* Current module being defined */
-static Module* g_current_module = NULL;
+/* Current module being defined - NOT static for shared registry */
+Module* g_current_module = NULL;
 
 /* ============== Module Registry Functions ============== */
 
@@ -759,7 +771,7 @@ Obj* prim_require(Obj* name_obj) {
 
     if (!name) {
         fprintf(stderr, "require: Invalid module name\n");
-        return NULL;
+        return mk_nothing();
     }
 
     /* First, try to find a pre-compiled .so module */
@@ -771,7 +783,7 @@ Obj* prim_require(Obj* name_obj) {
             fprintf(stderr, "require: Failed to load pre-compiled module '%s': %s\n",
                     name, dlerror());
             free(so_path);
-            return NULL;
+            return mk_nothing();
         }
         free(so_path);
 
@@ -781,7 +793,7 @@ Obj* prim_require(Obj* name_obj) {
         if (!m) {
             fprintf(stderr, "require: Pre-compiled module '%s' loaded but not registered\n", name);
             dlclose(handle);
-            return NULL;
+            return mk_nothing();
         }
 
         return mk_sym(name);
@@ -802,7 +814,7 @@ Obj* prim_require(Obj* name_obj) {
             fprintf(stderr, "    - %s\n", mp->path);
         }
         fprintf(stderr, "    - . (current directory)\n");
-        return NULL;
+        return mk_nothing();
     }
 
     /*
@@ -826,7 +838,7 @@ Obj* prim_require(Obj* name_obj) {
     if (source_fd < 0) {
         fprintf(stderr, "require: Failed to create temp source file\n");
         free(file_path);
-        return NULL;
+        return mk_nothing();
     }
 
     /* Load and write source */
@@ -836,7 +848,7 @@ Obj* prim_require(Obj* name_obj) {
         close(source_fd);
         unlink(source_file);
         free(file_path);
-        return NULL;
+        return mk_nothing();
     }
     write(source_fd, source, strlen(source));
     close(source_fd);
@@ -848,15 +860,18 @@ Obj* prim_require(Obj* name_obj) {
     if (so_fd < 0) {
         fprintf(stderr, "require: Failed to create temp .so file\n");
         unlink(source_file);
-        return NULL;
+        return mk_nothing();
     }
     close(so_fd);
 
-    /* Build compile command */
+    /* Build compile command - use OMNI_COMPILER if set, else try 'omnilisp' */
+    const char* compiler = getenv("OMNI_COMPILER");
+    if (!compiler) compiler = "omnilisp";
+
     char cmd[1024];
     snprintf(cmd, sizeof(cmd),
-             "omnilisp --shared --module-name '%s' -o '%s' '%s' 2>&1",
-             name, so_file, source_file);
+             "%s --shared --module-name '%s' -o '%s' '%s' 2>&1",
+             compiler, name, so_file, source_file);
 
     /* Compile module */
     FILE* compile_out = popen(cmd, "r");
@@ -864,7 +879,7 @@ Obj* prim_require(Obj* name_obj) {
         fprintf(stderr, "require: Failed to execute compiler\n");
         unlink(source_file);
         unlink(so_file);
-        return NULL;
+        return mk_nothing();
     }
 
     /* Read compiler output for errors */
@@ -880,7 +895,7 @@ Obj* prim_require(Obj* name_obj) {
         fprintf(stderr, "require: Compilation failed for module '%s':\n%s\n",
                 name, compile_buf);
         unlink(so_file);
-        return NULL;
+        return mk_nothing();
     }
 
     /* Load the shared library */
@@ -889,7 +904,7 @@ Obj* prim_require(Obj* name_obj) {
         fprintf(stderr, "require: Failed to load module '%s': %s\n",
                 name, dlerror());
         unlink(so_file);
-        return NULL;
+        return mk_nothing();
     }
 
     /* Clean up .so file (library is already loaded) */
@@ -901,7 +916,7 @@ Obj* prim_require(Obj* name_obj) {
     if (!m) {
         fprintf(stderr, "require: Module '%s' loaded but not registered\n", name);
         dlclose(handle);
-        return NULL;
+        return mk_nothing();
     }
 
     /* Return the module as an Obj (using a symbol for now) */
