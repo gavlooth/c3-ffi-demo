@@ -160,15 +160,7 @@ static void free_thread_spawns(ThreadSpawnInfo* s) {
     }
 }
 
-static void free_channel_ops(ChannelOpInfo* c) {
-    while (c) {
-        ChannelOpInfo* next = c->next;
-        free(c->channel_name);
-        free(c->value_var);
-        free(c);
-        c = next;
-    }
-}
+/* DIRECTIVE: NO CHANNELS - channel_ops tracking removed */
 
 static void free_components(ComponentInfo* c) {
     while (c) {
@@ -208,7 +200,7 @@ void omni_analysis_free(AnalysisContext* ctx) {
     free_function_summaries(ctx->function_summaries);
     free_thread_locality(ctx->thread_locality);
     free_thread_spawns(ctx->thread_spawns);
-    free_channel_ops(ctx->channel_ops);
+    /* DIRECTIVE: NO CHANNELS - channel_ops removed */
     if (ctx->type_registry) {
         omni_type_registry_free(ctx->type_registry);
     }
@@ -1781,11 +1773,7 @@ static TypeID infer_type_from_expr(OmniValue* init) {
                 return TYPE_ID_BOX;
             }
 
-            /* Channel constructor */
-            if (strcmp(form, "chan") == 0 ||
-                strcmp(form, "channel") == 0) {
-                return TYPE_ID_CHANNEL;
-            }
+            /* DIRECTIVE: NO CHANNELS - channel constructor detection removed */
 
             /* Thread constructor */
             if (strcmp(form, "thread") == 0 ||
@@ -3683,14 +3671,7 @@ const char* omni_thread_locality_name(ThreadLocality locality) {
     }
 }
 
-const char* omni_channel_op_name(ChannelOp op) {
-    switch (op) {
-        case CHAN_SEND:  return "send";
-        case CHAN_RECV:  return "recv";
-        case CHAN_CLOSE: return "close";
-        default:         return "unknown";
-    }
-}
+/* DIRECTIVE: NO CHANNELS - omni_channel_op_name removed */
 
 static ThreadLocalityInfo* find_or_create_locality_info(AnalysisContext* ctx, const char* var_name) {
     for (ThreadLocalityInfo* t = ctx->thread_locality; t; t = t->next) {
@@ -3702,7 +3683,6 @@ static ThreadLocalityInfo* find_or_create_locality_info(AnalysisContext* ctx, co
     t->locality = THREAD_LOCAL;  /* Default: thread-local */
     t->thread_id = ctx->current_thread_id;
     t->needs_atomic_rc = false;
-    t->is_message = false;
     t->next = ctx->thread_locality;
     ctx->thread_locality = t;
     return t;
@@ -3740,51 +3720,13 @@ bool omni_needs_atomic_rc(AnalysisContext* ctx, const char* var_name) {
     return false;  /* Default: no atomic RC needed */
 }
 
-bool omni_is_channel_transferred(AnalysisContext* ctx, const char* var_name) {
-    for (ThreadLocalityInfo* t = ctx->thread_locality; t; t = t->next) {
-        if (strcmp(t->var_name, var_name) == 0) {
-            return t->is_message;
-        }
-    }
-    return false;
-}
-
-void omni_record_channel_send(AnalysisContext* ctx, const char* channel,
-                              const char* value_var, bool transfers_ownership) {
-    ChannelOpInfo* op = malloc(sizeof(ChannelOpInfo));
-    op->position = ctx->position;
-    op->op = CHAN_SEND;
-    op->channel_name = strdup(channel);
-    op->value_var = strdup(value_var);
-    op->transfers_ownership = transfers_ownership;
-    op->next = ctx->channel_ops;
-    ctx->channel_ops = op;
-
-    /* Mark the value as transferred if ownership moves */
-    if (transfers_ownership) {
-        ThreadLocalityInfo* t = find_or_create_locality_info(ctx, value_var);
-        t->locality = THREAD_TRANSFER;
-        t->is_message = true;
-    }
-}
-
-void omni_record_channel_recv(AnalysisContext* ctx, const char* channel,
-                              const char* value_var) {
-    ChannelOpInfo* op = malloc(sizeof(ChannelOpInfo));
-    op->position = ctx->position;
-    op->op = CHAN_RECV;
-    op->channel_name = strdup(channel);
-    op->value_var = strdup(value_var);
-    op->transfers_ownership = true;  /* Recv always receives ownership */
-    op->next = ctx->channel_ops;
-    ctx->channel_ops = op;
-
-    /* Mark the value as owned by current thread now */
-    ThreadLocalityInfo* t = find_or_create_locality_info(ctx, value_var);
-    t->locality = THREAD_LOCAL;
-    t->thread_id = ctx->current_thread_id;
-    t->is_message = true;  /* Came from a channel */
-}
+/* DIRECTIVE: NO CHANNELS
+ * Channel transfer tracking functions removed:
+ * - omni_is_channel_transferred
+ * - omni_record_channel_send
+ * - omni_record_channel_recv
+ * Use algebraic effects for structured concurrency instead.
+ */
 
 void omni_record_thread_spawn(AnalysisContext* ctx, const char* thread_id,
                               char** captured_vars, size_t count) {
@@ -3813,20 +3755,7 @@ void omni_record_thread_spawn(AnalysisContext* ctx, const char* thread_id,
     ctx->thread_spawns = spawn;
 }
 
-bool omni_should_free_after_send(AnalysisContext* ctx, const char* channel,
-                                 const char* var_name) {
-    /* Look up the send operation */
-    for (ChannelOpInfo* op = ctx->channel_ops; op; op = op->next) {
-        if (op->op == CHAN_SEND &&
-            strcmp(op->channel_name, channel) == 0 &&
-            strcmp(op->value_var, var_name) == 0) {
-            /* If ownership transfers, don't free after send */
-            return !op->transfers_ownership;
-        }
-    }
-    /* Default: ownership transfers, so don't free */
-    return false;
-}
+/* DIRECTIVE: NO CHANNELS - omni_should_free_after_send removed */
 
 // REVIEWED:NAIVE
 ThreadSpawnInfo** omni_get_threads_capturing(AnalysisContext* ctx, const char* var_name,
@@ -3866,11 +3795,12 @@ void omni_analyze_concurrency(AnalysisContext* ctx, OmniValue* expr) {
     /*
      * Analyze concurrency patterns:
      * - (spawn ...) or (thread ...) - thread creation
-     * - (send! channel value) - channel send
-     * - (recv! channel) - channel receive
      * - (go ...) - goroutine-style spawn
      * - (async ...) - async block
      * - (atom ...) - atomic reference
+     *
+     * DIRECTIVE: NO CHANNELS - channel send/recv analysis removed.
+     * Use algebraic effects for structured concurrency instead.
      */
     if (!expr) return;
 
@@ -3938,58 +3868,10 @@ void omni_analyze_concurrency(AnalysisContext* ctx, OmniValue* expr) {
         return;
     }
 
-    /* Detect channel operations */
-    if (strcmp(form, "send!") == 0 || strcmp(form, "chan-send") == 0 ||
-        strcmp(form, "put!") == 0) {
-        /* (send! channel value) */
-        OmniValue* channel = cadr(expr);
-        OmniValue* value = caddr(expr);
+    /* DIRECTIVE: NO CHANNELS - channel send/recv detection removed */
 
-        if (omni_is_sym(channel) && omni_is_sym(value)) {
-            omni_record_channel_send(ctx, channel->str_val, value->str_val, true);
-        }
-        return;
-    }
-
-    if (strcmp(form, "recv!") == 0 || strcmp(form, "chan-recv") == 0 ||
-        strcmp(form, "take!") == 0) {
-        /* (recv! channel) or (let [x (recv! channel)] ...) */
-        OmniValue* channel = cadr(expr);
-        if (omni_is_sym(channel)) {
-            /* The result will be assigned to a variable - track at let binding */
-            omni_record_channel_recv(ctx, channel->str_val, "_recv_result");
-        }
-        return;
-    }
-
-    /* Detect let binding with recv */
+    /* Detect let bindings - recurse into body */
     if (strcmp(form, "let") == 0) {
-        OmniValue* bindings = cadr(expr);
-        for (OmniValue* b = bindings; omni_is_cell(b); b = omni_cdr(b)) {
-            OmniValue* binding = omni_car(b);
-            if (omni_is_cell(binding)) {
-                OmniValue* var = omni_car(binding);
-                OmniValue* init = cadr(binding);
-
-                /* Check if init is a recv operation */
-                if (omni_is_cell(init)) {
-                    OmniValue* init_head = omni_car(init);
-                    if (omni_is_sym(init_head)) {
-                        const char* init_form = init_head->str_val;
-                        if (strcmp(init_form, "recv!") == 0 ||
-                            strcmp(init_form, "chan-recv") == 0 ||
-                            strcmp(init_form, "take!") == 0) {
-
-                            OmniValue* channel = cadr(init);
-                            if (omni_is_sym(var) && omni_is_sym(channel)) {
-                                omni_record_channel_recv(ctx, channel->str_val, var->str_val);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        /* Continue analyzing body */
         OmniValue* body = caddr(expr);
         omni_analyze_concurrency(ctx, body);
         return;

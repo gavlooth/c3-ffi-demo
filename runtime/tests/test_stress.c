@@ -466,25 +466,7 @@ void test_stress_concurrent_atoms(void) {
     PASS();
 }
 
-void test_stress_channel_throughput(void) {
-    Obj* ch = make_channel(1000);
-
-    /* Send 10000 values */
-    for (int i = 0; i < 10000; i++) {
-        channel_send(ch, mk_int(i));
-    }
-
-    /* Receive all */
-    for (int i = 0; i < 10000; i++) {
-        Obj* val = channel_recv(ch);
-        ASSERT_NOT_NULL(val);
-        ASSERT_EQ(obj_to_int(val), i);
-        dec_ref(val);
-    }
-
-    dec_ref(ch);
-    PASS();
-}
+/* DIRECTIVE: NO CHANNELS - test_stress_channel_throughput removed */
 
 /* ========== Comprehensive Integration Stress Test ========== */
 
@@ -584,7 +566,7 @@ void run_stress_tests(void) {
 
     TEST_SECTION("Concurrency");
     RUN_TEST(test_stress_concurrent_atoms);
-    RUN_TEST(test_stress_channel_throughput);
+    /* DIRECTIVE: NO CHANNELS - test_stress_channel_throughput removed */
 
     TEST_SECTION("Integration");
     RUN_TEST(test_stress_integration);

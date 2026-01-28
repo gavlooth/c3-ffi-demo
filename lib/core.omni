@@ -1,0 +1,194 @@
+;; core.omni - OmniLisp Standard Macros
+;;
+;; This file defines standard macros that are available by default in all
+;; OmniLisp programs. These macros provide common syntactic sugar.
+;;
+;; To use these macros, ensure this file is loaded at the start of compilation.
+
+;; ============================================================
+;; Control Flow Macros
+;; ============================================================
+
+;; when - Execute body when condition is true
+;; Usage: (when condition body1 body2 ...)
+;; Expands to: (if condition (do body1 body2 ...) nil)
+(define [syntax when]
+  [(when test body ...)
+   (if test (do body ...) nil)])
+
+;; unless - Execute body when condition is false
+;; Usage: (unless condition body1 body2 ...)
+;; Expands to: (if condition nil (do body1 body2 ...))
+(define [syntax unless]
+  [(unless test body ...)
+   (if test nil (do body ...))])
+
+;; cond - Multi-way conditional
+;; Usage: (cond [test1 result1] [test2 result2] ... [else default])
+;; Expands to nested if-else chain
+(define [syntax cond]
+  [literals else]
+  ;; Base case: no clauses left -> nil
+  [(cond) nil]
+  ;; else clause -> return its body
+  [(cond [else result ...])
+   (do result ...)]
+  ;; Single clause
+  [(cond [test result])
+   (if test result nil)]
+  ;; Multiple clauses
+  [(cond [test result] rest ...)
+   (if test result (cond rest ...))])
+
+;; ============================================================
+;; Threading Macros
+;; ============================================================
+
+;; -> (thread-first) - Thread value through forms as first argument
+;; Usage: (-> x (f a b) (g c)) => (g (f x a b) c)
+(define [syntax ->]
+  ;; Base case: just the value
+  [(-> x) x]
+  ;; Thread through a symbol (call with one arg)
+  [(-> x f)
+   (f x)]
+  ;; Thread through a list form (insert as first arg)
+  [(-> x (f args ...))
+   (f x args ...)]
+  ;; Multiple forms
+  [(-> x form rest ...)
+   (-> (-> x form) rest ...)])
+
+;; ->> (thread-last) - Thread value through forms as last argument
+;; Usage: (->> x (f a b) (g c)) => (g c (f a b x))
+(define [syntax ->>]
+  ;; Base case: just the value
+  [(->> x) x]
+  ;; Thread through a symbol (call with one arg)
+  [(->> x f)
+   (f x)]
+  ;; Thread through a list form (insert as last arg)
+  [(->> x (f args ...))
+   (f args ... x)]
+  ;; Multiple forms
+  [(->> x form rest ...)
+   (->> (->> x form) rest ...)])
+
+;; ============================================================
+;; Let Binding Variants
+;; ============================================================
+
+;; if-let - Bind a value and test it, executing then-clause if truthy
+;; Usage: (if-let [x (may-fail)] success-expr failure-expr)
+(define [syntax if-let]
+  [(if-let [name value] then-expr else-expr)
+   (let [name value]
+     (if name then-expr else-expr))])
+
+;; when-let - Like if-let but with only a then-clause
+;; Usage: (when-let [x (may-fail)] body ...)
+(define [syntax when-let]
+  [(when-let [name value] body ...)
+   (let [name value]
+     (when name body ...))])
+
+;; ============================================================
+;; Looping Macros
+;; ============================================================
+
+;; dotimes - Execute body n times with index variable
+;; Usage: (dotimes [i 10] (print i))
+(define [syntax dotimes]
+  [(dotimes [var count] body ...)
+   (let [__max count]
+     (let loop [var 0]
+       (when (< var __max)
+         body ...
+         (loop (+ var 1)))))])
+
+;; for-each - Iterate over a collection
+;; Usage: (for-each [x coll] (print x))
+(define [syntax for-each]
+  [(for-each [var coll] body ...)
+   (let [__items coll]
+     (let loop [__rest __items]
+       (unless (null? __rest)
+         (let [var (first __rest)]
+           body ...
+           (loop (rest __rest))))))])
+
+;; ============================================================
+;; Assertion and Debugging
+;; ============================================================
+
+;; assert - Runtime assertion
+;; Usage: (assert (> x 0) "x must be positive")
+(define [syntax assert]
+  ;; With message
+  [(assert test message)
+   (unless test
+     (error message))]
+  ;; Without message
+  [(assert test)
+   (unless test
+     (error "Assertion failed"))])
+
+;; time-expr - Time an expression and print the result
+;; Usage: (time-expr (slow-computation))
+(define [syntax time-expr]
+  [(time-expr expr)
+   (let [__start (current-time-nanos)
+         __result expr
+         __end (current-time-nanos)]
+     (print "Time:" (- __end __start) "ns")
+     __result)])
+
+;; ============================================================
+;; Short-circuit Boolean Macros
+;; ============================================================
+
+;; and - Short-circuit logical and
+;; Note: These are typically built-in but shown here for completeness
+(define [syntax and]
+  [(and) true]
+  [(and x) x]
+  [(and x y ...)
+   (if x (and y ...) false)])
+
+;; or - Short-circuit logical or
+(define [syntax or]
+  [(or) false]
+  [(or x) x]
+  [(or x y ...)
+   (let [__tmp x]
+     (if __tmp __tmp (or y ...)))])
+
+;; ============================================================
+;; Pattern Matching Helpers
+;; ============================================================
+
+;; case - Simplified pattern matching on a value
+;; Usage: (case x [1 "one"] [2 "two"] [_ "other"])
+(define [syntax case]
+  [(case expr) nil]
+  [(case expr [_ result])
+   result]
+  [(case expr [pat result])
+   (if (equal? expr pat) result nil)]
+  [(case expr [pat result] rest ...)
+   (if (equal? expr pat)
+       result
+       (case expr rest ...))])
+
+;; ============================================================
+;; Resource Management
+;; ============================================================
+
+;; with-open - Execute body with a resource that will be closed
+;; Usage: (with-open [f (open-file "foo.txt")] (read-all f))
+(define [syntax with-open]
+  [(with-open [name resource] body ...)
+   (let [name resource
+         __result (do body ...)]
+     (close name)
+     __result)])

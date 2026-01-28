@@ -29,21 +29,21 @@ static inline int type_id_to_tag(TypeID type_id) {
         [TYPE_ID_FLOAT]   = TAG_FLOAT,    /* 1 -> 2 */
         [TYPE_ID_CHAR]    = TAG_CHAR,     /* 2 -> 3 */
         [TYPE_ID_PAIR]    = TAG_PAIR,     /* 3 -> 4 */
-        [TYPE_ID_ARRAY]   = TAG_ARRAY,    /* 4 -> 12 */
-        [TYPE_ID_STRING]  = TAG_STRING,   /* 5 -> 14 */
+        [TYPE_ID_ARRAY]   = TAG_ARRAY,    /* 4 -> 11 */
+        [TYPE_ID_STRING]  = TAG_STRING,   /* 5 -> 13 */
         [TYPE_ID_SYMBOL]  = TAG_SYM,      /* 6 -> 5 */
-        [TYPE_ID_DICT]    = TAG_DICT,     /* 7 -> 13 */
+        [TYPE_ID_DICT]    = TAG_DICT,     /* 7 -> 12 */
         [TYPE_ID_CLOSURE] = TAG_CLOSURE,  /* 8 -> 7 */
         [TYPE_ID_BOX]     = TAG_BOX,      /* 9 -> 6 */
-        [TYPE_ID_CHANNEL] = TAG_CHANNEL,  /* 10 -> 8 */
-        [TYPE_ID_THREAD]  = TAG_THREAD,   /* 11 -> 11 */
-        [TYPE_ID_ERROR]   = TAG_ERROR,    /* 12 -> 9 */
-        [TYPE_ID_ATOM]    = TAG_ATOM,     /* 13 -> 10 */
-        [TYPE_ID_SET]     = TAG_SET,      /* 14 -> 16 */
-        [15]              = TAG_KEYWORD,  /* RESERVED_15 -> 15 (KEYWORD) */
-        [TYPE_ID_GENERIC] = TAG_GENERIC,  /* 16 -> 18 */
-        [TYPE_ID_KIND]    = TAG_KIND,     /* 17 -> 19 */
-        [TYPE_ID_NOTHING] = TAG_NOTHING,  /* 18 -> 20 */
+        [TYPE_ID_CHANNEL] = TAG_ERROR,    /* 10 -> 8 (CHANNELS REMOVED - fallback to error) */
+        [TYPE_ID_THREAD]  = TAG_THREAD,   /* 11 -> 10 */
+        [TYPE_ID_ERROR]   = TAG_ERROR,    /* 12 -> 8 */
+        [TYPE_ID_ATOM]    = TAG_ATOM,     /* 13 -> 9 */
+        [TYPE_ID_SET]     = TAG_SET,      /* 14 -> 15 */
+        [15]              = TAG_KEYWORD,  /* RESERVED_15 -> 14 (KEYWORD) */
+        [TYPE_ID_GENERIC] = TAG_GENERIC,  /* 16 -> 17 */
+        [TYPE_ID_KIND]    = TAG_KIND,     /* 17 -> 18 */
+        [TYPE_ID_NOTHING] = TAG_NOTHING,  /* 18 -> 19 */
     };
     if (type_id < 0 || type_id >= (TypeID)(sizeof(type_id_to_tag_table) / sizeof(type_id_to_tag_table[0]))) {
         return TAG_GENERIC;  /* Fallback for unknown types */
@@ -60,7 +60,8 @@ static inline int type_id_to_tag(TypeID type_id) {
  * NOTE: Uses lookup table because TAG and TypeID enums are not aligned.
  */
 static inline TypeID tag_to_type_id(int tag) {
-    /* Lookup table: TAG -> TypeID */
+    /* Lookup table: TAG -> TypeID
+     * NOTE: TAG_CHANNEL was removed. Tag values have shifted. */
     static const TypeID tag_to_type_id_table[] = {
         [0]            = TYPE_ID_INT,     /* Invalid tag 0 -> fallback */
         [TAG_INT]      = TYPE_ID_INT,     /* 1 -> 0 */
@@ -70,19 +71,18 @@ static inline TypeID tag_to_type_id(int tag) {
         [TAG_SYM]      = TYPE_ID_SYMBOL,  /* 5 -> 6 */
         [TAG_BOX]      = TYPE_ID_BOX,     /* 6 -> 9 */
         [TAG_CLOSURE]  = TYPE_ID_CLOSURE, /* 7 -> 8 */
-        [TAG_CHANNEL]  = TYPE_ID_CHANNEL, /* 8 -> 10 */
-        [TAG_ERROR]    = TYPE_ID_ERROR,   /* 9 -> 12 */
-        [TAG_ATOM]     = TYPE_ID_ATOM,    /* 10 -> 13 */
-        [TAG_THREAD]   = TYPE_ID_THREAD,  /* 11 -> 11 */
-        [TAG_ARRAY]    = TYPE_ID_ARRAY,   /* 12 -> 4 */
-        [TAG_DICT]     = TYPE_ID_DICT,    /* 13 -> 7 */
-        [TAG_STRING]   = TYPE_ID_STRING,  /* 14 -> 5 */
-        [TAG_KEYWORD]  = TYPE_ID_GENERIC, /* 15 -> 16 (no direct TypeID) */
-        [TAG_SET]      = TYPE_ID_SET,     /* 16 -> 14 */
-        [TAG_DATETIME] = TYPE_ID_GENERIC, /* 17 -> 16 (no direct TypeID) */
-        [TAG_GENERIC]  = TYPE_ID_GENERIC, /* 18 -> 16 */
-        [TAG_KIND]     = TYPE_ID_KIND,    /* 19 -> 17 */
-        [TAG_NOTHING]  = TYPE_ID_NOTHING, /* 20 -> 18 */
+        [TAG_ERROR]    = TYPE_ID_ERROR,   /* 8 -> 12 */
+        [TAG_ATOM]     = TYPE_ID_ATOM,    /* 9 -> 13 */
+        [TAG_THREAD]   = TYPE_ID_THREAD,  /* 10 -> 11 */
+        [TAG_ARRAY]    = TYPE_ID_ARRAY,   /* 11 -> 4 */
+        [TAG_DICT]     = TYPE_ID_DICT,    /* 12 -> 7 */
+        [TAG_STRING]   = TYPE_ID_STRING,  /* 13 -> 5 */
+        [TAG_KEYWORD]  = TYPE_ID_GENERIC, /* 14 -> 16 (no direct TypeID) */
+        [TAG_SET]      = TYPE_ID_SET,     /* 15 -> 14 */
+        [TAG_DATETIME] = TYPE_ID_GENERIC, /* 16 -> 16 (no direct TypeID) */
+        [TAG_GENERIC]  = TYPE_ID_GENERIC, /* 17 -> 16 */
+        [TAG_KIND]     = TYPE_ID_KIND,    /* 18 -> 17 */
+        [TAG_NOTHING]  = TYPE_ID_NOTHING, /* 19 -> 18 */
     };
     if (tag < 0 || tag >= (int)(sizeof(tag_to_type_id_table) / sizeof(tag_to_type_id_table[0]))) {
         return TYPE_ID_GENERIC;  /* Fallback for unknown tags */
@@ -94,9 +94,16 @@ Obj* alloc_obj_region(Region* r, int tag) {
     /*
      * Phase 25: Delegate to alloc_obj_typed() to leverage type metadata optimization.
      * This converts legacy tag-based allocation to TypeID-based allocation.
+     * NOTE: We preserve the original tag for types that map to TYPE_ID_GENERIC,
+     * since the reverse mapping loses information (e.g., TAG_KEYWORD -> TYPE_ID_GENERIC).
      */
     TypeID type_id = tag_to_type_id(tag);
-    return alloc_obj_typed(r, type_id);
+    Obj* obj = alloc_obj_typed(r, type_id);
+    if (obj) {
+        /* Preserve original tag (fix for TAG_KEYWORD, TAG_DATETIME, etc.) */
+        obj->tag = tag;
+    }
+    return obj;
 }
 
 /*

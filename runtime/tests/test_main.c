@@ -49,7 +49,7 @@ static int run_slow_tests_enabled(void) {
 /* #include "test_weak_refs.c" */
 /* #include "test_borrowref.c" */
 /* #include "test_deferred.c" */
-#include "test_channel_semantics.c"
+/* DIRECTIVE: NO CHANNELS - test_channel_semantics.c removed */
 /* #include "test_sym_concurrency.c" */
 /* #include "test_component.c" */
 /* Note: test_stress.c uses deprecated/internal APIs - commented out */
@@ -71,11 +71,11 @@ static int run_slow_tests_enabled(void) {
 #include "test_region_accounting.c"
 #include "test_region_rank_basic.c"
 #include "test_store_barrier_rank_autorepair.c"
-#include "test_channel_send_autorepair.c"
+/* DIRECTIVE: NO CHANNELS - test_channel_send_autorepair.c removed */
 #include "test_store_barrier_merge.c"
 #include "test_dict_insert_autorepair.c"
 #include "test_effect_primitives.c"
-#include "test_fiber_select.c"
+/* DIRECTIVE: NO CHANNELS - test_fiber_select.c removed */
 #include "test_regex.c"
 #include "test_generic_functions.c"
 #include "test_piping_compose.c"
@@ -117,8 +117,7 @@ int main(int argc, char** argv) {
     /* run_deferred_tests(); */
 
     /* Concurrency tests */
-    run_channel_semantics_tests();
-    run_fiber_select_tests();
+    /* DIRECTIVE: NO CHANNELS - run_channel_semantics_tests, run_fiber_select_tests removed */
     /* Note: Concurrency stress tests disabled - see TEST_REVIEW.md for details */
     /* run_concurrency_tests(); */
 
@@ -151,7 +150,7 @@ int main(int argc, char** argv) {
 
     /* Store barrier and autorepair tests */
     run_store_barrier_rank_autorepair_tests();
-    run_channel_send_autorepair_tests();
+    /* DIRECTIVE: NO CHANNELS - run_channel_send_autorepair_tests removed */
     run_store_barrier_merge_tests();
     run_dict_insert_autorepair_tests();
 

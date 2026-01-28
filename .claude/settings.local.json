@@ -48,7 +48,8 @@
       "Bash(chmod:*)",
       "Bash(/home/heefoo/Documents/code/OmniLisp/tests/benchmark_omnilisp.sh:*)",
       "Bash(sort:*)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(./tests/test_effect_check:*)"
     ]
   }
 }

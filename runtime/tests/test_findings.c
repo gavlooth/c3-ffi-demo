@@ -80,12 +80,8 @@ void test_weak_ref_leak() {
  */
 void test_api_linking() {
     printf("Testing API linking consistency...\n");
-    // These should link correctly if the header matches the library
-    Obj* ch = channel_create(1);
-    channel_send(ch, mk_int(1));
-    Obj* val = channel_recv(ch);
-    (void)val;
-    
+    // DIRECTIVE: NO CHANNELS - channel_create, channel_send, channel_recv removed
+
     Obj* atom = atom_create(mk_int(10));
     atom_compare_and_set(atom, mk_int(10), mk_int(20));
     

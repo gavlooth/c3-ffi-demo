@@ -843,7 +843,9 @@ static void init_core_type_metadata(Region* r) {
         .debug_info = "Boxed value"
     };
     
-    /* TYPE_ID_CHANNEL */
+    /* TYPE_ID_CHANNEL - DIRECTIVE: NO CHANNELS
+     * This metadata is kept for enum stability but Channels are not created at runtime.
+     * Use algebraic effects for structured concurrency instead. */
     r->type_table[TYPE_ID_CHANNEL] = (TypeMetadata){
         .name = "Channel",
         .type_id = TYPE_ID_CHANNEL,
@@ -858,7 +860,7 @@ static void init_core_type_metadata(Region* r) {
         .destroy = NULL,
         .equals = NULL,
         .hash = NULL,
-        .debug_info = "Communication channel"
+        .debug_info = "REMOVED - use algebraic effects"
     };
 
     /* TYPE_ID_THREAD */

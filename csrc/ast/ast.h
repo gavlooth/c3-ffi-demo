@@ -37,8 +37,7 @@ typedef enum {
     OMNI_FLOAT,        /* Float64 */
     OMNI_BOX,          /* Mutable reference cell */
     OMNI_CONT,         /* First-class continuation */
-    OMNI_CHAN,         /* CSP channel (pthread-based) */
-    OMNI_GREEN_CHAN,   /* Green channel (continuation-based) */
+    /* DIRECTIVE: NO CHANNELS - removed OMNI_CHAN, OMNI_GREEN_CHAN */
     OMNI_ATOM,         /* Atomic reference */
     OMNI_THREAD,       /* OS thread handle */
     OMNI_PROCESS,      /* Green thread/process */
@@ -86,29 +85,7 @@ typedef struct OmniHandlerWrapper {
     OmniValue* closure;     /* For user-defined handlers */
 } OmniHandlerWrapper;
 
-/* Channel structure (for CSP) */
-typedef struct OmniChannel {
-    OmniValue** buffer;     /* Circular buffer */
-    int capacity;           /* 0 = unbuffered */
-    int head;
-    int tail;
-    int count;
-    int closed;
-    OmniValue* send_waiters;
-    OmniValue* recv_waiters;
-} OmniChannel;
-
-/* Green channel (continuation-based) */
-typedef struct OmniGreenChannel {
-    OmniValue** buffer;
-    int capacity;
-    int head;
-    int tail;
-    int count;
-    int closed;
-    OmniValue* send_waiters;
-    OmniValue* recv_waiters;
-} OmniGreenChannel;
+/* DIRECTIVE: NO CHANNELS - Use algebraic effects instead */
 
 /* Thread handle */
 typedef struct OmniThreadHandle {
@@ -173,12 +150,6 @@ struct OmniValue {
             OmniValue* menv;
             int tag;
         } cont;
-
-        /* OMNI_CHAN */
-        OmniChannel* chan;
-
-        /* OMNI_GREEN_CHAN */
-        OmniGreenChannel* green_chan;
 
         /* OMNI_ATOM */
         OmniValue* atom_value;
@@ -276,8 +247,7 @@ OmniValue* omni_new_rec_lambda(OmniValue* self_name, OmniValue* params, OmniValu
 OmniValue* omni_new_error(const char* msg);
 OmniValue* omni_new_box(OmniValue* initial);
 OmniValue* omni_new_cont(OmniContFn fn, OmniValue* menv, int tag);
-OmniValue* omni_new_chan(int capacity);
-OmniValue* omni_new_green_chan(int capacity);
+/* DIRECTIVE: NO CHANNELS - omni_new_chan, omni_new_green_chan removed */
 OmniValue* omni_new_atom(OmniValue* initial);
 OmniValue* omni_new_thread(void);
 OmniValue* omni_new_process(OmniValue* thunk);
@@ -311,8 +281,6 @@ static inline bool omni_is_rec_lambda(OmniValue* v) { return v != NULL && v->tag
 static inline bool omni_is_error(OmniValue* v) { return v != NULL && v->tag == OMNI_ERROR; }
 static inline bool omni_is_box(OmniValue* v) { return v != NULL && v->tag == OMNI_BOX; }
 static inline bool omni_is_cont(OmniValue* v) { return v != NULL && v->tag == OMNI_CONT; }
-static inline bool omni_is_chan(OmniValue* v) { return v != NULL && v->tag == OMNI_CHAN; }
-static inline bool omni_is_green_chan(OmniValue* v) { return v != NULL && v->tag == OMNI_GREEN_CHAN; }
 static inline bool omni_is_atom(OmniValue* v) { return v != NULL && v->tag == OMNI_ATOM; }
 static inline bool omni_is_thread(OmniValue* v) { return v != NULL && v->tag == OMNI_THREAD; }
 static inline bool omni_is_process(OmniValue* v) { return v != NULL && v->tag == OMNI_PROCESS; }

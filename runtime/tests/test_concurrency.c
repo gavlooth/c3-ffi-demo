@@ -1,125 +1,11 @@
-/* test_concurrency.c - Channel, atom, and thread tests */
+/* test_concurrency.c - Atom and thread tests
+ * DIRECTIVE: NO CHANNELS - All channel tests removed.
+ * Use algebraic effects for structured concurrency instead.
+ */
 #include "test_framework.h"
 #include <unistd.h>
 
-/* ========== Channel Creation Tests ========== */
-
-void test_make_channel_unbuffered(void) {
-    Obj* ch = make_channel(0);
-    ASSERT_NOT_NULL(ch);
-    ASSERT_EQ(ch->tag, TAG_CHANNEL);
-    dec_ref(ch);
-    PASS();
-}
-
-void test_make_channel_buffered(void) {
-    Obj* ch = make_channel(10);
-    ASSERT_NOT_NULL(ch);
-    ASSERT_EQ(ch->tag, TAG_CHANNEL);
-    dec_ref(ch);
-    PASS();
-}
-
-void test_make_channel_large_buffer(void) {
-    Obj* ch = make_channel(1000);
-    ASSERT_NOT_NULL(ch);
-    dec_ref(ch);
-    PASS();
-}
-
-/* ========== Channel Send/Receive Tests ========== */
-
-void test_channel_send_receive_basic(void) {
-    Obj* ch = make_channel(1);
-    Obj* val = mk_int(42);
-
-    /* Send */
-    int sent = channel_send(ch, val);
-    ASSERT(sent);
-
-    /* Receive */
-    Obj* received = channel_recv(ch);
-    ASSERT_NOT_NULL(received);
-    ASSERT_EQ(obj_to_int(received), 42);
-
-    dec_ref(received);
-    dec_ref(ch);
-    PASS();
-}
-
-void test_channel_send_multiple(void) {
-    Obj* ch = make_channel(5);
-
-    for (int i = 0; i < 5; i++) {
-        Obj* val = mk_int(i);
-        int sent = channel_send(ch, val);
-        ASSERT(sent);
-    }
-
-    for (int i = 0; i < 5; i++) {
-        Obj* received = channel_recv(ch);
-        ASSERT_NOT_NULL(received);
-        ASSERT_EQ(obj_to_int(received), i);
-        dec_ref(received);
-    }
-
-    dec_ref(ch);
-    PASS();
-}
-
-void test_channel_send_immediate(void) {
-    Obj* ch = make_channel(1);
-    Obj* val = mk_int_unboxed(99);
-
-    int sent = channel_send(ch, val);
-    ASSERT(sent);
-
-    Obj* received = channel_recv(ch);
-    ASSERT_EQ(obj_to_int(received), 99);
-
-    dec_ref(ch);
-    PASS();
-}
-
-/* ========== Channel Close Tests ========== */
-
-void test_channel_close(void) {
-    Obj* ch = make_channel(1);
-    channel_close(ch);
-    /* After close, send should fail */
-    Obj* val = mk_int(42);
-    int sent = channel_send(ch, val);
-    ASSERT(!sent);
-    dec_ref(val);
-    dec_ref(ch);
-    PASS();
-}
-
-void test_channel_close_null(void) {
-    channel_close(NULL);  /* Should not crash */
-    PASS();
-}
-
-/* ========== Channel Edge Cases ========== */
-
-void test_channel_send_null(void) {
-    Obj* ch = make_channel(1);
-    int sent = channel_send(ch, NULL);
-    ASSERT(sent);  /* NULL is a valid value */
-    Obj* received = channel_recv(ch);
-    ASSERT_NULL(received);
-    dec_ref(ch);
-    PASS();
-}
-
-void test_channel_recv_from_closed_empty(void) {
-    Obj* ch = make_channel(1);
-    channel_close(ch);
-    Obj* received = channel_recv(ch);
-    ASSERT_NULL(received);
-    dec_ref(ch);
-    PASS();
-}
+/* DIRECTIVE: NO CHANNELS - Channel Creation, Send/Receive, Close, and Edge Case tests removed */
 
 /* ========== Atom Creation Tests ========== */
 
@@ -436,43 +322,7 @@ void test_thread_join_multiple_times(void) {
     PASS();
 }
 
-/* ========== Concurrent Channel Tests ========== */
-
-static Obj* producer_fn(Obj** caps, Obj** args, int nargs) {
-    (void)args; (void)nargs;
-    Obj* ch = caps[0];
-    for (int i = 0; i < 10; i++) {
-        channel_send(ch, mk_int(i));
-    }
-    return NULL;
-}
-
-void test_concurrent_channel(void) {
-    Obj* ch = make_channel(10);
-    Obj* caps[] = {ch};
-    Obj* closure = mk_closure(producer_fn, caps, NULL, 1, 0);
-
-    Obj* thread = spawn_thread(closure);
-
-    /* Receive all values */
-    int sum = 0;
-    for (int i = 0; i < 10; i++) {
-        Obj* val = channel_recv(ch);
-        if (val) {
-            sum += obj_to_int(val);
-            dec_ref(val);
-        }
-    }
-
-    thread_join(thread);
-
-    ASSERT_EQ(sum, 45);  /* 0+1+2+...+9 = 45 */
-
-    dec_ref(thread);
-    dec_ref(closure);
-    dec_ref(ch);
-    PASS();
-}
+/* DIRECTIVE: NO CHANNELS - test_concurrent_channel and producer_fn removed */
 
 /* ========== Concurrent Atom Tests ========== */
 
@@ -518,19 +368,7 @@ void test_concurrent_atom(void) {
 
 /* ========== Stress Tests ========== */
 
-void test_channel_stress_many_values(void) {
-    Obj* ch = make_channel(1000);
-    for (int i = 0; i < 1000; i++) {
-        channel_send(ch, mk_int(i));
-    }
-    for (int i = 0; i < 1000; i++) {
-        Obj* val = channel_recv(ch);
-        ASSERT_EQ(obj_to_int(val), i);
-        dec_ref(val);
-    }
-    dec_ref(ch);
-    PASS();
-}
+/* DIRECTIVE: NO CHANNELS - test_channel_stress_many_values removed */
 
 void test_atom_stress_many_swaps(void) {
     Obj* val = mk_int(0);
@@ -579,23 +417,7 @@ void test_thread_stress_many_threads(void) {
 void run_concurrency_tests(void) {
     TEST_SUITE("Concurrency");
 
-    TEST_SECTION("Channel Creation");
-    RUN_TEST(test_make_channel_unbuffered);
-    RUN_TEST(test_make_channel_buffered);
-    RUN_TEST(test_make_channel_large_buffer);
-
-    TEST_SECTION("Channel Send/Receive");
-    RUN_TEST(test_channel_send_receive_basic);
-    RUN_TEST(test_channel_send_multiple);
-    RUN_TEST(test_channel_send_immediate);
-
-    TEST_SECTION("Channel Close");
-    RUN_TEST(test_channel_close);
-    RUN_TEST(test_channel_close_null);
-
-    TEST_SECTION("Channel Edge Cases");
-    RUN_TEST(test_channel_send_null);
-    RUN_TEST(test_channel_recv_from_closed_empty);
+    /* DIRECTIVE: NO CHANNELS - Channel Creation, Send/Receive, Close, Edge Case test sections removed */
 
     TEST_SECTION("Atom Creation");
     RUN_TEST(test_make_atom);
@@ -633,11 +455,11 @@ void run_concurrency_tests(void) {
     RUN_TEST(test_thread_join_multiple_times);
 
     TEST_SECTION("Concurrent Operations");
-    RUN_TEST(test_concurrent_channel);
+    /* DIRECTIVE: NO CHANNELS - test_concurrent_channel removed */
     RUN_TEST(test_concurrent_atom);
 
     TEST_SECTION("Stress Tests");
-    RUN_TEST(test_channel_stress_many_values);
+    /* DIRECTIVE: NO CHANNELS - test_channel_stress_many_values removed */
     RUN_TEST(test_atom_stress_many_swaps);
     RUN_TEST(test_thread_stress_many_threads);
 }

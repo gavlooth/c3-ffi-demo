@@ -117,20 +117,7 @@ static void test_api_arena(void) {
     PASS();
 }
 
-static void test_api_channel(void) {
-    TEST("channel");
-    Obj* ch = channel_create(1);
-    Obj* val = mk_int(55);
-    int sent = channel_send(ch, val);
-    ASSERT(sent);
-    Obj* recv = channel_recv(ch);
-    ASSERT_NOT_NULL(recv);
-    ASSERT_EQ(obj_to_int(recv), 55);
-    dec_ref(recv);
-    channel_close(ch);
-    dec_ref(ch);
-    PASS();
-}
+/* DIRECTIVE: NO CHANNELS - test_api_channel removed */
 
 static void test_api_atom(void) {
     TEST("atom");
@@ -177,7 +164,7 @@ int main(void) {
     test_api_closure();
     test_api_borrow_get();
     test_api_arena();
-    test_api_channel();
+    /* DIRECTIVE: NO CHANNELS - test_api_channel removed */
     test_api_atom();
     test_api_thread();
 

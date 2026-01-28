@@ -959,42 +959,9 @@ void test_stack_pool_exhaustion(void) {
 
 /* ========== Concurrency Edge Cases ========== */
 
-void test_channel_zero_capacity(void) {
-    Obj* ch = make_channel(0);
-    ASSERT_NOT_NULL(ch);
-    dec_ref(ch);
-    PASS();
-}
-
-void test_channel_negative_capacity(void) {
-    Obj* ch = make_channel(-1);
-    ASSERT_NOT_NULL(ch);
-    dec_ref(ch);
-    PASS();
-}
-
-void test_channel_send_on_closed(void) {
-    Obj* ch = make_channel(1);
-    channel_close(ch);
-
-    int result = channel_send(ch, mk_int(42));
-    (void)result;
-    /* Should fail gracefully */
-
-    dec_ref(ch);
-    PASS();
-}
-
-void test_channel_recv_on_closed(void) {
-    Obj* ch = make_channel(1);
-    channel_close(ch);
-
-    Obj* result = channel_recv(ch);
-    ASSERT_NULL(result);
-
-    dec_ref(ch);
-    PASS();
-}
+/* DIRECTIVE: NO CHANNELS - test_channel_zero_capacity, test_channel_negative_capacity,
+ * test_channel_send_on_closed, test_channel_recv_on_closed removed.
+ * Use algebraic effects for structured concurrency instead. */
 
 void test_atom_with_null(void) {
     Obj* atom = make_atom(NULL);
@@ -1258,10 +1225,7 @@ void run_edge_case_memory_tests(void) {
     RUN_TEST(test_stack_pool_exhaustion);
 
     TEST_SECTION("Concurrency");
-    RUN_TEST(test_channel_zero_capacity);
-    RUN_TEST(test_channel_negative_capacity);
-    RUN_TEST(test_channel_send_on_closed);
-    RUN_TEST(test_channel_recv_on_closed);
+    /* DIRECTIVE: NO CHANNELS - channel tests removed */
     RUN_TEST(test_atom_with_null);
     RUN_TEST(test_atom_cas_fail);
 

@@ -6,7 +6,7 @@
 
 (define [syntax when]
   [(when test body ...)
-   (if test (do body ...) nil])
+   (if test (do body ...) nil)])
 
 ;; Test when with true condition
 (when true

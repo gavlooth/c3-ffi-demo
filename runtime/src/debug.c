@@ -97,7 +97,7 @@ static const char* tag_to_string(int tag) {
         case TAG_SYM:       return "Symbol";
         case TAG_BOX:       return "Box";
         case TAG_CLOSURE:   return "Closure";
-        case TAG_CHANNEL:   return "Channel";
+        /* DIRECTIVE: NO CHANNELS - TAG_CHANNEL removed */
         case TAG_ERROR:     return "Error";
         case TAG_ATOM:      return "Atom";
         case TAG_THREAD:    return "Thread";
@@ -385,6 +385,9 @@ Obj* prim_inspect(Obj* obj) {
  *
  * Returns a symbol representing the type of the object.
  * Examples: :int, :float, :string, :array, :closure, etc.
+ *
+ * For user-defined struct types, returns the struct type name
+ * registered via omni_register_user_type.
  */
 Obj* prim_type_of(Obj* obj) {
     if (!obj) {
@@ -405,11 +408,18 @@ Obj* prim_type_of(Obj* obj) {
         return mk_keyword("unknown");
     }
 
-    /* Convert tag to lowercase keyword */
-    const char* type_str = tag_to_string(obj->tag);
-    char lower[32];
+    /* Use omni_type_name_from_tag for unified type name lookup
+     * This handles both built-in and user-defined types */
+    const char* type_str = omni_type_name_from_tag(obj->tag);
+    if (!type_str) {
+        /* Fallback to tag_to_string for unregistered types */
+        type_str = tag_to_string(obj->tag);
+    }
+
+    /* Convert to lowercase keyword */
+    char lower[64];
     int i = 0;
-    while (type_str[i] && i < 31) {
+    while (type_str[i] && i < 63) {
         char c = type_str[i];
         lower[i] = (c >= 'A' && c <= 'Z') ? c + 32 : c;
         i++;
@@ -726,9 +736,7 @@ static const struct { const char* name; const char* doc; } g_builtin_docs[] = {
     {"deref", "(deref atom) - Get value from atom"},
     {"reset!", "(reset! atom val) - Set atom to new value"},
     {"swap!", "(swap! atom f) - Apply f to atom value atomically"},
-    {"channel", "(channel) or (channel n) - Create channel (optionally buffered)"},
-    {"send", "(send ch val) - Send value to channel"},
-    {"recv", "(recv ch) - Receive value from channel"},
+    /* DIRECTIVE: NO CHANNELS - channel, send, recv help removed */
 
     /* Pipe operator */
     {"|>", "(|> val f1 f2 ...) - Pipe value through functions"},

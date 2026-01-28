@@ -222,35 +222,8 @@ OmniValue* omni_new_cont(OmniContFn fn, OmniValue* menv, int tag) {
     return v;
 }
 
-OmniValue* omni_new_chan(int capacity) {
-    OmniValue* v = omni_alloc_value();
-    if (!v) return NULL;
-    v->tag = OMNI_CHAN;
-    OmniChannel* ch = omni_arena_alloc(omni_ast_arena_get(), sizeof(OmniChannel));
-    if (!ch) return NULL;
-    memset(ch, 0, sizeof(OmniChannel));
-    ch->capacity = capacity;
-    if (capacity > 0) {
-        ch->buffer = omni_arena_alloc(omni_ast_arena_get(), capacity * sizeof(OmniValue*));
-    }
-    v->chan = ch;
-    return v;
-}
-
-OmniValue* omni_new_green_chan(int capacity) {
-    OmniValue* v = omni_alloc_value();
-    if (!v) return NULL;
-    v->tag = OMNI_GREEN_CHAN;
-    OmniGreenChannel* ch = omni_arena_alloc(omni_ast_arena_get(), sizeof(OmniGreenChannel));
-    if (!ch) return NULL;
-    memset(ch, 0, sizeof(OmniGreenChannel));
-    ch->capacity = capacity;
-    if (capacity > 0) {
-        ch->buffer = omni_arena_alloc(omni_ast_arena_get(), capacity * sizeof(OmniValue*));
-    }
-    v->green_chan = ch;
-    return v;
-}
+/* DIRECTIVE: NO CHANNELS - omni_new_chan, omni_new_green_chan removed.
+ * Use algebraic effects for structured concurrency instead. */
 
 OmniValue* omni_new_atom(OmniValue* initial) {
     OmniValue* v = omni_alloc_value();
@@ -758,12 +731,7 @@ static char* value_to_string_impl(OmniValue* v) {
     case OMNI_CONT:
         return strdup("#<continuation>");
 
-    case OMNI_CHAN:
-        snprintf(tmp, sizeof(tmp), "#<channel cap=%d>", v->chan ? v->chan->capacity : 0);
-        return strdup(tmp);
-
-    case OMNI_GREEN_CHAN:
-        return strdup("#<green-channel>");
+    /* DIRECTIVE: NO CHANNELS - OMNI_CHAN, OMNI_GREEN_CHAN cases removed */
 
     case OMNI_ATOM:
         string_builder_init(&buf, &cap, &len);
@@ -923,8 +891,7 @@ const char* omni_tag_name(OmniTag tag) {
     case OMNI_FLOAT: return "FLOAT";
     case OMNI_BOX: return "BOX";
     case OMNI_CONT: return "CONT";
-    case OMNI_CHAN: return "CHAN";
-    case OMNI_GREEN_CHAN: return "GREEN_CHAN";
+    /* DIRECTIVE: NO CHANNELS - OMNI_CHAN, OMNI_GREEN_CHAN removed */
     case OMNI_ATOM: return "ATOM";
     case OMNI_THREAD: return "THREAD";
     case OMNI_PROCESS: return "PROCESS";

@@ -1,8 +1,11 @@
 /*
  * Concurrency Ownership Inference Tests
  *
- * Tests that thread locality, channel ownership transfer, and
- * atomic reference counting are correctly inferred.
+ * Tests that thread locality and atomic reference counting
+ * are correctly inferred.
+ *
+ * DIRECTIVE: NO CHANNELS - Channel tests removed.
+ * Use algebraic effects for structured concurrency instead.
  */
 
 #ifndef _POSIX_C_SOURCE
@@ -70,11 +73,7 @@ TEST(test_thread_locality_names) {
     ASSERT(strcmp(omni_thread_locality_name(THREAD_IMMUTABLE), "immutable") == 0);
 }
 
-TEST(test_channel_op_names) {
-    ASSERT(strcmp(omni_channel_op_name(CHAN_SEND), "send") == 0);
-    ASSERT(strcmp(omni_channel_op_name(CHAN_RECV), "recv") == 0);
-    ASSERT(strcmp(omni_channel_op_name(CHAN_CLOSE), "close") == 0);
-}
+/* DIRECTIVE: NO CHANNELS - test_channel_op_names removed */
 
 /* ========== Thread Locality Marking ========== */
 
@@ -113,39 +112,11 @@ TEST(test_default_locality) {
     omni_analysis_free(ctx);
 }
 
-/* ========== Channel Operations ========== */
-
-TEST(test_channel_send) {
-    AnalysisContext* ctx = omni_analysis_new();
-
-    omni_record_channel_send(ctx, "ch", "msg", true);
-
-    ASSERT(omni_is_channel_transferred(ctx, "msg") == true);
-    ASSERT(omni_get_thread_locality(ctx, "msg") == THREAD_TRANSFER);
-
-    omni_analysis_free(ctx);
-}
-
-TEST(test_channel_recv) {
-    AnalysisContext* ctx = omni_analysis_new();
-
-    omni_record_channel_recv(ctx, "ch", "received");
-
-    ASSERT(omni_is_channel_transferred(ctx, "received") == true);
-    ASSERT(omni_get_thread_locality(ctx, "received") == THREAD_LOCAL);
-
-    omni_analysis_free(ctx);
-}
-
-TEST(test_should_free_after_send) {
-    AnalysisContext* ctx = omni_analysis_new();
-
-    /* Send with ownership transfer - should NOT free after */
-    omni_record_channel_send(ctx, "ch", "val", true);
-    ASSERT(omni_should_free_after_send(ctx, "ch", "val") == false);
-
-    omni_analysis_free(ctx);
-}
+/* DIRECTIVE: NO CHANNELS - Channel Operations tests removed:
+ * - test_channel_send
+ * - test_channel_recv
+ * - test_should_free_after_send
+ */
 
 /* ========== Thread Spawn ========== */
 
@@ -181,22 +152,7 @@ TEST(test_threads_capturing_variable) {
 
 /* ========== Concurrency Analysis ========== */
 
-TEST(test_analyze_send_expr) {
-    AnalysisContext* ctx = omni_analysis_new();
-
-    /* (send! ch value) */
-    OmniValue* expr = mk_list3(
-        mk_sym("send!"),
-        mk_sym("ch"),
-        mk_sym("value")
-    );
-
-    omni_analyze_concurrency(ctx, expr);
-
-    ASSERT(omni_is_channel_transferred(ctx, "value") == true);
-
-    omni_analysis_free(ctx);
-}
+/* DIRECTIVE: NO CHANNELS - test_analyze_send_expr removed */
 
 TEST(test_analyze_spawn_expr) {
     AnalysisContext* ctx = omni_analysis_new();
@@ -246,11 +202,8 @@ TEST(test_codegen_has_concurrency_macros) {
     ASSERT(strstr(output, "ATOMIC_DEC_REF") != NULL);
     ASSERT(strstr(output, "THREAD_LOCAL_VAR") != NULL);
     ASSERT(strstr(output, "THREAD_SHARED_VAR") != NULL);
-    ASSERT(strstr(output, "Channel") != NULL);
-    ASSERT(strstr(output, "channel_send") != NULL);
-    ASSERT(strstr(output, "channel_recv") != NULL);
-    ASSERT(strstr(output, "SEND_OWNERSHIP") != NULL);
-    ASSERT(strstr(output, "RECV_OWNERSHIP") != NULL);
+    /* DIRECTIVE: NO CHANNELS - Channel, channel_send, channel_recv,
+     * SEND_OWNERSHIP, RECV_OWNERSHIP assertions removed */
     ASSERT(strstr(output, "SPAWN_THREAD") != NULL);
     ASSERT(strstr(output, "INC_REF_FOR_THREAD") != NULL);
     ASSERT(strstr(output, "DEC_REF_FOR_THREAD") != NULL);
@@ -266,24 +219,21 @@ int main(void) {
 
     printf("\n\033[33m--- Thread Locality Names ---\033[0m\n");
     RUN_TEST(test_thread_locality_names);
-    RUN_TEST(test_channel_op_names);
+    /* DIRECTIVE: NO CHANNELS - test_channel_op_names removed */
 
     printf("\n\033[33m--- Thread Locality Marking ---\033[0m\n");
     RUN_TEST(test_mark_thread_local);
     RUN_TEST(test_mark_thread_shared);
     RUN_TEST(test_default_locality);
 
-    printf("\n\033[33m--- Channel Operations ---\033[0m\n");
-    RUN_TEST(test_channel_send);
-    RUN_TEST(test_channel_recv);
-    RUN_TEST(test_should_free_after_send);
+    /* DIRECTIVE: NO CHANNELS - Channel Operations tests removed */
 
     printf("\n\033[33m--- Thread Spawn ---\033[0m\n");
     RUN_TEST(test_thread_spawn);
     RUN_TEST(test_threads_capturing_variable);
 
     printf("\n\033[33m--- Concurrency Analysis ---\033[0m\n");
-    RUN_TEST(test_analyze_send_expr);
+    /* DIRECTIVE: NO CHANNELS - test_analyze_send_expr removed */
     RUN_TEST(test_analyze_spawn_expr);
     RUN_TEST(test_analyze_atom_expr);
 

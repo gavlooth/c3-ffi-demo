@@ -465,7 +465,7 @@ static TypeID transmigrate_tag_to_type_id(int tag) {
         case TAG_DICT:        return TYPE_ID_DICT;
         case TAG_CLOSURE:     return TYPE_ID_CLOSURE;
         case TAG_BOX:         return TYPE_ID_BOX;
-        case TAG_CHANNEL:     return TYPE_ID_CHANNEL;
+        /* TAG_CHANNEL removed - channels no longer supported */
         case TAG_THREAD:      return TYPE_ID_THREAD;
         case TAG_ERROR:       return TYPE_ID_ERROR;
         case TAG_ATOM:        return TYPE_ID_ATOM;

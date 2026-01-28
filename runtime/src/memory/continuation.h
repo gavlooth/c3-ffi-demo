@@ -4,12 +4,18 @@
  * This module provides:
  * - Delimited continuations (prompt/control)
  * - Fiber scheduler (lightweight cooperative tasks)
- * - Fiber-based channels
  * - Generators/iterators
  * - Async/await (promises)
  *
  * Design: CEK machine with explicit continuation frames.
  * All "stack" is heap-allocated, enabling capture without copying.
+ *
+ * DIRECTIVE: NO CHANNELS
+ * ----------------------
+ * Channels (FiberChannel, SelectWaiter, fiber_select, etc.) have been
+ * intentionally removed from this codebase. Do NOT re-add channel-based
+ * concurrency. Use algebraic effects for structured concurrency instead.
+ * Fibers + Effects provide superior composability without CSP complexity.
  */
 
 #ifndef OMNI_CONTINUATION_H
@@ -34,12 +40,10 @@ typedef struct Frame Frame;
 typedef struct Continuation Continuation;
 typedef struct Fiber Fiber;
 typedef struct Scheduler Scheduler;
-typedef struct FiberChannel FiberChannel;
 typedef struct Generator Generator;
 typedef struct Promise Promise;
 typedef struct WorkerThread WorkerThread;
 typedef struct ThreadPool ThreadPool;
-typedef struct SelectWaiter SelectWaiter;  /* Forward declaration */
 
 /* ========== Continuation Frame Types ========== */
 
@@ -153,15 +157,9 @@ struct Fiber {
     Fiber* next;            /* Next in queue */
     Fiber* prev;            /* Previous in queue (for removal) */
 
-    /* Parking info (single-channel) */
-    void* park_reason;      /* Channel/promise we're waiting on */
-    Obj* park_value;        /* Value to send (for channel send) */
-
-    /* Select state (multi-channel) */
-    SelectWaiter** select_waiters;  /* Array of waiters (one per case) */
-    int select_count;               /* Number of cases */
-    int select_ready;               /* Index of completed case (-1 = none) */
-    bool in_select;                 /* True if parked in select() */
+    /* Parking info */
+    void* park_reason;      /* Promise we're waiting on */
+    Obj* park_value;        /* Optional value for resume */
 
     /* Result */
     Obj* result;            /* Final result when FIBER_DONE */
@@ -261,52 +259,6 @@ struct ThreadPool {
     volatile uint64_t total_tasks_spawned;
     volatile uint64_t total_tasks_completed;
     volatile uint64_t total_steals;
-};
-
-/* ========== Select Waiter (Multi-Channel Select) ========== */
-
-/*
- * SelectWaiter: Node linking a fiber to a channel during select().
- *
- * When a fiber calls select() with multiple cases, one SelectWaiter
- * is created per case and inserted into the channel's select waiter list.
- * This allows a fiber to wait on multiple channels simultaneously.
- *
- * Design: Separate from regular waiters to minimize impact on common case.
- */
-struct SelectWaiter {
-    Fiber* fiber;               /* The waiting fiber */
-    int case_index;             /* Index in the SelectCase array */
-    Obj* value;                 /* For send: value to send */
-    SelectWaiter* next;         /* Next waiter in channel's list */
-    SelectWaiter* prev;         /* Previous waiter (for O(1) removal) */
-};
-
-/* ========== Fiber Channel ========== */
-
-/*
- * Fiber-based channel. No pthread primitives.
- * Blocking operations park the fiber and yield to scheduler.
- */
-struct FiberChannel {
-    /* Buffer (for buffered channels) */
-    Obj** buffer;
-    int capacity;           /* 0 = unbuffered (rendezvous) */
-    int count;
-    int head;
-    int tail;
-
-    /* Wait queues (parked fibers) - single-channel blocking */
-    Fiber* send_waiters;    /* Fibers waiting to send */
-    Fiber* recv_waiters;    /* Fibers waiting to receive */
-
-    /* Select wait queues - multi-channel blocking */
-    SelectWaiter* select_send_waiters;  /* Select senders */
-    SelectWaiter* select_recv_waiters;  /* Select receivers */
-
-    /* State */
-    bool closed;
-    uint32_t refcount;
 };
 
 /* ========== Generator (Iterator) ========== */
@@ -479,32 +431,6 @@ void fiber_unpark(Fiber* f, Obj* value);
 /* Unpark a fiber with error flag (internal) */
 void fiber_unpark_error(Fiber* f, Obj* value, bool is_error);
 
-/* ========== API: Fiber Channels ========== */
-
-/* Create channel */
-FiberChannel* fiber_channel_create(int capacity);
-
-/* Send value (may park) */
-void fiber_channel_send(FiberChannel* ch, Obj* value);
-
-/* Receive value (may park) */
-Obj* fiber_channel_recv(FiberChannel* ch);
-
-/* Try send (non-blocking) */
-bool fiber_channel_try_send(FiberChannel* ch, Obj* value);
-
-/* Try receive (non-blocking) */
-Obj* fiber_channel_try_recv(FiberChannel* ch, bool* ok);
-
-/* Close channel */
-void fiber_channel_close(FiberChannel* ch);
-
-/* Is channel closed? */
-bool fiber_channel_is_closed(FiberChannel* ch);
-
-/* Release channel */
-void fiber_channel_release(FiberChannel* ch);
-
 /* ========== API: Generators (Iterators) ========== */
 
 /* Create a generator from a producer function */
@@ -556,18 +482,6 @@ void promise_release(Promise* p);
 
 /* Create promise Obj wrapper */
 Obj* mk_promise_obj(Promise* p);
-
-/* ========== API: Select (Multi-Wait) ========== */
-
-typedef struct SelectCase {
-    enum { SELECT_RECV, SELECT_SEND, SELECT_DEFAULT } op;
-    FiberChannel* channel;
-    Obj* value;             /* For send */
-    Obj** result;           /* For recv */
-} SelectCase;
-
-/* Select from multiple channel operations */
-int fiber_select(SelectCase* cases, int count);
 
 /* ========== API: Timeout ========== */
 

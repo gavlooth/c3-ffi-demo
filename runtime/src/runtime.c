@@ -39,6 +39,195 @@ Obj* o_String = NULL; /* String type object */
 Obj* o_Any = NULL;    /* Any type object (top type) */
 Obj* o_Nothing = NULL; /* Nothing type object */
 
+/* ============== Runtime Type Registry for User-Defined Types ============== */
+
+/*
+ * RuntimeTypeInfo - Information about a user-defined type
+ *
+ * Used for:
+ *   - type? predicate with user-defined struct types
+ *   - type-of returning struct type names
+ *   - subtype checking in generic dispatch
+ */
+typedef struct RuntimeTypeInfo {
+    int tag;                    /* ObjTag value (>= TAG_USER_BASE for user types) */
+    char* name;                 /* Type name (e.g., "Point", "Person") */
+    char* parent;               /* Parent type name (for subtype checking) */
+    struct RuntimeTypeInfo* next; /* Linked list for collision handling */
+} RuntimeTypeInfo;
+
+/* Simple hash table for type registry */
+#define TYPE_REGISTRY_SIZE 256
+static RuntimeTypeInfo* type_registry[TYPE_REGISTRY_SIZE] = {0};
+static int next_user_tag = TAG_USER_BASE;
+
+/* Hash function for tag lookup */
+static unsigned int type_registry_hash(int tag) {
+    return (unsigned int)tag % TYPE_REGISTRY_SIZE;
+}
+
+/*
+ * omni_register_user_type - Register a new user-defined type
+ *
+ * Args:
+ *   name - Type name (e.g., "Point")
+ *   parent - Parent type name (e.g., "Any") or NULL for default (Any)
+ *
+ * Returns: The assigned tag number for this type
+ */
+int omni_register_user_type(const char* name, const char* parent) {
+    if (!name) return -1;
+
+    omni_ensure_global_region();
+
+    int tag = next_user_tag++;
+
+    RuntimeTypeInfo* info = region_alloc(_global_region, sizeof(RuntimeTypeInfo));
+    if (!info) return -1;
+
+    info->tag = tag;
+    info->name = region_alloc(_global_region, strlen(name) + 1);
+    if (info->name) strcpy(info->name, name);
+
+    if (parent) {
+        info->parent = region_alloc(_global_region, strlen(parent) + 1);
+        if (info->parent) strcpy(info->parent, parent);
+    } else {
+        info->parent = region_alloc(_global_region, 4);
+        if (info->parent) strcpy(info->parent, "Any");
+    }
+
+    /* Insert into hash table */
+    unsigned int h = type_registry_hash(tag);
+    info->next = type_registry[h];
+    type_registry[h] = info;
+
+    return tag;
+}
+
+/*
+ * omni_get_type_info_by_tag - Look up type info by tag
+ *
+ * Returns: RuntimeTypeInfo* or NULL if not found
+ */
+static RuntimeTypeInfo* omni_get_type_info_by_tag(int tag) {
+    unsigned int h = type_registry_hash(tag);
+    for (RuntimeTypeInfo* info = type_registry[h]; info; info = info->next) {
+        if (info->tag == tag) {
+            return info;
+        }
+    }
+    return NULL;
+}
+
+/*
+ * omni_get_type_info_by_name - Look up type info by name
+ *
+ * Returns: RuntimeTypeInfo* or NULL if not found
+ */
+static RuntimeTypeInfo* omni_get_type_info_by_name(const char* name) {
+    if (!name) return NULL;
+
+    for (int i = 0; i < TYPE_REGISTRY_SIZE; i++) {
+        for (RuntimeTypeInfo* info = type_registry[i]; info; info = info->next) {
+            if (info->name && strcmp(info->name, name) == 0) {
+                return info;
+            }
+        }
+    }
+    return NULL;
+}
+
+/*
+ * omni_type_name_from_tag - Get type name from a tag number
+ *
+ * For built-in types, returns the hardcoded name.
+ * For user-defined types, looks up in the registry.
+ *
+ * Returns: Type name string or NULL if unknown
+ */
+const char* omni_type_name_from_tag(int tag) {
+    /* Built-in types */
+    switch (tag) {
+        case TAG_INT:       return "Int";
+        case TAG_FLOAT:     return "Float";
+        case TAG_CHAR:      return "Char";
+        case TAG_PAIR:      return "Pair";
+        case TAG_SYM:       return "Symbol";
+        case TAG_BOX:       return "Box";
+        case TAG_CLOSURE:   return "Function";
+        case TAG_ERROR:     return "Error";
+        case TAG_ATOM:      return "Atom";
+        case TAG_THREAD:    return "Thread";
+        case TAG_ARRAY:     return "Array";
+        case TAG_DICT:      return "Dict";
+        case TAG_STRING:    return "String";
+        case TAG_KEYWORD:   return "Keyword";
+        case TAG_SET:       return "Set";
+        case TAG_DATETIME:  return "DateTime";
+        case TAG_GENERIC:   return "Generic";
+        case TAG_KIND:      return "Kind";
+        case TAG_NOTHING:   return "Nothing";
+        case TAG_EFFECT_TYPE: return "EffectType";
+        case TAG_RESUMPTION:  return "Resumption";
+        case TAG_HANDLER:     return "Handler";
+        case TAG_CONDITION:   return "Condition";
+        case TAG_GENERATOR:   return "Generator";
+        case TAG_CPTR:        return "CPtr";
+    }
+
+    /* User-defined types */
+    if (tag >= TAG_USER_BASE) {
+        RuntimeTypeInfo* info = omni_get_type_info_by_tag(tag);
+        if (info) return info->name;
+    }
+
+    return NULL;
+}
+
+/*
+ * omni_is_subtype_runtime - Check if type_a is a subtype of type_b (by name)
+ *
+ * Handles:
+ *   - "Any" is a supertype of all types
+ *   - "Number" is a supertype of Int and Float
+ *   - User-defined type hierarchies via parent chain
+ *
+ * Returns: true if type_a is a subtype of type_b
+ */
+bool omni_is_subtype_runtime(const char* type_a, const char* type_b) {
+    if (!type_a || !type_b) return false;
+
+    /* Same type */
+    if (strcmp(type_a, type_b) == 0) return true;
+
+    /* "Any" is a supertype of everything */
+    if (strcmp(type_b, "Any") == 0) return true;
+
+    /* Number is a supertype of Int and Float */
+    if (strcmp(type_b, "Number") == 0) {
+        if (strcmp(type_a, "Int") == 0 || strcmp(type_a, "Float") == 0) {
+            return true;
+        }
+    }
+
+    /* List is a supertype of Pair (for list type checking) */
+    if (strcmp(type_b, "List") == 0) {
+        if (strcmp(type_a, "Pair") == 0) {
+            return true;
+        }
+    }
+
+    /* Check user-defined type hierarchy */
+    RuntimeTypeInfo* info = omni_get_type_info_by_name(type_a);
+    if (info && info->parent) {
+        /* Recursively check parent */
+        return omni_is_subtype_runtime(info->parent, type_b);
+    }
+
+    return false;
+}
+
 void _ensure_global_region(void) {
     if (!_global_region) {
         _global_region = region_create();
@@ -886,91 +1075,6 @@ Obj* list_foldr(Obj* fn, Obj* init, Obj* xs) {
     Obj* args[2] = { xs->a, rest };
     return call_closure(fn, args, 2);
 }
-
-/* Channel Implementation */
-/*
- * Issue 4 P4: Lock-free Channel Queue using QSBR
- *
- * Uses atomic CAS loops for lock-free send/receive operations.
- * Condition variables still used for blocking (full/empty conditions).
- *
- * References:
- * - runtime/docs/SMR_FOR_RUNTIME_STRUCTURES.md (Section 13)
- */
-typedef struct Channel {
-    Obj** buffer;           /* Circular buffer (unchanged) */
-    int capacity;            /* Buffer size (unchanged) */
-    int count;              /* Current element count (unchanged) */
-    bool closed;            /* Channel closed flag (unchanged) */
-    
-    
-    /* Condition variables for blocking (still needed) */
-    pthread_cond_t send_cond;
-    pthread_cond_t recv_cond;
-    
-    /* ADDED: Lock-free atomic indices */
-    volatile int head;        /* Atomic: read position */
-    volatile int tail;        /* Atomic: write position */
-    
-    /* ADDED: QSBR support */
-    /* Note: old_buffer not needed for Channel (buffer never replaced) */
-} Channel;
-
-Obj* make_channel(int capacity) {
-    _ensure_global_region();
-    Obj* o = alloc_obj_region(_global_region, TAG_CHANNEL);
-    if (!o) return NULL;
-    
-    Channel* ch = region_alloc(_global_region, sizeof(Channel));
-    if (!ch) return NULL;
-    
-    ch->capacity = capacity > 0 ? capacity : 0;
-    if (ch->capacity > 0) {
-        ch->buffer = region_alloc(_global_region, sizeof(Obj*) * ch->capacity);
-    } else {
-        ch->buffer = NULL;
-    }
-    
-    ch->head = 0;
-    ch->tail = 0;
-    ch->count = 0;
-    ch->closed = false;
-    pthread_cond_init(&ch->send_cond, NULL);
-    pthread_cond_init(&ch->recv_cond, NULL);
-    
-    o->ptr = ch;
-    return o;
-}
-
-/* Helper for testing: create channel in a specific region */
-Obj* make_channel_region(Region* region, int capacity) {
-    if (!region) return NULL;
-    Obj* o = alloc_obj_region(region, TAG_CHANNEL);
-    if (!o) return NULL;
-
-    Channel* ch = region_alloc(region, sizeof(Channel));
-    if (!ch) return NULL;
-
-    ch->capacity = capacity > 0 ? capacity : 0;
-    if (ch->capacity > 0) {
-        ch->buffer = region_alloc(region, sizeof(Obj*) * ch->capacity);
-    } else {
-        ch->buffer = NULL;
-    }
-
-    ch->head = 0;
-    ch->tail = 0;
-    ch->count = 0;
-    ch->closed = false;
-    pthread_cond_init(&ch->send_cond, NULL);
-    pthread_cond_init(&ch->recv_cond, NULL);
-
-    o->ptr = ch;
-    return o;
-}
-
-
-
 
 /* Atom Implementation */
 typedef struct Atom {
@@ -2756,7 +2860,6 @@ Obj* ctr_tag(Obj* x) {
         case TAG_DATETIME: return mk_sym("datetime");
         case TAG_BOX: return mk_sym("box");
         case TAG_CLOSURE: return mk_sym("closure");
-        case TAG_CHANNEL: return mk_sym("channel");
         default: return mk_sym("unknown");
     }
 }
@@ -3712,9 +3815,6 @@ Obj* prim_value_to_type(Obj* value) {
             case TAG_BOX:
                 type_name = "Box";
                 break;
-            case TAG_CHANNEL:
-                type_name = "Channel";
-                break;
             case TAG_ERROR:
                 type_name = "Error";
                 break;
@@ -3848,6 +3948,8 @@ Obj* prim_kind_nothing(void) {
  *   (type? 5 Int) => true
  *   (type? "hello" Int) => false
  *   (type? [1 2 3] Array) => true
+ *   (type? my-point Point) => true (user-defined types)
+ *   (type? 5 Number) => true (subtype checking)
  */
 Obj* prim_type_is(Obj* value, Obj* type_obj) {
     if (!type_obj) return mk_bool(0);
@@ -3860,7 +3962,7 @@ Obj* prim_type_is(Obj* value, Obj* type_obj) {
 
         /* Get the actual type of the value */
         if (!value) {
-            actual_type = "Null";
+            actual_type = "Nil";
         } else if (IS_IMMEDIATE(value)) {
             /* Immediate values (int, char, bool) */
             if (IS_IMMEDIATE_INT(value)) {
@@ -3871,35 +3973,17 @@ Obj* prim_type_is(Obj* value, Obj* type_obj) {
                 actual_type = "Bool";
             }
         } else if (IS_BOXED(value)) {
-            /* Boxed values */
-            switch (value->tag) {
-                case TAG_INT:    actual_type = "Int"; break;
-                case TAG_FLOAT:  actual_type = "Float"; break;
-                case TAG_STRING: actual_type = "String"; break;
-                case TAG_SYM:    actual_type = "Symbol"; break;
-                case TAG_PAIR:   actual_type = "Pair"; break;
-                case TAG_ARRAY:  actual_type = "Array"; break;
-                case TAG_CLOSURE: actual_type = "Function"; break;
-                case TAG_KIND:   actual_type = "Kind"; break;
-                default:         actual_type = "Any"; break;
+            /* Boxed values - use omni_type_name_from_tag for all types */
+            actual_type = omni_type_name_from_tag(value->tag);
+            if (!actual_type) {
+                /* Fallback for unknown tags */
+                actual_type = "Unknown";
             }
         }
 
-        /* Check for subtype relationships */
-        if (strcmp(expected_type, "Any") == 0) {
-            return mk_bool(1);  /* Everything is a subtype of Any */
-        }
-
-        /* Direct type match */
-        if (actual_type && strcmp(actual_type, expected_type) == 0) {
-            return mk_bool(1);
-        }
-
-        /* Subtype checks (simplified - full implementation would use type registry) */
-        if (strcmp(expected_type, "Number") == 0) {
-            return mk_bool(actual_type != NULL &&
-                          (strcmp(actual_type, "Int") == 0 ||
-                           strcmp(actual_type, "Float") == 0));
+        /* Use unified subtype checking for all type relationships */
+        if (actual_type) {
+            return mk_bool(omni_is_subtype_runtime(actual_type, expected_type));
         }
 
         return mk_bool(0);
@@ -4227,115 +4311,6 @@ Obj* prim_compile_pattern(Obj* pattern_obj) {
      */
     return mk_string_region(omni_get_global_region(), pattern, strlen(pattern));
 }
-/*
- * Simple lock-free channel using atomic operations
- * 
- * Uses fetch-add atomic operations for head/tail updates.
- * Condition variables still used for blocking (empty/full).
- */
-int channel_send(Obj* ch_obj, Obj* val) {
-    if (!ch_obj || !IS_BOXED(ch_obj) || ch_obj->tag != TAG_CHANNEL) return -1;
-    Channel* ch = (Channel*)ch_obj->ptr;
-    
-    if (ch->capacity > 0) {
-        /* Buffered: atomic tail increment */
-        int tail = omni_atomic_fetch_add_u32((volatile uint32_t*)&ch->tail, 1);
-        int pos = tail % ch->capacity;
-        
-        /* Issue 2 P4: Use store barrier to enforce Region Closure Property */
-        ch->buffer[pos] = omni_store_repair(ch_obj, &ch->buffer[pos], val);
-        omni_atomic_add_fetch_u32((volatile uint32_t*)&ch->count, 1);
-        
-        /* Signal receivers */
-        pthread_cond_signal(&ch->recv_cond);
-        
-        /* Report quiescent state */
-        qsbr_quiescent();
-        
-        return 0;
-    } else {
-        /* Unbuffered: handshake (simplified) */
-        pthread_mutex_t temp_lock = PTHREAD_MUTEX_INITIALIZER;
-        pthread_mutex_lock(&temp_lock);
-        
-        while (!ch->closed && omni_atomic_load_u32((volatile uint32_t*)&ch->count) > 0) {
-            pthread_cond_wait(&ch->send_cond, &temp_lock);
-        }
-        
-        if (ch->closed) {
-            pthread_mutex_unlock(&temp_lock);
-            return -1;
-        }
-        
-        ch->buffer = (Obj**)&val;
-        omni_atomic_store_u32((volatile uint32_t*)&ch->count, 1);
-        
-        pthread_cond_signal(&ch->recv_cond);
-        
-        while (!ch->closed && omni_atomic_load_u32((volatile uint32_t*)&ch->count) > 0) {
-            pthread_cond_wait(&ch->send_cond, &temp_lock);
-        }
-        
-        pthread_mutex_unlock(&temp_lock);
-        qsbr_quiescent();
-        return 0;
-    }
-}
-
-Obj* channel_recv(Obj* ch_obj) {
-    if (!ch_obj || !IS_BOXED(ch_obj) || ch_obj->tag != TAG_CHANNEL) return NULL;
-    Channel* ch = (Channel*)ch_obj->ptr;
-    
-    if (ch->capacity > 0) {
-        /* Buffered: atomic head increment */
-        int head = omni_atomic_fetch_add_u32((volatile uint32_t*)&ch->head, 1);
-        int pos = head % ch->capacity;
-        
-        Obj* val = ch->buffer[pos];
-        omni_atomic_sub_fetch_u32((volatile uint32_t*)&ch->count, 1);
-        
-        /* Signal senders */
-        pthread_cond_signal(&ch->send_cond);
-        
-        /* Report quiescent state */
-        qsbr_quiescent();
-        
-        return val;
-    } else {
-        /* Unbuffered: handshake (simplified) */
-        pthread_mutex_t temp_lock = PTHREAD_MUTEX_INITIALIZER;
-        pthread_mutex_lock(&temp_lock);
-        
-        while (!ch->closed && omni_atomic_load_u32((volatile uint32_t*)&ch->count) == 0) {
-            pthread_cond_wait(&ch->recv_cond, &temp_lock);
-        }
-        
-        if (omni_atomic_load_u32((volatile uint32_t*)&ch->count) == 0 && ch->closed) {
-            pthread_mutex_unlock(&temp_lock);
-            return NULL;
-        }
-        
-        Obj* val = *(Obj**)ch->buffer;
-        omni_atomic_store_u32((volatile uint32_t*)&ch->count, 0);
-        
-        pthread_cond_signal(&ch->send_cond);
-        
-        pthread_mutex_unlock(&temp_lock);
-        qsbr_quiescent();
-        return val;
-    }
-}
-
-void channel_close(Obj* ch_obj) {
-    if (!ch_obj || !IS_BOXED(ch_obj) || ch_obj->tag != TAG_CHANNEL) return;
-    Channel* ch = (Channel*)ch_obj->ptr;
-
-    __atomic_store_n(&ch->closed, true, __ATOMIC_RELEASE);
-
-    pthread_cond_broadcast(&ch->send_cond);
-    pthread_cond_broadcast(&ch->recv_cond);
-}
-
 /* ============================================================
  * Effect System Primitives (Phase 22: Algebraic Effects)
  * ============================================================

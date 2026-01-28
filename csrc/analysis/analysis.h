@@ -447,7 +447,7 @@ typedef struct FunctionSummary {
 /* Forward declarations for concurrency types */
 typedef struct ThreadLocalityInfo ThreadLocalityInfo;
 typedef struct ThreadSpawnInfo ThreadSpawnInfo;
-typedef struct ChannelOpInfo ChannelOpInfo;
+/* DIRECTIVE: NO CHANNELS - ChannelOpInfo removed */
 
 /* ============== Component Analysis ============== */
 
@@ -514,7 +514,7 @@ typedef struct AnalysisContext {
     /* Concurrency tracking */
     ThreadLocalityInfo* thread_locality;
     ThreadSpawnInfo* thread_spawns;
-    ChannelOpInfo* channel_ops;
+    /* DIRECTIVE: NO CHANNELS - channel_ops removed */
     int current_thread_id;   /* -1 = main thread, >= 0 = spawned */
 
     /* Current position counter */
@@ -940,12 +940,7 @@ typedef enum {
     THREAD_IMMUTABLE,        /* Immutable data - can be freely shared */
 } ThreadLocality;
 
-/* Channel operation type */
-typedef enum {
-    CHAN_SEND = 0,           /* Send ownership to channel */
-    CHAN_RECV,               /* Receive ownership from channel */
-    CHAN_CLOSE,              /* Close channel */
-} ChannelOp;
+/* DIRECTIVE: NO CHANNELS - ChannelOp enum removed */
 
 /* Thread spawn info */
 typedef struct ThreadSpawnInfo {
@@ -957,23 +952,12 @@ typedef struct ThreadSpawnInfo {
     struct ThreadSpawnInfo* next;
 } ThreadSpawnInfo;
 
-/* Channel operation tracking */
-typedef struct ChannelOpInfo {
-    int position;            /* Position of operation */
-    ChannelOp op;            /* Type of operation */
-    char* channel_name;      /* Name of channel variable */
-    char* value_var;         /* Variable being sent/received */
-    bool transfers_ownership; /* Does this transfer ownership? */
-    struct ChannelOpInfo* next;
-} ChannelOpInfo;
-
 /* Thread locality info for variables */
 typedef struct ThreadLocalityInfo {
     char* var_name;
     ThreadLocality locality;
     int thread_id;           /* -1 for shared, >= 0 for specific thread */
     bool needs_atomic_rc;    /* True if needs atomic refcount operations */
-    bool is_message;         /* True if sent via channel */
     struct ThreadLocalityInfo* next;
 } ThreadLocalityInfo;
 
@@ -988,22 +972,11 @@ ThreadLocality omni_get_thread_locality(AnalysisContext* ctx, const char* var_na
 /* Check if a variable needs atomic refcount operations */
 bool omni_needs_atomic_rc(AnalysisContext* ctx, const char* var_name);
 
-/* Check if a variable is sent via channel (ownership transfer) */
-bool omni_is_channel_transferred(AnalysisContext* ctx, const char* var_name);
-
 /* Mark a variable as thread-local */
 void omni_mark_thread_local(AnalysisContext* ctx, const char* var_name, int thread_id);
 
 /* Mark a variable as shared between threads */
 void omni_mark_thread_shared(AnalysisContext* ctx, const char* var_name);
-
-/* Record a channel send operation */
-void omni_record_channel_send(AnalysisContext* ctx, const char* channel,
-                              const char* value_var, bool transfers_ownership);
-
-/* Record a channel receive operation */
-void omni_record_channel_recv(AnalysisContext* ctx, const char* channel,
-                              const char* value_var);
 
 /* Record a thread spawn */
 void omni_record_thread_spawn(AnalysisContext* ctx, const char* thread_id,
@@ -1012,12 +985,7 @@ void omni_record_thread_spawn(AnalysisContext* ctx, const char* thread_id,
 /* Get thread locality name for debugging */
 const char* omni_thread_locality_name(ThreadLocality locality);
 
-/* Get channel op name for debugging */
-const char* omni_channel_op_name(ChannelOp op);
-
-/* Check if caller should free after send (usually false - ownership transfers) */
-bool omni_should_free_after_send(AnalysisContext* ctx, const char* channel,
-                                 const char* var_name);
+/* DIRECTIVE: NO CHANNELS - channel analysis functions removed */
 
 /* Get the spawned threads that capture a variable */
 ThreadSpawnInfo** omni_get_threads_capturing(AnalysisContext* ctx, const char* var_name,

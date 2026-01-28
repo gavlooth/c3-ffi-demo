@@ -204,7 +204,6 @@ typedef enum {
     TAG_SYM,
     TAG_BOX,
     TAG_CLOSURE,
-    TAG_CHANNEL,
     TAG_ERROR,
     TAG_ATOM,
     TAG_THREAD,
@@ -939,6 +938,29 @@ Obj* prim_kind_function(void);
 Obj* prim_kind_any(void);
 Obj* prim_kind_nothing(void);
 
+/* ========== Runtime Type Registry for User-Defined Types ========== */
+
+/* Register a new user-defined type
+ * Args:
+ *   name - Type name (e.g., "Point")
+ *   parent - Parent type name (e.g., "Any") or NULL for default (Any)
+ * Returns: The assigned tag number for this type
+ */
+int omni_register_user_type(const char* name, const char* parent);
+
+/* Get type name from a tag number
+ * For built-in types, returns the hardcoded name.
+ * For user-defined types, looks up in the registry.
+ * Returns: Type name string or NULL if unknown
+ */
+const char* omni_type_name_from_tag(int tag);
+
+/* Check if type_a is a subtype of type_b (by name)
+ * Handles: Any, Number, List, and user-defined type hierarchies
+ * Returns: true if type_a is a subtype of type_b
+ */
+bool omni_is_subtype_runtime(const char* type_a, const char* type_b);
+
 /* Global Type Objects for Runtime Type Operations */
 extern Obj* o_Int;    /* Int type object */
 extern Obj* o_String; /* String type object */
@@ -1183,14 +1205,6 @@ Obj* borrow_get(BorrowRef* ref);
     } \
 } while(0)
 #endif
-
-/* ========== Concurrency: Channels ========== */
-
-Obj* make_channel(int capacity);
-int channel_send(Obj* ch, Obj* val);
-Obj* channel_recv(Obj* ch);
-void channel_close(Obj* ch);
-static inline Obj* channel_create(int buffered) { return make_channel(buffered); }
 
 /* ========== Concurrency: Atoms ========== */
 

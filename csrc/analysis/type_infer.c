@@ -170,6 +170,115 @@ bool type_is_primitive(ConcreteType* type, PrimitiveType prim) {
     return type->primitive.prim == prim;
 }
 
+/*
+ * type_is_subtype: Check if type_a is a subtype of type_b
+ *
+ * Implements proper subtype checking with variance support for parametric types.
+ *
+ * Subtype rules:
+ *   1. Any type is a supertype of all types: T <: Any
+ *   2. Numeric hierarchy: Int <: Number, Float <: Number
+ *   3. Array types are covariant: Array{T} <: Array{S} if T <: S
+ *   4. Function types use contravariant params, covariant return:
+ *      Fn{[A...], R} <: Fn{[B...], S} if B[i] <: A[i] and R <: S
+ *   5. Union subtyping: T <: Union{T, U, ...} and Union{T1, T2} <: U if all members <: U
+ */
+bool type_is_subtype(ConcreteType* a, ConcreteType* b) {
+    /* Handle NULL cases */
+    if (!a || !b) return false;
+
+    /* Same type pointer is always subtype */
+    if (a == b) return true;
+
+    /* Rule 1: Everything is a subtype of Any */
+    if (b->kind == TYPE_KIND_ANY) return true;
+
+    /* If a is Any, it's only a subtype of itself (handled above) */
+    if (a->kind == TYPE_KIND_ANY) return false;
+
+    /* Rule 5a: T <: Union{..., T, ...} if T is a member of the union */
+    if (b->kind == TYPE_KIND_UNION) {
+        for (int i = 0; i < b->type_union.member_count; i++) {
+            if (type_is_subtype(a, b->type_union.member_types[i])) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /* Rule 5b: Union{T1, T2} <: U if T1 <: U and T2 <: U */
+    if (a->kind == TYPE_KIND_UNION) {
+        for (int i = 0; i < a->type_union.member_count; i++) {
+            if (!type_is_subtype(a->type_union.member_types[i], b)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /* Different kinds (after union handling) - check for specific cases */
+    if (a->kind != b->kind) {
+        return false;
+    }
+
+    /* Same kind - check structural subtyping based on kind */
+    switch (a->kind) {
+        case TYPE_KIND_PRIMITIVE: {
+            /* Rule 2: Numeric hierarchy */
+            /* Int64 and Float64 are siblings, not subtypes of each other */
+            /* But both are subtypes of a conceptual "Number" type */
+            /* Since we don't have a Number primitive, we check exact match */
+            return a->primitive.prim == b->primitive.prim;
+        }
+
+        case TYPE_KIND_ARRAY: {
+            /* Rule 3: Arrays are covariant in element type */
+            /* Array{T} <: Array{S} if T <: S */
+            /* Also require same rank and mutability compatibility */
+            /* Immutable is subtype of mutable for read-only contexts */
+            if (a->array.rank != b->array.rank) {
+                return false;
+            }
+            /* Mutable array is NOT a subtype of immutable array (would break immutability) */
+            /* Immutable array CAN be a subtype of mutable if treated as read-only */
+            if (a->array.is_mutable && !b->array.is_mutable) {
+                return false; /* Can't treat mutable as immutable (aliasing issues) */
+            }
+            return type_is_subtype(a->array.element_type, b->array.element_type);
+        }
+
+        case TYPE_KIND_CLOSURE: {
+            /* Rule 4: Function subtyping with contravariant params and covariant return */
+            /* Fn{[A...], R} <: Fn{[B...], S} if:
+             *   - same param count
+             *   - B[i] <: A[i] for all i (contravariant)
+             *   - R <: S (covariant)
+             */
+            if (a->closure.param_count != b->closure.param_count) {
+                return false;
+            }
+            /* Contravariant parameter check: b's params must be subtypes of a's params */
+            for (int i = 0; i < a->closure.param_count; i++) {
+                if (!type_is_subtype(b->closure.param_types[i], a->closure.param_types[i])) {
+                    return false;
+                }
+            }
+            /* Covariant return type check */
+            return type_is_subtype(a->closure.return_type, b->closure.return_type);
+        }
+
+        case TYPE_KIND_UNION:
+            /* Already handled above */
+            return false;
+
+        case TYPE_KIND_ANY:
+            /* Already handled above */
+            return true;
+    }
+
+    return false;
+}
+
 ConcreteType* type_common_type(ConcreteType* a, ConcreteType* b) {
     if (!a || !b) return concrete_type_any();
     if (concrete_type_equals(a, b)) {

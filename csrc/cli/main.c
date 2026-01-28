@@ -43,7 +43,7 @@ static const char* g_completion_symbols[] = {
     "string-trim", "string-upcase", "string-downcase",
     "string-starts-with", "string-ends-with",
     "abs", "min", "max", "sqrt", "pow", "sin", "cos", "tan",
-    "atom", "deref", "reset!", "swap!", "channel", "send", "recv",
+    "atom", "deref", "reset!", "swap!",  /* DIRECTIVE: NO CHANNELS - removed channel, send, recv */
     NULL
 };
 

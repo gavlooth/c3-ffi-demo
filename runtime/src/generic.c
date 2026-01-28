@@ -199,8 +199,9 @@ static bool check_argument_types(Obj** param_kinds, int param_count, Obj** args,
         Obj* expected_kind = param_kinds[i];
         Obj* arg = args[i];
 
-        if (!expected_kind || !arg) {
-            return false;
+        /* Handle missing expected_kind: invalid method definition, skip */
+        if (!expected_kind) {
+            continue;
         }
 
         /* For now, use a simple tag-based check */
@@ -215,11 +216,28 @@ static bool check_argument_types(Obj** param_kinds, int param_count, Obj** args,
             continue;
         }
 
+        /* P1 Fix: Handle nil/NULL arguments */
+        /* nil matches "Nil", "Nothing", or "Any" types */
+        if (!arg || (IS_BOXED(arg) && arg->tag == TAG_NOTHING)) {
+            if (strcmp(kind->name, "Nil") == 0 ||
+                strcmp(kind->name, "Nothing") == 0 ||
+                strcmp(kind->name, "Any") == 0) {
+                continue; /* nil matches these types */
+            }
+            return false; /* nil doesn't match other types */
+        }
+
+        /* "Any" type matches all values */
+        if (strcmp(kind->name, "Any") == 0) {
+            continue;
+        }
+
         /* Check argument type */
         if (IS_IMMEDIATE(arg)) {
             /* Immediate types */
             if (IS_IMMEDIATE_INT(arg)) {
-                if (strcmp(kind->name, "Int") != 0) return false;
+                if (strcmp(kind->name, "Int") != 0 &&
+                    strcmp(kind->name, "Number") != 0) return false;
             } else if (IS_IMMEDIATE_CHAR(arg)) {
                 if (strcmp(kind->name, "Char") != 0) return false;
             } else if (IS_IMMEDIATE_BOOL(arg)) {
@@ -227,8 +245,13 @@ static bool check_argument_types(Obj** param_kinds, int param_count, Obj** args,
             }
         } else if (IS_BOXED(arg)) {
             /* Boxed types */
-            if (arg->tag == TAG_PAIR || arg->tag == TAG_SYM) {
-                if (strcmp(kind->name, "Pair") != 0 && strcmp(kind->name, "Symbol") != 0) {
+            if (arg->tag == TAG_PAIR) {
+                if (strcmp(kind->name, "Pair") != 0 &&
+                    strcmp(kind->name, "List") != 0) {
+                    return false;
+                }
+            } else if (arg->tag == TAG_SYM) {
+                if (strcmp(kind->name, "Symbol") != 0) {
                     return false;
                 }
             } else if (arg->tag == TAG_STRING) {
@@ -236,9 +259,26 @@ static bool check_argument_types(Obj** param_kinds, int param_count, Obj** args,
             } else if (arg->tag == TAG_ARRAY) {
                 if (strcmp(kind->name, "Array") != 0) return false;
             } else if (arg->tag == TAG_CLOSURE) {
-                if (strcmp(kind->name, "Function") != 0 && strcmp(kind->name, "Closure") != 0) {
+                if (strcmp(kind->name, "Function") != 0 &&
+                    strcmp(kind->name, "Closure") != 0) {
                     return false;
                 }
+            } else if (arg->tag == TAG_FLOAT) {
+                if (strcmp(kind->name, "Float") != 0 &&
+                    strcmp(kind->name, "Number") != 0) return false;
+            } else if (arg->tag == TAG_INT) {
+                if (strcmp(kind->name, "Int") != 0 &&
+                    strcmp(kind->name, "Number") != 0) return false;
+            } else if (arg->tag == TAG_DICT) {
+                if (strcmp(kind->name, "Dict") != 0) return false;
+            } else if (arg->tag == TAG_SET) {
+                if (strcmp(kind->name, "Set") != 0) return false;
+            } else if (arg->tag == TAG_GENERIC) {
+                if (strcmp(kind->name, "Generic") != 0 &&
+                    strcmp(kind->name, "Function") != 0) return false;
+            } else if (arg->tag == TAG_KIND) {
+                if (strcmp(kind->name, "Type") != 0 &&
+                    strcmp(kind->name, "Kind") != 0) return false;
             }
         }
     }

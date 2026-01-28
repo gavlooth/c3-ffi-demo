@@ -1473,6 +1473,7 @@ static void codegen_sym(CodeGenContext* ctx, OmniValue* expr) {
         else if (strcmp(name, "cdr") == 0) omni_codegen_emit_raw(ctx, "prim_cdr");
         else if (strcmp(name, "null?") == 0) omni_codegen_emit_raw(ctx, "prim_null");
         else if (strcmp(name, "type?") == 0) omni_codegen_emit_raw(ctx, "prim_type_is");
+        else if (strcmp(name, "type-of") == 0) omni_codegen_emit_raw(ctx, "prim_type_of");
         else if (strcmp(name, "typeof") == 0) omni_codegen_emit_raw(ctx, "prim_value_to_type");
         else if (strcmp(name, "value->type") == 0) omni_codegen_emit_raw(ctx, "prim_value_to_type");
         else if (strcmp(name, "Int") == 0) omni_codegen_emit_raw(ctx, "o_Int");
@@ -6130,6 +6131,10 @@ static void codegen_expr(CodeGenContext* ctx, OmniValue* expr) {
         break;
     case OMNI_STRING:
         codegen_string(ctx, expr);
+        break;
+    case OMNI_KEYWORD:
+        /* Generate keyword: :foo -> mk_keyword("foo") */
+        omni_codegen_emit_raw(ctx, "mk_keyword(\"%s\")", expr->str_val ? expr->str_val : "");
         break;
     case OMNI_TYPE_LIT:
         codegen_type_lit(ctx, expr);

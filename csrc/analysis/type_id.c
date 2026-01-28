@@ -77,11 +77,8 @@ TypeID type_name_to_type_id(const char* type_name) {
         return TYPE_ID_BOX;
     }
 
-    /* Concurrency types */
-    if (strcmp(type_name, "Channel") == 0 ||
-        strcmp(type_name, "Chan") == 0) {
-        return TYPE_ID_CHANNEL;
-    }
+    /* DIRECTIVE: NO CHANNELS - Channel type removed from runtime.
+     * TYPE_ID_CHANNEL kept for enum stability but should not be used. */
 
     if (strcmp(type_name, "Thread") == 0) {
         return TYPE_ID_THREAD;

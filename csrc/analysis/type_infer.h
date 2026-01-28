@@ -117,6 +117,30 @@ ConcreteType* compute_binop_result(const char* op,
 bool type_is_compatible(ConcreteType* a, ConcreteType* b);
 
 /**
+ * Check if type_a is a subtype of type_b
+ *
+ * Implements subtype checking with variance support for parametric types.
+ *
+ * Rules:
+ *   - Any type is a supertype of all types (T <: Any)
+ *   - Int <: Number, Float <: Number
+ *   - Array{T} <: Array{S} if T <: S (covariant)
+ *   - Function{[A...], R} <: Function{[B...], S} if
+ *       - B[i] <: A[i] for all i (contravariant params)
+ *       - R <: S (covariant return)
+ *   - T <: Union{T, U, ...} (T is subtype of union containing T)
+ *   - Union{T1, T2} <: U if T1 <: U and T2 <: U
+ *
+ * Args:
+ *   a: Potential subtype (borrowed)
+ *   b: Potential supertype (borrowed)
+ *
+ * Returns:
+ *   true if a is a subtype of b
+ */
+bool type_is_subtype(ConcreteType* a, ConcreteType* b);
+
+/**
  * Check if a type is a specific primitive
  *
  * Args:

@@ -125,10 +125,7 @@ TEST(test_type_name_ref_types) {
 
 /* ========== Test: Concurrency types ========== */
 
-TEST(test_type_name_channel) {
-    ASSERT(type_name_to_type_id("Channel") == TYPE_ID_CHANNEL);
-    ASSERT(type_name_to_type_id("Chan") == TYPE_ID_CHANNEL);
-}
+/* DIRECTIVE: NO CHANNELS - test_type_name_channel removed */
 
 TEST(test_type_name_thread) {
     ASSERT(type_name_to_type_id("Thread") == TYPE_ID_THREAD);
@@ -487,7 +484,7 @@ int main(void) {
     RUN_TEST(test_type_name_ref_types);
 
     printf("\n=== Concurrency Types ===\n");
-    RUN_TEST(test_type_name_channel);
+    /* DIRECTIVE: NO CHANNELS - test_type_name_channel removed */
     RUN_TEST(test_type_name_thread);
 
     printf("\n=== Control Flow and Special Types ===\n");

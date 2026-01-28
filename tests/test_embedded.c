@@ -413,87 +413,12 @@ static pthread_mutex_t _rc_mutex = PTHREAD_MUTEX_INITIALIZER;
 #define THREAD_SHARED_VAR(v) (v)     /* Uses atomic RC */
 #define THREAD_TRANSFER_VAR(v) (v)   /* Ownership moves */
 
-/* Channel operations - ownership transfer semantics */
-typedef struct Channel {
-    Obj** buffer;
-    size_t capacity;
-    size_t head, tail, count;
-    pthread_mutex_t mutex;
-    pthread_cond_t not_empty;
-    pthread_cond_t not_full;
-    int closed;
-} Channel;
-
-static Channel* channel_new(size_t capacity) {
-    Channel* c = malloc(sizeof(Channel));
-    c->buffer = malloc(capacity * sizeof(Obj*));
-    c->capacity = capacity;
-    c->head = c->tail = c->count = 0;
-    pthread_mutex_init(&c->mutex, NULL);
-    pthread_cond_init(&c->not_empty, NULL);
-    pthread_cond_init(&c->not_full, NULL);
-    c->closed = 0;
-    return c;
-}
-
-/* Send transfers ownership - sender must NOT free after */
-static void channel_send(Channel* c, Obj* value) {
-    pthread_mutex_lock(&c->mutex);
-    while (c->count == c->capacity && !c->closed) {
-        pthread_cond_wait(&c->not_full, &c->mutex);
-    }
-    if (!c->closed) {
-        c->buffer[c->tail] = value;  /* Ownership transfers */
-        c->tail = (c->tail + 1) % c->capacity;
-        c->count++;
-        pthread_cond_signal(&c->not_empty);
-    }
-    pthread_mutex_unlock(&c->mutex);
-}
-
-/* Recv receives ownership - receiver must free when done */
-static Obj* channel_recv(Channel* c) {
-    pthread_mutex_lock(&c->mutex);
-    while (c->count == 0 && !c->closed) {
-        pthread_cond_wait(&c->not_empty, &c->mutex);
-    }
-    Obj* value = NIL;
-    if (c->count > 0) {
-        value = c->buffer[c->head];  /* Ownership transfers */
-        c->head = (c->head + 1) % c->capacity;
-        c->count--;
-        pthread_cond_signal(&c->not_full);
-    }
-    pthread_mutex_unlock(&c->mutex);
-    return value;
-}
-
-static void channel_close(Channel* c) {
-    pthread_mutex_lock(&c->mutex);
-    c->closed = 1;
-    pthread_cond_broadcast(&c->not_empty);
-    pthread_cond_broadcast(&c->not_full);
-    pthread_mutex_unlock(&c->mutex);
-}
-
-static void channel_free(Channel* c) {
-    if (!c) return;
-    /* Free any remaining items in buffer */
-    while (c->count > 0) {
-        free_obj(c->buffer[c->head]);
-        c->head = (c->head + 1) % c->capacity;
-        c->count--;
-    }
-    free(c->buffer);
-    pthread_mutex_destroy(&c->mutex);
-    pthread_cond_destroy(&c->not_empty);
-    pthread_cond_destroy(&c->not_full);
-    free(c);
-}
-
-/* Ownership transfer macros */
-#define SEND_OWNERSHIP(ch, val) do { channel_send(ch, val); /* val no longer owned */ } while(0)
-#define RECV_OWNERSHIP(ch, var) do { var = channel_recv(ch); /* var now owned */ } while(0)
+/* DIRECTIVE: NO CHANNELS
+ * Channel operations removed from OmniLisp.
+ * Use algebraic effects for structured concurrency instead.
+ * The Channel struct and functions (channel_new, channel_send, channel_recv,
+ * channel_close, channel_free, SEND_OWNERSHIP, RECV_OWNERSHIP) have been removed.
+ */
 
 /* Thread spawn with captured variable handling */
 #define SPAWN_THREAD(fn, arg) do { \

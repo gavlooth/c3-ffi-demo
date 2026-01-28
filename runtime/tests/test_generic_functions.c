@@ -435,6 +435,69 @@ void test_generic_lookup_null_generic(void) {
     PASS();
 }
 
+/* ==================== Nil Handling Tests ==================== */
+
+/* Test that nil is handled correctly in generic dispatch */
+void test_generic_nil_argument_handling(void) {
+    Obj* gen = mk_generic("nil-handler");
+
+    Obj* any_kind = mk_kind("Any", NULL, 0);
+    Obj* kinds[] = {any_kind, any_kind};
+    generic_add_method(gen, kinds, 2, method_int_int);
+
+    /* Invoke with nil argument - should not crash */
+    Obj* args[] = {NULL, mk_int(10)};
+    Obj* result = omni_generic_invoke(gen, args, 2);
+
+    /* Should return error or handle gracefully, not crash */
+    ASSERT_NOT_NULL(result);
+
+    dec_ref(gen);
+    dec_ref(any_kind);
+    dec_ref(args[1]);
+    dec_ref(result);
+    PASS();
+}
+
+void test_generic_nil_only_arguments(void) {
+    Obj* gen = mk_generic("nil-only");
+
+    Obj* any_kind = mk_kind("Any", NULL, 0);
+    Obj* kinds[] = {any_kind};
+    generic_add_method(gen, kinds, 1, method_int_int);
+
+    /* Invoke with only nil argument - should not crash */
+    Obj* args[] = {NULL};
+    Obj* result = omni_generic_invoke(gen, args, 1);
+
+    /* Should return error or handle gracefully, not crash */
+    ASSERT_NOT_NULL(result);
+
+    dec_ref(gen);
+    dec_ref(any_kind);
+    dec_ref(result);
+    PASS();
+}
+
+void test_generic_lookup_with_nil(void) {
+    Obj* gen = mk_generic("lookup-nil");
+
+    Obj* int_kind = mk_kind("Int", NULL, 0);
+    Obj* kinds[] = {int_kind, int_kind};
+    generic_add_method(gen, kinds, 2, method_int_int);
+
+    /* Lookup with nil argument - should not crash */
+    Obj* args[] = {NULL, mk_int(10)};
+    MethodInfo* method = omni_generic_lookup(gen, args, 2);
+
+    /* Should return NULL (no matching method for nil) */
+    ASSERT_NULL(method);
+
+    dec_ref(gen);
+    dec_ref(int_kind);
+    PASS();
+}
+
 /* ==================== Test Suite Runner ==================== */
 
 void run_generic_function_tests(void) {
@@ -485,4 +548,10 @@ void run_generic_function_tests(void) {
     RUN_TEST(test_generic_add_method_invalid_generic);
     RUN_TEST(test_generic_invoke_null_generic);
     RUN_TEST(test_generic_lookup_null_generic);
+
+    /* Nil handling tests */
+    TEST_SECTION("Nil Handling");
+    RUN_TEST(test_generic_nil_argument_handling);
+    RUN_TEST(test_generic_nil_only_arguments);
+    RUN_TEST(test_generic_lookup_with_nil);
 }
