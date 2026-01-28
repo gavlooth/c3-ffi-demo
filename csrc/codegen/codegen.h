@@ -103,6 +103,9 @@ typedef struct CodeGenContext {
     /* Module compilation mode */
     bool shared_mode;          /* Generate shared library init function instead of main() */
     const char* module_name;   /* Module name for init function (e.g., "mymodule" -> _omni_module_mymodule_init) */
+
+    /* Phase 22: Track resumption symbols for effect handlers */
+    StrMap* resumption_symbols;  /* c_names that are resumption objects (effect handlers) */
 } CodeGenContext;
 
 /* ============== Code Generator API ============== */

@@ -42,6 +42,7 @@ CodeGenContext* omni_codegen_new(FILE* output) {
     /* Initialize hash maps for O(1) lookups */
     ctx->symbols.map = strmap_new();
     ctx->defined_functions.map = strmap_new();
+    ctx->resumption_symbols = strmap_new();  /* Phase 22: effect resumptions */
     return ctx;
 }
 
@@ -56,6 +57,7 @@ CodeGenContext* omni_codegen_new_buffer(void) {
     /* Initialize hash maps for O(1) lookups */
     ctx->symbols.map = strmap_new();
     ctx->defined_functions.map = strmap_new();
+    ctx->resumption_symbols = strmap_new();  /* Phase 22: effect resumptions */
     return ctx;
 }
 
@@ -4287,6 +4289,10 @@ static void codegen_handler_closure(CodeGenContext* ctx, OmniValue* params,
                 char c_name[64];
                 snprintf(c_name, sizeof(c_name), "_arg_%d", param_idx);
                 register_symbol(tmp, param->str_val, c_name);
+                /* Mark second param (index 1) as resumption for effect handlers (arity 2) */
+                if (param_idx == 1 && arity == 2) {
+                    strmap_put(tmp->resumption_symbols, c_name, (void*)1);
+                }
             }
             param_list = omni_cdr(param_list);
             param_idx++;
@@ -4298,6 +4304,10 @@ static void codegen_handler_closure(CodeGenContext* ctx, OmniValue* params,
                 char c_name[64];
                 snprintf(c_name, sizeof(c_name), "_arg_%d", (int)i);
                 register_symbol(tmp, param->str_val, c_name);
+                /* Mark second param (index 1) as resumption for effect handlers (arity 2) */
+                if (i == 1 && arity == 2) {
+                    strmap_put(tmp->resumption_symbols, c_name, (void*)1);
+                }
             }
             param_idx++;
         }
@@ -4389,7 +4399,8 @@ static void codegen_body_thunk(CodeGenContext* ctx, OmniValue* body) {
     char def[16384];
     char* p = def;
     p += sprintf(p, "static Obj* %s(struct Region* _caller_region, Obj** _captures, Obj** _args, int _argc) {\n", fn_name);
-    p += sprintf(p, "    (void)_captures; (void)_argc; (void)_caller_region; (void)_args;\n");
+    p += sprintf(p, "    (void)_captures; (void)_argc; (void)_args;\n");
+    p += sprintf(p, "    struct Region* _local_region = _caller_region;\n");  /* Alias for codegen compatibility */
     p += sprintf(p, "    return %s;\n", tmp->output_buffer);
     p += sprintf(p, "}");
 
@@ -5522,6 +5533,19 @@ static void codegen_apply(CodeGenContext* ctx, OmniValue* expr) {
             omni_codegen_emit_raw(ctx, ")");
             return;
         }
+        /* Phase 22: Check if calling a resumption (effect handler resume param) */
+        if (c_name && ctx->resumption_symbols &&
+            strmap_get(ctx->resumption_symbols, c_name)) {
+            /* Resumption call: (resume value) -> prim_resume(resume, value) */
+            omni_codegen_emit_raw(ctx, "prim_resume(%s, ", c_name);
+            if (!omni_is_nil(args) && omni_is_cell(args)) {
+                codegen_expr(ctx, omni_car(args));
+            } else {
+                omni_codegen_emit_raw(ctx, "NIL");
+            }
+            omni_codegen_emit_raw(ctx, ")");
+            return;
+        }
     }
 
     /* Check for inline lambda application: ((lambda ...) args...) */
@@ -5732,6 +5756,31 @@ static void codegen_list(CodeGenContext* ctx, OmniValue* expr) {
             }
             omni_codegen_dedent(ctx);
             omni_codegen_emit(ctx, "})");
+            return;
+        }
+        /* List constructor: (list a b c) -> nested cons cells */
+        if (strcmp(name, "list") == 0) {
+            OmniValue* args = omni_cdr(expr);
+            if (omni_is_nil(args)) {
+                omni_codegen_emit_raw(ctx, "NIL");
+            } else {
+                /* Generate nested cons calls from right to left:
+                 * (list a b c) -> prim_cons(a, prim_cons(b, prim_cons(c, NIL)))
+                 */
+                int depth = 0;
+                OmniValue* curr = args;
+                while (!omni_is_nil(curr) && omni_is_cell(curr)) {
+                    omni_codegen_emit_raw(ctx, "prim_cons(");
+                    codegen_expr(ctx, omni_car(curr));
+                    omni_codegen_emit_raw(ctx, ", ");
+                    curr = omni_cdr(curr);
+                    depth++;
+                }
+                omni_codegen_emit_raw(ctx, "NIL");
+                for (int i = 0; i < depth; i++) {
+                    omni_codegen_emit_raw(ctx, ")");
+                }
+            }
             return;
         }
         /* T-wire-fmt-string-01: Format string interpolation */
