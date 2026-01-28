@@ -76,6 +76,18 @@ typedef struct CodeGenContext {
         StrMap* map;           /* Optimization: O(1) function lookup (stores index) */
     } defined_functions;
 
+    /* Phase 19: Multiple Dispatch - Typed Method Tracking */
+    /* Tracks typed function definitions to build generic functions */
+    struct {
+        char** omni_names;     /* OmniLisp function names (e.g., "add") */
+        char** mangled_names;  /* Unique mangled names with type suffix (e.g., "o_add__Int_Int") */
+        char*** param_types;   /* Array of type name arrays for each method */
+        int* param_counts;     /* Number of parameters for each method */
+        size_t count;
+        size_t capacity;
+        StrMap* generics_map;  /* OmniLisp name -> index of first method (for grouping) */
+    } typed_methods;
+
     /* Flags */
     bool in_tail_position;
     bool generating_header;
@@ -106,6 +118,9 @@ typedef struct CodeGenContext {
 
     /* Phase 22: Track resumption symbols for effect handlers */
     StrMap* resumption_symbols;  /* c_names that are resumption objects (effect handlers) */
+
+    /* Phase 19: Flag indicating generic initialization is needed */
+    bool has_generics;           /* True if __init_generics() should be called */
 } CodeGenContext;
 
 /* ============== Code Generator API ============== */

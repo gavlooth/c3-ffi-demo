@@ -1,0 +1,22 @@
+;; Test file for multiple dispatch (Phase 19)
+;; This tests the wiring of type-annotated define to generic dispatch
+
+;; Define multiple methods with type annotations
+
+;; Default handler for Any type
+(define describe [x {Any}]
+  "unknown")
+
+;; Specialized handler for Int
+(define describe [x {Int}]
+  "integer")
+
+;; Specialized handler for String
+(define describe [x {String}]
+  "string")
+
+;; Test calls - should dispatch based on argument types
+(println "Testing multiple dispatch:")
+(println "describe 42:" (describe 42))
+(println "describe hello:" (describe "hello"))
+(println "describe nil:" (describe nil))

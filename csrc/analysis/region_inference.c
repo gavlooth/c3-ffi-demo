@@ -212,8 +212,7 @@ static void collect_vars_from_expr(OmniValue* expr, VarList* vars) {
         case OMNI_ERROR:
         case OMNI_BOX:
         case OMNI_CONT:
-        case OMNI_CHAN:
-        case OMNI_GREEN_CHAN:
+        /* DIRECTIVE: NO CHANNELS - OMNI_CHAN, OMNI_GREEN_CHAN removed */
         case OMNI_ATOM:
         case OMNI_THREAD:
         case OMNI_PROCESS:
@@ -441,8 +440,7 @@ static void analyze_expr_for_interactions(VariableInteractionGraph* vig,
         case OMNI_ERROR:
         case OMNI_BOX:
         case OMNI_CONT:
-        case OMNI_CHAN:
-        case OMNI_GREEN_CHAN:
+        /* DIRECTIVE: NO CHANNELS - OMNI_CHAN, OMNI_GREEN_CHAN removed */
         case OMNI_ATOM:
         case OMNI_THREAD:
         case OMNI_PROCESS:

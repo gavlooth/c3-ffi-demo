@@ -43,6 +43,7 @@ CodeGenContext* omni_codegen_new(FILE* output) {
     ctx->symbols.map = strmap_new();
     ctx->defined_functions.map = strmap_new();
     ctx->resumption_symbols = strmap_new();  /* Phase 22: effect resumptions */
+    ctx->typed_methods.generics_map = strmap_new();  /* Phase 19: multiple dispatch */
     return ctx;
 }
 
@@ -58,6 +59,7 @@ CodeGenContext* omni_codegen_new_buffer(void) {
     ctx->symbols.map = strmap_new();
     ctx->defined_functions.map = strmap_new();
     ctx->resumption_symbols = strmap_new();  /* Phase 22: effect resumptions */
+    ctx->typed_methods.generics_map = strmap_new();  /* Phase 19: multiple dispatch */
     return ctx;
 }
 
@@ -89,6 +91,23 @@ void omni_codegen_free(CodeGenContext* ctx) {
     free(ctx->defined_functions.names);
     free(ctx->defined_functions.definition_count);
     if (ctx->defined_functions.map) strmap_free(ctx->defined_functions.map);
+
+    /* Phase 19: Free typed methods for multiple dispatch */
+    for (size_t i = 0; i < ctx->typed_methods.count; i++) {
+        free(ctx->typed_methods.omni_names[i]);
+        free(ctx->typed_methods.mangled_names[i]);
+        if (ctx->typed_methods.param_types[i]) {
+            for (int j = 0; j < ctx->typed_methods.param_counts[i]; j++) {
+                free(ctx->typed_methods.param_types[i][j]);
+            }
+            free(ctx->typed_methods.param_types[i]);
+        }
+    }
+    free(ctx->typed_methods.omni_names);
+    free(ctx->typed_methods.mangled_names);
+    free(ctx->typed_methods.param_types);
+    free(ctx->typed_methods.param_counts);
+    if (ctx->typed_methods.generics_map) strmap_free(ctx->typed_methods.generics_map);
 
     if (ctx->analysis) {
         omni_analysis_free(ctx->analysis);
@@ -1223,7 +1242,8 @@ void omni_codegen_runtime_header(CodeGenContext* ctx) {
         omni_codegen_emit_raw(ctx, "/* Concurrency Ownership: Thread-safe reference counting.\n");
         omni_codegen_emit_raw(ctx, " * THREAD_LOCAL: Data stays in one thread, no sync needed.\n");
         omni_codegen_emit_raw(ctx, " * THREAD_SHARED: Data accessed by multiple threads, needs atomic RC.\n");
-        omni_codegen_emit_raw(ctx, " * THREAD_TRANSFER: Data transferred via channel, ownership moves.\n");
+        omni_codegen_emit_raw(ctx, " * THREAD_TRANSFER: Data transferred between fibers, ownership moves.\n");
+        omni_codegen_emit_raw(ctx, " * DIRECTIVE: NO CHANNELS - Use algebraic effects for concurrency.\n");
         omni_codegen_emit_raw(ctx, " */\n\n");
 
         omni_codegen_emit_raw(ctx, "/* Atomic reference counting for shared data */\n");
@@ -1265,87 +1285,9 @@ void omni_codegen_runtime_header(CodeGenContext* ctx) {
         omni_codegen_emit_raw(ctx, "#define THREAD_SHARED_VAR(v) (v)     /* Uses atomic RC */\n");
         omni_codegen_emit_raw(ctx, "#define THREAD_TRANSFER_VAR(v) (v)   /* Ownership moves */\n\n");
 
-        omni_codegen_emit_raw(ctx, "/* Channel operations - ownership transfer semantics */\n");
-        omni_codegen_emit_raw(ctx, "typedef struct Channel {\n");
-        omni_codegen_emit_raw(ctx, "    Obj** buffer;\n");
-        omni_codegen_emit_raw(ctx, "    size_t capacity;\n");
-        omni_codegen_emit_raw(ctx, "    size_t head, tail, count;\n");
-        omni_codegen_emit_raw(ctx, "    pthread_mutex_t mutex;\n");
-        omni_codegen_emit_raw(ctx, "    pthread_cond_t not_empty;\n");
-        omni_codegen_emit_raw(ctx, "    pthread_cond_t not_full;\n");
-        omni_codegen_emit_raw(ctx, "    int closed;\n");
-        omni_codegen_emit_raw(ctx, "} Channel;\n\n");
-
-        omni_codegen_emit_raw(ctx, "static Channel* channel_new(size_t capacity) {\n");
-        omni_codegen_emit_raw(ctx, "    Channel* c = malloc(sizeof(Channel));\n");
-        omni_codegen_emit_raw(ctx, "    c->buffer = malloc(capacity * sizeof(Obj*));\n");
-        omni_codegen_emit_raw(ctx, "    c->capacity = capacity;\n");
-        omni_codegen_emit_raw(ctx, "    c->head = c->tail = c->count = 0;\n");
-        omni_codegen_emit_raw(ctx, "    pthread_mutex_init(&c->mutex, NULL);\n");
-        omni_codegen_emit_raw(ctx, "    pthread_cond_init(&c->not_empty, NULL);\n");
-        omni_codegen_emit_raw(ctx, "    pthread_cond_init(&c->not_full, NULL);\n");
-        omni_codegen_emit_raw(ctx, "    c->closed = 0;\n");
-        omni_codegen_emit_raw(ctx, "    return c;\n");
-        omni_codegen_emit_raw(ctx, "}\n\n");
-
-        omni_codegen_emit_raw(ctx, "/* Send transfers ownership - sender must NOT free after */\n");
-        omni_codegen_emit_raw(ctx, "static void channel_send(Channel* c, Obj* value) {\n");
-        omni_codegen_emit_raw(ctx, "    pthread_mutex_lock(&c->mutex);\n");
-        omni_codegen_emit_raw(ctx, "    while (c->count == c->capacity && !c->closed) {\n");
-        omni_codegen_emit_raw(ctx, "        pthread_cond_wait(&c->not_full, &c->mutex);\n");
-        omni_codegen_emit_raw(ctx, "    }\n");
-        omni_codegen_emit_raw(ctx, "    if (!c->closed) {\n");
-        omni_codegen_emit_raw(ctx, "        c->buffer[c->tail] = value;  /* Ownership transfers */\n");
-        omni_codegen_emit_raw(ctx, "        c->tail = (c->tail + 1) %% c->capacity;\n");
-        omni_codegen_emit_raw(ctx, "        c->count++;\n");
-        omni_codegen_emit_raw(ctx, "        pthread_cond_signal(&c->not_empty);\n");
-        omni_codegen_emit_raw(ctx, "    }\n");
-        omni_codegen_emit_raw(ctx, "    pthread_mutex_unlock(&c->mutex);\n");
-        omni_codegen_emit_raw(ctx, "}\n\n");
-
-        omni_codegen_emit_raw(ctx, "/* Recv receives ownership - receiver must free when done */\n");
-        omni_codegen_emit_raw(ctx, "static Obj* channel_recv(Channel* c) {\n");
-        omni_codegen_emit_raw(ctx, "    pthread_mutex_lock(&c->mutex);\n");
-        omni_codegen_emit_raw(ctx, "    while (c->count == 0 && !c->closed) {\n");
-        omni_codegen_emit_raw(ctx, "        pthread_cond_wait(&c->not_empty, &c->mutex);\n");
-        omni_codegen_emit_raw(ctx, "    }\n");
-        omni_codegen_emit_raw(ctx, "    Obj* value = NIL;\n");
-        omni_codegen_emit_raw(ctx, "    if (c->count > 0) {\n");
-        omni_codegen_emit_raw(ctx, "        value = c->buffer[c->head];  /* Ownership transfers */\n");
-        omni_codegen_emit_raw(ctx, "        c->head = (c->head + 1) %% c->capacity;\n");
-        omni_codegen_emit_raw(ctx, "        c->count--;\n");
-        omni_codegen_emit_raw(ctx, "        pthread_cond_signal(&c->not_full);\n");
-        omni_codegen_emit_raw(ctx, "    }\n");
-        omni_codegen_emit_raw(ctx, "    pthread_mutex_unlock(&c->mutex);\n");
-        omni_codegen_emit_raw(ctx, "    return value;\n");
-        omni_codegen_emit_raw(ctx, "}\n\n");
-
-        omni_codegen_emit_raw(ctx, "static void channel_close(Channel* c) {\n");
-        omni_codegen_emit_raw(ctx, "    pthread_mutex_lock(&c->mutex);\n");
-        omni_codegen_emit_raw(ctx, "    c->closed = 1;\n");
-        omni_codegen_emit_raw(ctx, "    pthread_cond_broadcast(&c->not_empty);\n");
-        omni_codegen_emit_raw(ctx, "    pthread_cond_broadcast(&c->not_full);\n");
-        omni_codegen_emit_raw(ctx, "    pthread_mutex_unlock(&c->mutex);\n");
-        omni_codegen_emit_raw(ctx, "}\n\n");
-
-        omni_codegen_emit_raw(ctx, "static void channel_free(Channel* c) {\n");
-        omni_codegen_emit_raw(ctx, "    if (!c) return;\n");
-        omni_codegen_emit_raw(ctx, "    /* Free any remaining items in buffer */\n");
-        omni_codegen_emit_raw(ctx, "    while (c->count > 0) {\n");
-        omni_codegen_emit_raw(ctx, "        free_obj(c->buffer[c->head]);\n");
-        omni_codegen_emit_raw(ctx, "        c->head = (c->head + 1) %% c->capacity;\n");
-        omni_codegen_emit_raw(ctx, "        c->count--;\n");
-        omni_codegen_emit_raw(ctx, "    }\n");
-        omni_codegen_emit_raw(ctx, "    free(c->buffer);\n");
-        omni_codegen_emit_raw(ctx, "    pthread_mutex_destroy(&c->mutex);\n");
-        omni_codegen_emit_raw(ctx, "    pthread_cond_destroy(&c->not_empty);\n");
-        omni_codegen_emit_raw(ctx, "    pthread_cond_destroy(&c->not_full);\n");
-        omni_codegen_emit_raw(ctx, "    free(c);\n");
-        omni_codegen_emit_raw(ctx, "}\n\n");
-
-        omni_codegen_emit_raw(ctx, "/* Ownership transfer macros */\n");
-        omni_codegen_emit_raw(ctx, "#define SEND_OWNERSHIP(ch, val) do { channel_send(ch, val); /* val no longer owned */ } while(0)\n");
-        omni_codegen_emit_raw(ctx, "#define RECV_OWNERSHIP(ch, var) do { var = channel_recv(ch); /* var now owned */ } while(0)\n\n");
+        /* DIRECTIVE: NO CHANNELS - Channel struct, channel_new, channel_send,
+         * channel_recv, channel_close, channel_free, and ownership macros removed.
+         * Use algebraic effects for structured concurrency instead. */
 
         omni_codegen_emit_raw(ctx, "/* Thread spawn with captured variable handling */\n");
         omni_codegen_emit_raw(ctx, "#define SPAWN_THREAD(fn, arg) do { \\\n");
@@ -2737,6 +2679,125 @@ static void track_function_definition(CodeGenContext* ctx, const char* c_name) {
     ctx->defined_functions.count++;
 }
 
+/*
+ * Phase 19: Track typed method for multiple dispatch.
+ *
+ * Records a typed function definition (e.g., (define add [x {Int}] [y {Int}] ...))
+ * to enable generic function construction.
+ *
+ * Args:
+ *   ctx         - CodeGen context
+ *   omni_name   - OmniLisp function name (e.g., "add")
+ *   mangled_name - C function name (e.g., "o_add__Int_Int")
+ *   param_types - Array of type name strings (e.g., ["Int", "Int"])
+ *   param_count - Number of parameters
+ */
+static void track_typed_method(CodeGenContext* ctx, const char* omni_name,
+                               const char* mangled_name, const char** param_types,
+                               int param_count) {
+    /* Grow arrays if needed */
+    if (ctx->typed_methods.count >= ctx->typed_methods.capacity) {
+        size_t new_capacity = ctx->typed_methods.capacity == 0 ? 16 : ctx->typed_methods.capacity * 2;
+        ctx->typed_methods.omni_names = realloc(ctx->typed_methods.omni_names, new_capacity * sizeof(char*));
+        ctx->typed_methods.mangled_names = realloc(ctx->typed_methods.mangled_names, new_capacity * sizeof(char*));
+        ctx->typed_methods.param_types = realloc(ctx->typed_methods.param_types, new_capacity * sizeof(char**));
+        ctx->typed_methods.param_counts = realloc(ctx->typed_methods.param_counts, new_capacity * sizeof(int));
+        ctx->typed_methods.capacity = new_capacity;
+    }
+
+    /* Store the method */
+    size_t idx = ctx->typed_methods.count;
+    ctx->typed_methods.omni_names[idx] = strdup(omni_name);
+    ctx->typed_methods.mangled_names[idx] = strdup(mangled_name);
+    ctx->typed_methods.param_counts[idx] = param_count;
+
+    /* Copy parameter types */
+    if (param_count > 0 && param_types) {
+        ctx->typed_methods.param_types[idx] = malloc(param_count * sizeof(char*));
+        for (int i = 0; i < param_count; i++) {
+            ctx->typed_methods.param_types[idx][i] = strdup(param_types[i] ? param_types[i] : "Any");
+        }
+    } else {
+        ctx->typed_methods.param_types[idx] = NULL;
+    }
+
+    /* Track in generics_map: first occurrence of each omni_name */
+    if (ctx->typed_methods.generics_map) {
+        void* existing = strmap_get(ctx->typed_methods.generics_map, omni_name);
+        if (!existing) {
+            /* First method for this generic - store index+1 */
+            strmap_put(ctx->typed_methods.generics_map, omni_name, (void*)(idx + 1));
+        }
+    }
+
+    ctx->typed_methods.count++;
+}
+
+/*
+ * Phase 19: Check if a function name has multiple typed definitions.
+ * Returns the number of methods registered for this generic function name.
+ */
+static int count_generic_methods(CodeGenContext* ctx, const char* omni_name) {
+    int count = 0;
+    for (size_t i = 0; i < ctx->typed_methods.count; i++) {
+        if (strcmp(ctx->typed_methods.omni_names[i], omni_name) == 0) {
+            count++;
+        }
+    }
+    return count;
+}
+
+/*
+ * Phase 19: Generate a unique mangled name for a typed method.
+ * For (define add [x {Int}] [y {Int}] ...), generates "o_add__Int_Int".
+ *
+ * Returns: Newly allocated string (caller must free)
+ */
+static char* generate_typed_mangled_name(const char* omni_name, const char** type_names, int count) {
+    /* Calculate needed size */
+    size_t size = strlen("o_") + strlen(omni_name) + 3; /* "__" prefix + null */
+    for (int i = 0; i < count; i++) {
+        size += strlen(type_names[i] ? type_names[i] : "Any") + 1; /* underscore separator */
+    }
+
+    char* result = malloc(size);
+    if (!result) return NULL;
+
+    /* Build the name: o_<name>__<Type1>_<Type2>_... */
+    strcpy(result, "o_");
+    strcat(result, omni_name);
+    strcat(result, "__");
+    for (int i = 0; i < count; i++) {
+        if (i > 0) strcat(result, "_");
+        strcat(result, type_names[i] ? type_names[i] : "Any");
+    }
+
+    return result;
+}
+
+/*
+ * Phase 19: Check if a function name has multiple typed methods registered.
+ * A function is "generic" if it has at least 2 typed method definitions.
+ * Returns true if the function should use omni_generic_invoke for dispatch.
+ */
+static bool is_generic_function(CodeGenContext* ctx, const char* omni_name) {
+    if (!ctx || !ctx->typed_methods.generics_map || !omni_name) return false;
+
+    int* index_ptr = (int*)strmap_get(ctx->typed_methods.generics_map, omni_name);
+    if (!index_ptr) return false;
+
+    /* Count how many methods share this omni_name */
+    int method_count = 0;
+    for (size_t i = 0; i < ctx->typed_methods.count; i++) {
+        if (strcmp(ctx->typed_methods.omni_names[i], omni_name) == 0) {
+            method_count++;
+        }
+    }
+
+    /* Only use generic dispatch if there are at least 2 methods */
+    return method_count >= 2;
+}
+
 /* Helper: Check if a symbol is a metadata key (e.g., ^:effects, ^:parent)
  * Issue 9 P3: Metadata keys are not valid parameter names
  */
@@ -2774,6 +2835,49 @@ static OmniValue* codegen_extract_param_name(OmniValue* param) {
         }
     }
     /* Cells like (module-ref ...) are NEVER parameter forms in OmniLisp */
+    return NULL;
+}
+
+/*
+ * Extract the type annotation from a parameter slot.
+ * For [x {Int}], returns the "{Int}" type literal.
+ * For [x] or plain x, returns NULL.
+ *
+ * Multiple Dispatch Support (Phase 19):
+ * This extracts type information to enable Julia-style multiple dispatch.
+ * When a function has multiple definitions with different parameter types,
+ * each definition becomes a method in a generic function.
+ */
+static OmniValue* codegen_extract_param_type(OmniValue* param) {
+    if (omni_is_array(param) && param->array.len > 1) {
+        /* Slot: [x {Type}] - second element is the type */
+        OmniValue* second = omni_array_get(param, 1);
+        if (omni_is_type_lit(second)) {
+            return second;
+        }
+    }
+    return NULL;  /* No type annotation */
+}
+
+/*
+ * Extract the type name string from a type literal.
+ * For {Int}, returns "Int".
+ * For {List {Int}}, returns "List" (base type only for now).
+ */
+static const char* codegen_type_name(OmniValue* type_lit) {
+    if (!type_lit || !omni_is_type_lit(type_lit)) return NULL;
+
+    /* Type literal is {...} - internal representation stores name */
+    if (omni_is_cell(type_lit)) {
+        OmniValue* first = omni_car(type_lit);
+        if (omni_is_sym(first)) {
+            return first->str_val;
+        }
+    }
+    /* Simple type like {Int} might be stored differently */
+    if (type_lit->str_val) {
+        return type_lit->str_val;
+    }
     return NULL;
 }
 
@@ -2870,12 +2974,15 @@ static void codegen_define(CodeGenContext* ctx, OmniValue* expr) {
                     return;
                 }
 
-                /* Count parameters - all but last element are parameters
+                /* Count parameters and extract types for multiple dispatch
                  * Issue 9 P3: Skip metadata keys (^:effects) and their values
+                 * Phase 19: Also extract type annotations for generic functions
                  */
                 size_t param_count = 0;
                 OmniValue* params_iter = rest;
                 bool skip_next = false;  /* Skip value after metadata key */
+
+                /* First pass: count parameters */
                 while (!omni_is_nil(params_iter) && omni_is_cell(params_iter)) {
                     if (omni_is_nil(omni_cdr(params_iter))) {
                         /* Last element - this is the body, not a parameter */
@@ -2896,11 +3003,58 @@ static void codegen_define(CodeGenContext* ctx, OmniValue* expr) {
                     params_iter = omni_cdr(params_iter);
                 }
 
-                /* Register symbol and track as static function */
-                register_symbol(ctx, fname->str_val, c_name);
-                track_function_definition(ctx, c_name);
+                /* Phase 19: Extract type annotations for multiple dispatch */
+                const char** type_names = NULL;
+                bool has_typed_params = false;
+                if (param_count > 0) {
+                    type_names = malloc(param_count * sizeof(const char*));
+                    memset(type_names, 0, param_count * sizeof(const char*));
 
-                omni_codegen_emit(ctx, "static Obj* %s(Region* _caller_region", c_name);
+                    params_iter = rest;
+                    skip_next = false;
+                    size_t type_idx = 0;
+                    while (!omni_is_nil(params_iter) && omni_is_cell(params_iter) && type_idx < param_count) {
+                        if (omni_is_nil(omni_cdr(params_iter))) break; /* Last element is body */
+                        OmniValue* item = omni_car(params_iter);
+                        if (skip_next) {
+                            skip_next = false;
+                        } else if (is_metadata_key(item)) {
+                            skip_next = true;
+                        } else if (omni_is_type_lit(item)) {
+                            /* Skip return type annotations */
+                        } else {
+                            /* This is a parameter - check for type annotation */
+                            OmniValue* type_lit = codegen_extract_param_type(item);
+                            if (type_lit) {
+                                const char* type_name = codegen_type_name(type_lit);
+                                type_names[type_idx] = type_name;
+                                has_typed_params = true;
+                            }
+                            type_idx++;
+                        }
+                        params_iter = omni_cdr(params_iter);
+                    }
+                }
+
+                /* Phase 19: Generate unique mangled name for typed methods */
+                char* final_c_name;
+                if (has_typed_params) {
+                    final_c_name = generate_typed_mangled_name(fname->str_val, type_names, (int)param_count);
+                    /* Track as typed method for generic function construction */
+                    track_typed_method(ctx, fname->str_val, final_c_name, type_names, (int)param_count);
+                } else {
+                    final_c_name = c_name;
+                    c_name = NULL;  /* Prevent double-free */
+                }
+
+                /* Clean up type_names array (strings are owned by OmniValue, don't free them) */
+                free(type_names);
+
+                /* Register symbol and track as static function */
+                register_symbol(ctx, fname->str_val, final_c_name);
+                track_function_definition(ctx, final_c_name);
+
+                omni_codegen_emit(ctx, "static Obj* %s(Region* _caller_region", final_c_name);
 
                 /* Emit parameters - skip metadata and type annotations
                  * Issue 9 P3: Skip ^:effects and its value
@@ -2972,7 +3126,7 @@ static void codegen_define(CodeGenContext* ctx, OmniValue* expr) {
 
                 omni_codegen_dedent(ctx);
                 omni_codegen_emit(ctx, "}\n\n");
-                free(c_name);
+                free(final_c_name);
                 return;
             }
         }
@@ -5645,15 +5799,49 @@ static void codegen_apply(CodeGenContext* ctx, OmniValue* expr) {
          * - Closure variables: (define f (fn [x] ...)) -> call via call_closure_region
          */
         if (is_static_function) {
-            /* Static function - call directly with region parameter */
-            codegen_expr(ctx, func);
-            omni_codegen_emit_raw(ctx, "(_local_region");
-            while (!omni_is_nil(args) && omni_is_cell(args)) {
-                omni_codegen_emit_raw(ctx, ", ");
-                codegen_expr(ctx, omni_car(args));
-                args = omni_cdr(args);
+            /* Phase 19: Check if this is a generic function with multiple dispatch */
+            const char* func_name = func->str_val;
+            if (is_generic_function(ctx, func_name)) {
+                /* Generic function - use omni_generic_invoke for runtime dispatch
+                 * Note: The generic global uses the OmniLisp name: _generic_<name>
+                 */
+
+                /* Count arguments first */
+                int arg_count = 0;
+                OmniValue* arg_iter = args;
+                while (!omni_is_nil(arg_iter) && omni_is_cell(arg_iter)) {
+                    arg_count++;
+                    arg_iter = omni_cdr(arg_iter);
+                }
+
+                if (arg_count == 0) {
+                    omni_codegen_emit_raw(ctx, "omni_generic_invoke(_generic_%s, NULL, 0)", func_name);
+                } else {
+                    /* Build args array in statement expression */
+                    omni_codegen_emit_raw(ctx, "({\n");
+                    omni_codegen_emit_raw(ctx, "        Obj* _dispatch_args[%d] = {", arg_count);
+                    bool first_a = true;
+                    while (!omni_is_nil(args) && omni_is_cell(args)) {
+                        if (!first_a) omni_codegen_emit_raw(ctx, ", ");
+                        first_a = false;
+                        codegen_expr(ctx, omni_car(args));
+                        args = omni_cdr(args);
+                    }
+                    omni_codegen_emit_raw(ctx, "};\n");
+                    omni_codegen_emit_raw(ctx, "        omni_generic_invoke(_generic_%s, _dispatch_args, %d);\n", func_name, arg_count);
+                    omni_codegen_emit_raw(ctx, "    })");
+                }
+            } else {
+                /* Static function - call directly with region parameter */
+                codegen_expr(ctx, func);
+                omni_codegen_emit_raw(ctx, "(_local_region");
+                while (!omni_is_nil(args) && omni_is_cell(args)) {
+                    omni_codegen_emit_raw(ctx, ", ");
+                    codegen_expr(ctx, omni_car(args));
+                    args = omni_cdr(args);
+                }
+                omni_codegen_emit_raw(ctx, ")");
             }
-            omni_codegen_emit_raw(ctx, ")");
         } else if (is_user_function) {
             /* Closure variable - invoke via call_closure_region */
             /* Count arguments */
@@ -5970,6 +6158,141 @@ static void codegen_expr(CodeGenContext* ctx, OmniValue* expr) {
     }
 }
 
+/* ============== Phase 19: Multiple Dispatch Generation ============== */
+
+/*
+ * Emit wrapper function that adapts static function signature to ClosureFn.
+ *
+ * Static functions have signature: Obj* func(Region*, Obj*, Obj*, ...)
+ * ClosureFn has signature: Obj* func(Obj** captures, Obj** args, int argc)
+ *
+ * The wrapper unpacks args and calls the static function.
+ */
+static void emit_method_wrapper(CodeGenContext* ctx, const char* wrapper_name,
+                                const char* static_func_name, int param_count) {
+    omni_codegen_emit_raw(ctx, "/* Multiple dispatch wrapper for %s */\n", static_func_name);
+    omni_codegen_emit_raw(ctx, "static Obj* %s(Obj** captures, Obj** args, int argc) {\n", wrapper_name);
+    omni_codegen_emit_raw(ctx, "    (void)captures; (void)argc;\n");
+    omni_codegen_emit_raw(ctx, "    return %s(omni_get_global_region()", static_func_name);
+    for (int i = 0; i < param_count; i++) {
+        omni_codegen_emit_raw(ctx, ", args[%d]", i);
+    }
+    omni_codegen_emit_raw(ctx, ");\n");
+    omni_codegen_emit_raw(ctx, "}\n\n");
+}
+
+/*
+ * Emit global variables for generic function objects.
+ */
+static void emit_generic_globals(CodeGenContext* ctx) {
+    if (ctx->typed_methods.count == 0) return;
+
+    omni_codegen_emit_raw(ctx, "/* Phase 19: Global generic function objects */\n");
+
+    /* Track which generic names we've seen */
+    StrMap* seen = strmap_new();
+    for (size_t i = 0; i < ctx->typed_methods.count; i++) {
+        const char* omni_name = ctx->typed_methods.omni_names[i];
+        if (strmap_get(seen, omni_name)) continue;
+        strmap_put(seen, omni_name, (void*)1);
+
+        /* Generate a global variable name */
+        char global_name[256];
+        snprintf(global_name, sizeof(global_name), "_generic_%s", omni_name);
+        omni_codegen_emit_raw(ctx, "static Obj* %s = NULL;\n", global_name);
+    }
+    strmap_free(seen);
+    omni_codegen_emit_raw(ctx, "\n");
+}
+
+/*
+ * Emit method wrapper functions for all typed methods.
+ */
+static void emit_method_wrappers(CodeGenContext* ctx) {
+    if (ctx->typed_methods.count == 0) return;
+
+    omni_codegen_emit_raw(ctx, "/* Phase 19: Method wrappers for multiple dispatch */\n\n");
+    for (size_t i = 0; i < ctx->typed_methods.count; i++) {
+        char wrapper_name[256];
+        snprintf(wrapper_name, sizeof(wrapper_name), "_wrap_%s", ctx->typed_methods.mangled_names[i]);
+        emit_method_wrapper(ctx, wrapper_name,
+                           ctx->typed_methods.mangled_names[i],
+                           ctx->typed_methods.param_counts[i]);
+    }
+}
+
+/*
+ * Emit __init_generics() function that creates generic functions and registers methods.
+ */
+static void emit_init_generics(CodeGenContext* ctx) {
+    if (ctx->typed_methods.count == 0) return;
+
+    omni_codegen_emit_raw(ctx, "/* Phase 19: Initialize generic functions and register methods */\n");
+    omni_codegen_emit_raw(ctx, "static void __init_generics(void) {\n");
+
+    /* Track which generic names we've already created */
+    StrMap* created = strmap_new();
+
+    for (size_t i = 0; i < ctx->typed_methods.count; i++) {
+        const char* omni_name = ctx->typed_methods.omni_names[i];
+        const char* mangled_name = ctx->typed_methods.mangled_names[i];
+        int param_count = ctx->typed_methods.param_counts[i];
+        char** param_types = ctx->typed_methods.param_types[i];
+
+        /* Create generic function if not already created */
+        if (!strmap_get(created, omni_name)) {
+            strmap_put(created, omni_name, (void*)1);
+            omni_codegen_emit_raw(ctx, "    /* Create generic function: %s */\n", omni_name);
+            omni_codegen_emit_raw(ctx, "    _generic_%s = mk_generic(\"%s\");\n", omni_name, omni_name);
+        }
+
+        /* Register this method */
+        omni_codegen_emit_raw(ctx, "    /* Register method: %s */\n", mangled_name);
+        omni_codegen_emit_raw(ctx, "    {\n");
+
+        /* Create Kind objects for parameter types */
+        for (int j = 0; j < param_count; j++) {
+            const char* type_name = (param_types && param_types[j]) ? param_types[j] : "Any";
+            omni_codegen_emit_raw(ctx, "        Obj* _kind_%d = mk_kind(\"%s\", NULL, 0);\n", j, type_name);
+        }
+
+        /* Create the kinds array */
+        if (param_count > 0) {
+            omni_codegen_emit_raw(ctx, "        Obj* _kinds[] = {");
+            for (int j = 0; j < param_count; j++) {
+                if (j > 0) omni_codegen_emit_raw(ctx, ", ");
+                omni_codegen_emit_raw(ctx, "_kind_%d", j);
+            }
+            omni_codegen_emit_raw(ctx, "};\n");
+        }
+
+        /* Register the method with wrapper function */
+        omni_codegen_emit_raw(ctx, "        generic_add_method(_generic_%s, %s, %d, (ClosureFn)_wrap_%s);\n",
+                            omni_name,
+                            param_count > 0 ? "_kinds" : "NULL",
+                            param_count,
+                            mangled_name);
+        omni_codegen_emit_raw(ctx, "    }\n");
+    }
+
+    strmap_free(created);
+    omni_codegen_emit_raw(ctx, "}\n\n");
+}
+
+/*
+ * Emit all multiple dispatch support code.
+ */
+static void emit_multiple_dispatch_support(CodeGenContext* ctx) {
+    if (ctx->typed_methods.count == 0) return;
+
+    ctx->has_generics = true;  /* Mark that __init_generics() needs to be called */
+
+    omni_codegen_emit_raw(ctx, "\n/* ============== Phase 19: Multiple Dispatch Support ============== */\n\n");
+    emit_generic_globals(ctx);
+    emit_method_wrappers(ctx);
+    emit_init_generics(ctx);
+}
+
 /* ============== Main Generation ============== */
 
 void omni_codegen_expr(CodeGenContext* ctx, OmniValue* expr) {
@@ -5991,6 +6314,13 @@ void omni_codegen_main(CodeGenContext* ctx, OmniValue** exprs, size_t count) {
     omni_codegen_emit(ctx, "/* Initialize type objects for dispatch */\n");
     omni_codegen_emit(ctx, "omni_init_type_objects();\n");
     omni_codegen_emit(ctx, "\n");
+
+    /* Phase 19: Initialize generic functions for multiple dispatch */
+    if (ctx->has_generics) {
+        omni_codegen_emit(ctx, "/* Initialize generic functions for multiple dispatch */\n");
+        omni_codegen_emit(ctx, "__init_generics();\n");
+        omni_codegen_emit(ctx, "\n");
+    }
 
     /*
      * Issue 3 P2 (Non-lexical region end, straight-line):
@@ -6193,6 +6523,13 @@ void omni_codegen_module_init(CodeGenContext* ctx, OmniValue** exprs, size_t cou
     omni_codegen_emit(ctx, "omni_init_type_objects();\n");
     omni_codegen_emit(ctx, "\n");
 
+    /* Phase 19: Initialize generic functions for multiple dispatch */
+    if (ctx->has_generics) {
+        omni_codegen_emit(ctx, "/* Initialize generic functions for multiple dispatch */\n");
+        omni_codegen_emit(ctx, "__init_generics();\n");
+        omni_codegen_emit(ctx, "\n");
+    }
+
     /* Emit module registration call */
     omni_codegen_emit(ctx, "/* Register module */\n");
     omni_codegen_emit(ctx, "prim_module_begin(mk_sym(\"%s\"));\n",
@@ -6348,6 +6685,17 @@ void omni_codegen_program(CodeGenContext* ctx, OmniValue** exprs, size_t count) 
         omni_codegen_add_forward_decl(ctx, first_pass_ctx->forward_decls.decls[i]);
     }
 
+    /* Phase 19: Copy typed_methods for multiple dispatch */
+    for (size_t i = 0; i < first_pass_ctx->typed_methods.count; i++) {
+        track_typed_method(ctx,
+                          first_pass_ctx->typed_methods.omni_names[i],
+                          first_pass_ctx->typed_methods.mangled_names[i],
+                          (const char**)first_pass_ctx->typed_methods.param_types[i],
+                          first_pass_ctx->typed_methods.param_counts[i]);
+    }
+    /* Phase 19: Set has_generics flag based on typed method count */
+    ctx->has_generics = (ctx->typed_methods.count > 0);
+
     /* Get first pass output before freeing */
     char* first_pass_code = omni_codegen_get_output(first_pass_ctx);
     first_pass_ctx->analysis = NULL;  /* Don't free analysis */
@@ -6367,6 +6715,16 @@ void omni_codegen_program(CodeGenContext* ctx, OmniValue** exprs, size_t count) 
     for (size_t i = 0; i < ctx->defined_functions.count; i++) {
         track_function_definition(main_ctx, ctx->defined_functions.names[i]);
     }
+    /* Phase 19: Copy typed_methods for generic dispatch in main() */
+    for (size_t i = 0; i < ctx->typed_methods.count; i++) {
+        track_typed_method(main_ctx,
+                          ctx->typed_methods.omni_names[i],
+                          ctx->typed_methods.mangled_names[i],
+                          (const char**)ctx->typed_methods.param_types[i],
+                          ctx->typed_methods.param_counts[i]);
+    }
+    /* Phase 19: Copy has_generics flag for __init_generics() call */
+    main_ctx->has_generics = ctx->has_generics;
 
     /* Generate main() or module_init() depending on mode */
     if (ctx->shared_mode) {
@@ -6407,6 +6765,9 @@ void omni_codegen_program(CodeGenContext* ctx, OmniValue** exprs, size_t count) 
         omni_codegen_emit_raw(ctx, "%s", first_pass_code);
         free(first_pass_code);
     }
+
+    /* Phase 19: Emit multiple dispatch support (wrappers, generics, init) */
+    emit_multiple_dispatch_support(ctx);
 
     /* Emit lambda definitions */
     for (size_t i = 0; i < ctx->lambda_defs.count; i++) {
