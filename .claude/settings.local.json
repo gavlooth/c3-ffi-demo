@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(gh release view:*)",
+      "Bash(echo:*)",
+      "Bash(~/.local/bin/c3-lsp:*)",
+      "Bash(c3-lsp:*)"
+    ]
+  }
+}

@@ -1,0 +1,15 @@
+{
+    "langrev": "1",
+    "version": "0.1.0",
+    "authors": ["Demo Author"],
+    "sources": ["src"],
+    "output": "build",
+    "warnings": ["all"],
+    "targets": {
+        "main": {
+            "type": "executable",
+            "linked-libraries": ["mathutils", "m"],
+            "linker-search-paths": ["build"]
+        }
+    }
+}
