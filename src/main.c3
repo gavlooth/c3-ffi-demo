@@ -1131,12 +1131,18 @@ fn void Region.free_object(Region* self, ObjectHandle handle) {
  *
  * Called after all objects have been promoted or destroyed.
  * Frees pool, slot table, and inherited ghost tables.
+ *
+ * Note: If this region had a parent, inherited ghost tables were already
+ * promoted to the parent in Phase 3b (promote_inherited_ghost_tables),
+ * so the list is empty and we just free the list structure itself.
+ * If this region had no parent (root), we free the ghost table contents here.
  */
 fn void Region.destroy_internals(Region* self) {
     self.pool.destroy_all();
     self.slot_table.destroy_all();
 
-    // Free inherited ghost tables
+    // Free inherited ghost tables (if any remain - typically empty after promotion)
+    // Only non-empty if this is the root region or promotion was skipped
     foreach (&ghost : self.inherited_ghost_tables) {
         ghost.forwarding_records.free();
     }
@@ -1158,15 +1164,110 @@ fn void Region.destroy_internals(Region* self) {
 /** Function signature for destructors: takes a pointer to the object. */
 alias DestructorFn = fn void(void* ptr);
 
+/** Fault for when a destructor is not found in the registry. */
+faultdef DESTRUCTOR_NOT_FOUND;
+
+/** Sentinel value for empty slots in the destructor registry hash map. */
+const usz DESTRUCTOR_EMPTY_KEY = usz.max;
+
 /**
- * DestructorRegistry — Maps type IDs to destructor functions.
+ * DestructorRegistryEntry - A single entry in the hash map.
+ */
+struct DestructorRegistryEntry {
+    usz          key;   // typeid cast to usz, or DESTRUCTOR_EMPTY_KEY if empty
+    DestructorFn func;  // The destructor function
+}
+
+/**
+ * DestructorRegistry - O(1) hash map for type ID to destructor lookup.
  *
- * Linear search is used (simple, works for small registries).
- * A production implementation might use a hash map for O(1) lookup.
+ * Uses open-addressing with linear probing. Automatically resizes when
+ * load factor exceeds 75%. Initial capacity is 16 slots.
  */
 struct DestructorRegistry {
-    List{typeid}       registered_type_ids;
-    List{DestructorFn} destructor_functions;
+    List{DestructorRegistryEntry} entries;
+    usz count;
+    usz capacity;
+}
+
+/**
+ * Hash function for typeid keys.
+ * Uses splitmix64-style mixing for good distribution.
+ */
+fn usz destructor_registry_hash(usz key) @inline {
+    ulong h = (ulong)key;
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccd;
+    h ^= h >> 33;
+    h *= 0xc4ceb9fe1a85ec53;
+    h ^= h >> 33;
+    return (usz)h;
+}
+
+/**
+ * Initialize the destructor registry.
+ * Must be called before any register/find operations.
+ */
+fn void DestructorRegistry.init(DestructorRegistry* self) {
+    usz initial_capacity = 16;
+    self.capacity = initial_capacity;
+    self.count = 0;
+    self.entries = {};  // Ensure we start with an empty list
+    for (usz i = 0; i < initial_capacity; i++) {
+        DestructorRegistryEntry empty = { .key = DESTRUCTOR_EMPTY_KEY, .func = null };
+        self.entries.push(empty);
+    }
+}
+
+/**
+ * Release all resources held by the registry.
+ */
+fn void DestructorRegistry.release(DestructorRegistry* self) {
+    self.entries.free();
+    self.count = 0;
+    self.capacity = 0;
+}
+
+/**
+ * Resize the hash map when load factor is too high.
+ */
+fn void DestructorRegistry.resize(DestructorRegistry* self) {
+    usz new_capacity = self.capacity * 2;
+    List{DestructorRegistryEntry} old_entries = self.entries;
+    self.entries = {};
+    for (usz i = 0; i < new_capacity; i++) {
+        DestructorRegistryEntry empty = { .key = DESTRUCTOR_EMPTY_KEY, .func = null };
+        self.entries.push(empty);
+    }
+    self.capacity = new_capacity;
+    self.count = 0;
+    foreach (&entry : old_entries) {
+        if (entry.key != DESTRUCTOR_EMPTY_KEY) {
+            self.insert_entry(entry.key, entry.func);
+        }
+    }
+    old_entries.free();
+}
+
+/**
+ * Internal: Insert an entry by raw key.
+ */
+fn void DestructorRegistry.insert_entry(DestructorRegistry* self, usz key, DestructorFn func) {
+    if (self.count * 4 >= self.capacity * 3) {
+        self.resize();
+    }
+    usz mask = self.capacity - 1;
+    usz idx = destructor_registry_hash(key) & mask;
+    while (self.entries[idx].key != DESTRUCTOR_EMPTY_KEY) {
+        if (self.entries[idx].key == key) {
+            self.entries[idx].func = func;
+            return;
+        }
+        idx = (idx + 1) & mask;
+    }
+    self.entries[idx].key = key;
+    self.entries[idx].func = func;
+    self.count++;
 }
 
 /**
@@ -1176,23 +1277,34 @@ struct DestructorRegistry {
  * @param func The destructor function to call
  */
 fn void DestructorRegistry.register(DestructorRegistry* self, typeid tid, DestructorFn func) {
-    self.registered_type_ids.push(tid);
-    self.destructor_functions.push(func);
+    usz key = (usz)tid;
+    self.insert_entry(key, func);
 }
 
 /**
- * Find the destructor for a type.
+ * Find the destructor for a type. O(1) average case.
  *
  * @param tid The runtime type ID to look up
  * @return The destructor function, or null if none registered
  */
 fn DestructorFn? DestructorRegistry.find(DestructorRegistry* self, typeid tid) {
-    for (usz i = 0; i < self.registered_type_ids.len(); i++) {
-        if (self.registered_type_ids[i] == tid) {
-            return self.destructor_functions[i];
-        }
+    if (self.capacity == 0) {
+        return DESTRUCTOR_NOT_FOUND~;
     }
-    return null;
+    usz key = (usz)tid;
+    usz mask = self.capacity - 1;
+    usz idx = destructor_registry_hash(key) & mask;
+    usz start = idx;
+    do {
+        if (self.entries[idx].key == key) {
+            return self.entries[idx].func;
+        }
+        if (self.entries[idx].key == DESTRUCTOR_EMPTY_KEY) {
+            return DESTRUCTOR_NOT_FOUND~;
+        }
+        idx = (idx + 1) & mask;
+    } while (idx != start);
+    return DESTRUCTOR_NOT_FOUND~;
 }
 
 /** Global destructor registry instance. */
@@ -1255,9 +1367,8 @@ struct RegionRegistry {
     List{List{RegionId}} child_region_lists; // parent_id → list of child IDs
 
     // --- Ghost table index ---
-    // Maps dead region IDs to the living region that holds their ghost table
-    List{RegionId} ghost_source_ids;    // Dead region ID
-    List{RegionId} ghost_host_ids;      // Region holding the ghost table
+    // O(1) hash map lookup: (region_id, generation) -> (host_id, ghost_idx)
+    GhostIndex ghost_index;
 
     // --- Root region ---
     RegionId root_id;
@@ -1297,6 +1408,9 @@ fn void RegionRegistry.init(RegionRegistry* self) {
     // Initialize empty child list for root
     List{RegionId} empty_list;
     self.child_region_lists.push(empty_list);
+
+    // Initialize ghost index for O(1) ghost table lookup
+    self.ghost_index.init(16);
 
     self.root_id = root;
     self.next_region_id = (RegionId)1;
@@ -1424,6 +1538,9 @@ fn void RegionRegistry.release_region(RegionRegistry* self, RegionHandle handle)
  *
  * This is called when refcount reaches 0. The destruction proceeds in phases:
  *
+ * PHASE 0: INVALIDATE REGION CONTINUATIONS
+ *   Mark any continuations belonging to this region as invalidated.
+ *
  * PHASE 1: PROMOTE SURVIVORS TO PARENT
  *   For each LIVE object, allocate a copy in parent and convert to FORWARDED.
  *
@@ -1449,6 +1566,15 @@ fn void RegionRegistry.destroy_region(RegionRegistry* self, RegionId id) {
     Region* region = &self.region_storage[idx];
     RegionId parent_id = region.parent;
     bool has_parent = (parent_id != NO_PARENT);
+
+    // ============================================================
+    //  PHASE 0: INVALIDATE REGION CONTINUATIONS
+    // ============================================================
+    // Any continuations whose home_region is this dying region
+    // must be marked as invalidated so they cannot be resumed
+    if (g_prompt_stack != null) {
+        g_prompt_stack.invalidate_region_continuations(id, region.generation);
+    }
 
     // ============================================================
     //  PHASE 1: PROMOTE SURVIVORS TO PARENT
@@ -1537,6 +1663,16 @@ fn void RegionRegistry.destroy_region(RegionRegistry* self, RegionId id) {
     self.transfer_ghost_table(id, parent_id, has_parent);
 
     // ============================================================
+    //  PHASE 3b: PROMOTE INHERITED GHOST TABLES
+    // ============================================================
+    // If this region inherited ghost tables from its dead children,
+    // those must be promoted to the parent so handles to deeply
+    // nested dead regions can still resolve
+    if (has_parent && region.inherited_ghost_tables.len() > 0) {
+        self.promote_inherited_ghost_tables(id, parent_id);
+    }
+
+    // ============================================================
     //  PHASE 4: REMOVE FROM PARENT'S CHILD LIST
     // ============================================================
     if (has_parent) {
@@ -1613,13 +1749,65 @@ fn void RegionRegistry.transfer_ghost_table(
         .forwarding_records = dying_region.slot_table.object_records  // Move ownership
     };
 
-    // Add to parent's ghost table list
+    // Add to parent's ghost table list and get the index
     usz parent_idx = (usz)(uint)parent_id;
+    usz ghost_idx = self.region_storage[parent_idx].inherited_ghost_tables.len();
     self.region_storage[parent_idx].inherited_ghost_tables.push(ghost);
 
     // Register in ghost index for O(1) lookup
-    self.ghost_source_ids.push(dying_id);
-    self.ghost_host_ids.push(parent_id);
+    self.ghost_index.insert(dying_id, dying_region.generation, parent_id, ghost_idx);
+}
+
+// -----------------------------------------------------------------------------
+// 9.6b Inherited Ghost Table Promotion
+// -----------------------------------------------------------------------------
+
+/**
+ * Promote inherited ghost tables from a dying region to its parent.
+ *
+ * When a region dies, it may have inherited ghost tables from its own dead
+ * children. These ghost tables must be transferred to the grandparent so that
+ * handles to deeply nested dead regions can still resolve.
+ *
+ * For each inherited ghost table:
+ * 1. Add it to the parent's inherited_ghost_tables list
+ * 2. Update the ghost index to point to the new location (parent, new index)
+ * 3. Clear (but don't free) the dying region's list since ownership transferred
+ *
+ * @param dying_id  The region being destroyed
+ * @param parent_id The parent region that will inherit the ghost tables
+ */
+fn void RegionRegistry.promote_inherited_ghost_tables(
+    RegionRegistry* self, RegionId dying_id, RegionId parent_id
+) {
+    usz dying_idx = (usz)(uint)dying_id;
+    usz parent_idx = (usz)(uint)parent_id;
+
+    Region* dying_region = &self.region_storage[dying_idx];
+    Region* parent_region = &self.region_storage[parent_idx];
+
+    // Transfer each inherited ghost table to the parent
+    for (usz i = 0; i < dying_region.inherited_ghost_tables.len(); i++) {
+        GhostTable* ghost = &dying_region.inherited_ghost_tables[i];
+
+        // Get the new index in parent's list (before we push)
+        usz new_ghost_idx = parent_region.inherited_ghost_tables.len();
+
+        // Update the ghost index: same source key, but new host and index
+        // The key is (source_region_id, source_generation) which stays the same
+        self.ghost_index.update(
+            ghost.source_region_id,
+            ghost.source_generation,
+            parent_id,
+            new_ghost_idx
+        );
+
+        // Transfer ownership of the ghost table to parent
+        parent_region.inherited_ghost_tables.push(*ghost);
+    }
+
+    // Clear the dying region's list (ownership transferred, don't free the GhostTables)
+    dying_region.inherited_ghost_tables.clear();
 }
 
 // -----------------------------------------------------------------------------
@@ -1726,63 +1914,51 @@ fn void* RegionRegistry.dereference(RegionRegistry* self, ObjectHandle handle) {
  * @return Pointer to the object's data
  */
 fn void* RegionRegistry.dereference_via_ghost(RegionRegistry* self, ObjectHandle handle) {
-    // Search ghost index for this region
-    for (usz i = 0; i < self.ghost_source_ids.len(); i++) {
-        if ((uint)self.ghost_source_ids[i] == (uint)handle.region_id) {
-            RegionId host_id = self.ghost_host_ids[i];
-            usz host_idx = (usz)(uint)host_id;
-            Region* host_region = &self.region_storage[host_idx];
+    // O(1) lookup in ghost index
+    GhostLookupResult result = self.ghost_index.lookup(handle.region_id, handle.generation);
 
-            // Search host's ghost tables
-            foreach (&ghost : host_region.inherited_ghost_tables) {
-                if ((uint)ghost.source_region_id == (uint)handle.region_id
-                    && ghost.source_generation == handle.generation) {
-
-                    ObjectRecord* record =
-                        &ghost.forwarding_records[(usz)(uint)handle.slot_id];
-                    assert(record.generation == handle.generation);
-
-                    switch (record.kind) {
-                        case FORWARDED:
-                            // Follow the forwarding pointer
-                            return self.dereference(record.forward_target);
-
-                        case DEAD:
-                            unreachable("use-after-free in ghost table");
-
-                        default:
-                            unreachable("ghost table has live record");
-                    }
-                }
-            }
-        }
+    if (!result.found) {
+        unreachable("no ghost table found for handle");
     }
-    unreachable("no ghost table found for handle");
+
+    // Get the ghost table directly by index
+    usz host_idx = (usz)(uint)result.host_id;
+    Region* host_region = &self.region_storage[host_idx];
+    GhostTable* ghost = &host_region.inherited_ghost_tables[result.ghost_idx];
+
+    ObjectRecord* record = &ghost.forwarding_records[(usz)(uint)handle.slot_id];
+    assert(record.generation == handle.generation);
+
+    switch (record.kind) {
+        case FORWARDED:
+            // Follow the forwarding pointer
+            return self.dereference(record.forward_target);
+
+        case DEAD:
+            unreachable("use-after-free in ghost table");
+
+        default:
+            unreachable("ghost table has live record");
+    }
 }
 
 /**
  * Check if a handle to a dead region is valid via ghost table.
  */
 fn bool RegionRegistry.is_valid_ghost_handle(RegionRegistry* self, ObjectHandle handle) {
-    for (usz i = 0; i < self.ghost_source_ids.len(); i++) {
-        if ((uint)self.ghost_source_ids[i] == (uint)handle.region_id) {
-            RegionId host_id = self.ghost_host_ids[i];
-            usz host_idx = (usz)(uint)host_id;
-            Region* host_region = &self.region_storage[host_idx];
+    // O(1) lookup in ghost index
+    GhostLookupResult result = self.ghost_index.lookup(handle.region_id, handle.generation);
 
-            foreach (&ghost : host_region.inherited_ghost_tables) {
-                if ((uint)ghost.source_region_id == (uint)handle.region_id
-                    && ghost.source_generation == handle.generation) {
-                    usz slot_idx = (usz)(uint)handle.slot_id;
-                    if (slot_idx >= ghost.forwarding_records.len()) return false;
-                    ObjectRecord* record = &ghost.forwarding_records[slot_idx];
-                    return record.generation == handle.generation
-                        && record.kind == FORWARDED;
-                }
-            }
-        }
-    }
-    return false;
+    if (!result.found) return false;
+
+    usz host_idx = (usz)(uint)result.host_id;
+    Region* host_region = &self.region_storage[host_idx];
+    GhostTable* ghost = &host_region.inherited_ghost_tables[result.ghost_idx];
+
+    usz slot_idx = (usz)(uint)handle.slot_id;
+    if (slot_idx >= ghost.forwarding_records.len()) return false;
+    ObjectRecord* record = &ghost.forwarding_records[slot_idx];
+    return record.generation == handle.generation && record.kind == FORWARDED;
 }
 
 // -----------------------------------------------------------------------------
@@ -1894,20 +2070,13 @@ fn ObjectRecord* RegionRegistry.resolve_object_record(
         return self.region_storage[idx].slot_table.get_record(handle.slot_id);
     }
 
-    // Search ghost tables
-    for (usz i = 0; i < self.ghost_source_ids.len(); i++) {
-        if ((uint)self.ghost_source_ids[i] == (uint)handle.region_id) {
-            RegionId host_id = self.ghost_host_ids[i];
-            usz host_idx = (usz)(uint)host_id;
-            Region* host = &self.region_storage[host_idx];
-
-            foreach (&ghost : host.inherited_ghost_tables) {
-                if ((uint)ghost.source_region_id == (uint)handle.region_id
-                    && ghost.source_generation == handle.generation) {
-                    return &ghost.forwarding_records[(usz)(uint)handle.slot_id];
-                }
-            }
-        }
+    // O(1) lookup in ghost tables
+    GhostLookupResult result = self.ghost_index.lookup(handle.region_id, handle.generation);
+    if (result.found) {
+        usz host_idx = (usz)(uint)result.host_id;
+        Region* host = &self.region_storage[host_idx];
+        GhostTable* ghost = &host.inherited_ghost_tables[result.ghost_idx];
+        return &ghost.forwarding_records[(usz)(uint)handle.slot_id];
     }
 
     unreachable("object record not found in any live or ghost table");
@@ -1995,6 +2164,179 @@ fn RegionHandle RegionRegistry.manual_extend(
 // SECTION 12: MAIN (Test Entry Point)
 // =============================================================================
 
+// =============================================================================
+// SECTION 13: THREAD-LOCAL REGISTRY
+// =============================================================================
+//
+// Each thread gets its own independent RegionRegistry (and thus its own region
+// hierarchy). No synchronization needed for intra-thread operations.
+//
+// Usage pattern:
+// 1. Call thread_registry_init() once per thread at startup
+// 2. Use convenience functions (create_region, release_region, etc.)
+// 3. Call thread_registry_shutdown() before thread exit
+//
+
+/**
+ * Thread-local registry pointer.
+ * Each thread has its own independent RegionRegistry instance.
+ */
+tlocal RegionRegistry* g_thread_registry;
+
+/**
+ * Initialize the thread-local region registry for the current thread.
+ * Must be called once per thread before using any region operations.
+ * Creates the thread's root region.
+ */
+fn void thread_registry_init() {
+    // Allocate a new registry for this thread
+    RegionRegistry* reg = (RegionRegistry*)mem::malloc(RegionRegistry.sizeof);
+    *reg = {};  // Zero initialize
+    reg.init();
+    g_thread_registry = reg;
+
+    // Initialize prompt stack for continuations
+    if (!prompt_stack_is_initialized()) {
+        prompt_stack_init();
+    }
+}
+
+/**
+ * Shutdown the thread-local registry and free all regions.
+ * Call before thread exit to clean up resources.
+ */
+fn void thread_registry_shutdown() {
+    if (g_thread_registry == null) return;
+
+    // Shutdown prompt stack
+    if (prompt_stack_is_initialized()) {
+        prompt_stack_shutdown();
+    }
+
+    // TODO: destroy all regions, free the registry
+    // For now, just free the registry struct
+    g_thread_registry.ghost_index.release();
+    // Free region storage, etc.
+    g_thread_registry.region_storage.free();
+    g_thread_registry.region_alive_flags.free();
+    g_thread_registry.region_generations.free();
+    g_thread_registry.live_region_tracker.release();
+    g_thread_registry.recycled_region_ids.free();
+    foreach (&children : g_thread_registry.child_region_lists) {
+        children.free();
+    }
+    g_thread_registry.child_region_lists.free();
+    mem::free(g_thread_registry);
+    g_thread_registry = null;
+}
+
+/**
+ * Get the current thread's registry.
+ * Panics if thread_registry_init() was not called.
+ */
+fn RegionRegistry* thread_registry() @inline {
+    assert(g_thread_registry != null, "thread_registry_init() not called");
+    return g_thread_registry;
+}
+
+// -----------------------------------------------------------------------------
+// 13.1 Convenience Functions Using Thread-Local Registry
+// -----------------------------------------------------------------------------
+
+/**
+ * Create a region in the current thread's registry.
+ */
+fn RegionHandle create_region(RegionHandle parent = INVALID_REGION_HANDLE) @inline {
+    return thread_registry().create_region(parent);
+}
+
+/**
+ * Retain a region in the current thread's registry.
+ */
+fn RegionHandle retain_region(RegionHandle handle) @inline {
+    return thread_registry().retain_region(handle);
+}
+
+/**
+ * Release a region in the current thread's registry.
+ */
+fn void release_region(RegionHandle handle) @inline {
+    thread_registry().release_region(handle);
+}
+
+/**
+ * Check if an object handle is valid in the current thread's registry.
+ */
+fn bool is_valid_object(ObjectHandle handle) @inline {
+    return thread_registry().is_valid_object(handle);
+}
+
+/**
+ * Check if a region handle is valid in the current thread's registry.
+ */
+fn bool is_valid_region(RegionHandle handle) @inline {
+    return thread_registry().is_valid_region(handle);
+}
+
+/**
+ * Dereference an object in the current thread's registry.
+ */
+fn void* dereference(ObjectHandle handle) @inline {
+    return thread_registry().dereference(handle);
+}
+
+/**
+ * Get the root region of the current thread's registry.
+ */
+fn RegionHandle thread_root_region() @inline {
+    RegionRegistry* reg = thread_registry();
+    return {
+        .region_id = reg.root_id,
+        .generation = reg.region_generations[(usz)(uint)reg.root_id]
+    };
+}
+
+// -----------------------------------------------------------------------------
+// 13.2 Typed Convenience Macros
+// -----------------------------------------------------------------------------
+
+/**
+ * Dereference and cast to a specific type using the thread-local registry.
+ *
+ * Usage:
+ *   int* ptr = dereference_as(int, handle);
+ *
+ * @param $Type The expected type (compile-time)
+ * @param handle The object handle
+ * @return Typed pointer to the object
+ */
+macro dereference_as($Type, handle) {
+    return thread_registry().dereference_as($Type, handle);
+}
+
+/**
+ * Allocate a typed object in a specific region.
+ * Uses the current thread's registry.
+ *
+ * Usage:
+ *   ObjectHandle h = allocate_in(region_handle, int, 42);
+ *
+ * @param region_handle The region to allocate in
+ * @param $Type The type of object (compile-time)
+ * @param value The value to store
+ * @return ObjectHandle for the allocated object
+ */
+macro ObjectHandle allocate_in(region_handle, $Type, value) {
+    RegionRegistry* reg = thread_registry();
+    usz idx = (usz)(uint)region_handle.region_id;
+    Region* region = &reg.region_storage[idx];
+    return region.allocate_typed($Type, value);
+}
+
+// =============================================================================
+// SECTION 14: MAIN (Test Entry Point)
+// =============================================================================
+
 /**
  * Test entry point demonstrating basic usage.
  *
@@ -2003,15 +2345,36 @@ fn RegionHandle RegionRegistry.manual_extend(
 fn void main() {
     io::printfn("Region Memory System v3 initialized");
 
-    // Initialize the registry (creates root region automatically)
-    RegionRegistry registry;
-    registry.init();
-    io::printfn("Root region created: id=%d", (uint)registry.root_id);
+    // Run destructor registry tests (O(1) lookup implementation)
+    run_destructor_registry_tests();
 
-    // Create a child region under root (pass INVALID_REGION_HANDLE)
-    RegionHandle child = registry.create_region(INVALID_REGION_HANDLE);
+    // Run ghost lookup tests (O(1) optimization verification)
+    run_ghost_lookup_tests();
+
+    // Run context capture/restore tests (x86_64 assembly primitives)
+    // Note: These tests exercise low-level CPU state manipulation
+    run_context_tests();
+
+    // Run delimited continuation tests (reset/shift/resume system)
+    // Note: These tests verify the continuation machinery including:
+    // - Prompt stack operations
+    // - Continuation allocation and lifecycle
+    // - Region integration
+    // - Effect handler patterns
+    run_delimited_tests();
+
+    // Initialize thread-local registry (replaces manual RegionRegistry creation)
+    thread_registry_init();
+    io::printfn("Thread-local registry initialized, root id=%d", (uint)thread_registry().root_id);
+
+    // Create a child region using convenience function
+    RegionHandle child = create_region();
     io::printfn("Child region created: id=%d, gen=%d",
         (uint)child.region_id, (uint)child.generation);
+
+    // Clean up
+    release_region(child);  // Release our reference
+    thread_registry_shutdown();
 
     io::printfn("System ready.");
 }
