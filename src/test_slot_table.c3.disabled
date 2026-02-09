@@ -1,0 +1,898 @@
+/**
+ * =============================================================================
+ * SLOT TABLE UNIT TESTS
+ * =============================================================================
+ *
+ * Comprehensive unit tests for the SlotTable data structure.
+ * Tests cover allocation, release, ID recycling, record states,
+ * generation validation, and live slot tracking.
+ *
+ * Run all tests via: run_slot_table_tests()
+ */
+module main;
+
+import std::io;
+
+// =============================================================================
+// TEST UTILITIES
+// =============================================================================
+
+/**
+ * Test result tracking for reporting.
+ */
+struct SlotTableTestResult {
+    uint passed;
+    uint failed;
+    uint total;
+}
+
+fn void SlotTableTestResult.init(SlotTableTestResult* self) {
+    self.passed = 0;
+    self.failed = 0;
+    self.total = 0;
+}
+
+fn void SlotTableTestResult.record_pass(SlotTableTestResult* self, String test_name) {
+    self.passed += 1;
+    self.total += 1;
+    io::printfn("  [PASS] %s", test_name);
+}
+
+fn void SlotTableTestResult.record_fail(SlotTableTestResult* self, String test_name, String reason) {
+    self.failed += 1;
+    self.total += 1;
+    io::printfn("  [FAIL] %s: %s", test_name, reason);
+}
+
+fn void SlotTableTestResult.print_summary(SlotTableTestResult* self) {
+    io::printfn("\n--------------------------------------------------");
+    io::printfn("Test Summary: %d passed, %d failed, %d total",
+        self.passed, self.failed, self.total);
+    if (self.failed == 0) {
+        io::printfn("All tests passed!");
+    } else {
+        io::printfn("Some tests failed.");
+    }
+    io::printfn("--------------------------------------------------\n");
+}
+
+/**
+ * Create a fresh SlotTable for testing.
+ */
+fn SlotTable st_create_test_slot_table() {
+    SlotTable table;
+    // Lists are zero-initialized by default in C3
+    table.live_slot_tracker.live_count = 0;
+    return table;
+}
+
+/**
+ * Clean up a test SlotTable.
+ */
+fn void st_destroy_test_slot_table(SlotTable* table) {
+    table.destroy_all();
+}
+
+// =============================================================================
+// SECTION 1: ALLOCATION TESTS
+// =============================================================================
+
+/**
+ * Test that each allocation returns a unique SlotId.
+ */
+fn void test_allocate_returns_unique_ids(SlotTableTestResult* result) {
+    String test_name = "test_allocate_returns_unique_ids";
+    SlotTable table = st_create_test_slot_table();
+
+    // Allocate 5 slots
+    SlotAllocationResult r1 = table.allocate();
+    SlotAllocationResult r2 = table.allocate();
+    SlotAllocationResult r3 = table.allocate();
+    SlotAllocationResult r4 = table.allocate();
+    SlotAllocationResult r5 = table.allocate();
+
+    // All slot IDs should be unique
+    bool all_unique = true;
+    SlotId[5] ids = { r1.slot_id, r2.slot_id, r3.slot_id, r4.slot_id, r5.slot_id };
+
+    for (int i = 0; i < 5; i++) {
+        for (int j = i + 1; j < 5; j++) {
+            if ((uint)ids[i] == (uint)ids[j]) {
+                all_unique = false;
+            }
+        }
+    }
+
+    if (all_unique) {
+        result.record_pass(test_name);
+    } else {
+        result.record_fail(test_name, "Duplicate SlotIds returned");
+    }
+
+    st_destroy_test_slot_table(&table);
+}
+
+/**
+ * Test that allocation increments generation counter.
+ * Fresh slots start at generation 0, first allocation bumps to 1.
+ */
+fn void test_allocate_increments_generation(SlotTableTestResult* result) {
+    String test_name = "test_allocate_increments_generation";
+    SlotTable table = st_create_test_slot_table();
+
+    // First allocation: generation should be 1 (0 bumped to 1)
+    SlotAllocationResult r1 = table.allocate();
+
+    if ((uint)r1.generation != 1) {
+        result.record_fail(test_name, "First allocation should have generation 1");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    // Verify record matches
+    ObjectRecord* rec = table.get_record(r1.slot_id);
+    if ((uint)rec.generation != 1) {
+        result.record_fail(test_name, "Record generation mismatch");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    result.record_pass(test_name);
+    st_destroy_test_slot_table(&table);
+}
+
+/**
+ * Test that allocated slots are tracked in live_slot_tracker.
+ */
+fn void test_allocate_tracks_live(SlotTableTestResult* result) {
+    String test_name = "test_allocate_tracks_live";
+    SlotTable table = st_create_test_slot_table();
+
+    // Initially empty
+    if (table.live_slot_tracker.live_count != 0) {
+        result.record_fail(test_name, "Tracker should be empty initially");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    // Allocate and verify tracking
+    SlotAllocationResult r1 = table.allocate();
+    if (!table.live_slot_tracker.contains((uint)r1.slot_id)) {
+        result.record_fail(test_name, "Slot not tracked after allocation");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    SlotAllocationResult r2 = table.allocate();
+    if (!table.live_slot_tracker.contains((uint)r2.slot_id)) {
+        result.record_fail(test_name, "Second slot not tracked");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    if (table.live_slot_tracker.live_count != 2) {
+        result.record_fail(test_name, "Live count should be 2");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    result.record_pass(test_name);
+    st_destroy_test_slot_table(&table);
+}
+
+// =============================================================================
+// SECTION 2: RELEASE TESTS
+// =============================================================================
+
+/**
+ * Test that release marks the slot as DEAD.
+ */
+fn void test_release_marks_dead(SlotTableTestResult* result) {
+    String test_name = "test_release_marks_dead";
+    SlotTable table = st_create_test_slot_table();
+
+    SlotAllocationResult r = table.allocate();
+
+    // Set to LIVE first (simulating normal usage)
+    ObjectRecord* rec = table.get_record(r.slot_id);
+    rec.kind = LIVE;
+
+    // Release should mark as DEAD
+    table.release(r.slot_id);
+
+    if (rec.kind != DEAD) {
+        result.record_fail(test_name, "Slot should be DEAD after release");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    result.record_pass(test_name);
+    st_destroy_test_slot_table(&table);
+}
+
+/**
+ * Test that release bumps generation to invalidate old handles.
+ */
+fn void test_release_bumps_generation(SlotTableTestResult* result) {
+    String test_name = "test_release_bumps_generation";
+    SlotTable table = st_create_test_slot_table();
+
+    SlotAllocationResult r = table.allocate();
+    Generation old_gen = r.generation;
+
+    table.release(r.slot_id);
+
+    ObjectRecord* rec = table.get_record(r.slot_id);
+    Generation new_gen = rec.generation;
+
+    if ((uint)new_gen <= (uint)old_gen) {
+        result.record_fail(test_name, "Generation should be bumped after release");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    result.record_pass(test_name);
+    st_destroy_test_slot_table(&table);
+}
+
+/**
+ * Test that release removes slot from live tracker.
+ */
+fn void test_release_removes_from_tracker(SlotTableTestResult* result) {
+    String test_name = "test_release_removes_from_tracker";
+    SlotTable table = st_create_test_slot_table();
+
+    SlotAllocationResult r = table.allocate();
+
+    // Should be tracked
+    if (!table.live_slot_tracker.contains((uint)r.slot_id)) {
+        result.record_fail(test_name, "Slot should be tracked before release");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    table.release(r.slot_id);
+
+    // Should no longer be tracked
+    if (table.live_slot_tracker.contains((uint)r.slot_id)) {
+        result.record_fail(test_name, "Slot should not be tracked after release");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    result.record_pass(test_name);
+    st_destroy_test_slot_table(&table);
+}
+
+/**
+ * Test that release adds ID to recycle stack.
+ */
+fn void test_release_recycles_id(SlotTableTestResult* result) {
+    String test_name = "test_release_recycles_id";
+    SlotTable table = st_create_test_slot_table();
+
+    SlotAllocationResult r = table.allocate();
+    SlotId released_id = r.slot_id;
+
+    // Recycle stack should be empty before release
+    if (table.recycled_slot_ids.len() != 0) {
+        result.record_fail(test_name, "Recycle stack should be empty initially");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    table.release(r.slot_id);
+
+    // Recycle stack should have the released ID
+    if (table.recycled_slot_ids.len() != 1) {
+        result.record_fail(test_name, "Recycle stack should have 1 entry");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    // The released ID should be in the stack
+    SlotId recycled = table.recycled_slot_ids[0];
+    if ((uint)recycled != (uint)released_id) {
+        result.record_fail(test_name, "Released ID not in recycle stack");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    result.record_pass(test_name);
+    st_destroy_test_slot_table(&table);
+}
+
+// =============================================================================
+// SECTION 3: ID RECYCLING TESTS
+// =============================================================================
+
+/**
+ * Test that recycled IDs are reused on next allocation.
+ */
+fn void test_recycled_id_reused(SlotTableTestResult* result) {
+    String test_name = "test_recycled_id_reused";
+    SlotTable table = st_create_test_slot_table();
+
+    // Allocate and release
+    SlotAllocationResult r1 = table.allocate();
+    SlotId original_id = r1.slot_id;
+    table.release(r1.slot_id);
+
+    // Next allocation should reuse the recycled ID
+    SlotAllocationResult r2 = table.allocate();
+
+    if ((uint)r2.slot_id != (uint)original_id) {
+        result.record_fail(test_name, "Recycled ID should be reused");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    // Recycle stack should be empty now
+    if (table.recycled_slot_ids.len() != 0) {
+        result.record_fail(test_name, "Recycle stack should be empty after reuse");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    result.record_pass(test_name);
+    st_destroy_test_slot_table(&table);
+}
+
+/**
+ * Test that recycled slots get a new generation.
+ */
+fn void test_recycled_has_new_generation(SlotTableTestResult* result) {
+    String test_name = "test_recycled_has_new_generation";
+    SlotTable table = st_create_test_slot_table();
+
+    // Allocate and release
+    SlotAllocationResult r1 = table.allocate();
+    Generation first_gen = r1.generation;
+    table.release(r1.slot_id);
+
+    // Reallocate the same slot
+    SlotAllocationResult r2 = table.allocate();
+
+    // Generation should be different (higher)
+    if ((uint)r2.generation <= (uint)first_gen) {
+        result.record_fail(test_name, "Recycled slot should have new generation");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    // Generation should have been bumped twice: once on release, once on re-alloc
+    // First alloc: 0->1, release: 1->2, realloc: 2->3
+    if ((uint)r2.generation != (uint)first_gen + 2) {
+        result.record_fail(test_name, "Generation should be bumped by 2");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    result.record_pass(test_name);
+    st_destroy_test_slot_table(&table);
+}
+
+// =============================================================================
+// SECTION 4: RECORD STATES TESTS
+// =============================================================================
+
+/**
+ * Test that LIVE record fields can be properly set and read.
+ */
+fn void test_record_live_state(SlotTableTestResult* result) {
+    String test_name = "test_record_live_state";
+    SlotTable table = st_create_test_slot_table();
+
+    SlotAllocationResult r = table.allocate();
+    ObjectRecord* rec = table.get_record(r.slot_id);
+
+    // Set up LIVE state
+    rec.kind = LIVE;
+    rec.live_info.pool_id = (PoolId)42;
+    rec.live_info.size = 128;
+    rec.live_info.type_id = int.typeid;
+
+    // Verify fields
+    if (rec.kind != LIVE) {
+        result.record_fail(test_name, "Kind should be LIVE");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    if ((uint)rec.live_info.pool_id != 42) {
+        result.record_fail(test_name, "pool_id mismatch");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    if (rec.live_info.size != 128) {
+        result.record_fail(test_name, "size mismatch");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    result.record_pass(test_name);
+    st_destroy_test_slot_table(&table);
+}
+
+/**
+ * Test that FORWARDED record state works correctly.
+ */
+fn void test_record_forwarded_state(SlotTableTestResult* result) {
+    String test_name = "test_record_forwarded_state";
+    SlotTable table = st_create_test_slot_table();
+
+    SlotAllocationResult r = table.allocate();
+    ObjectRecord* rec = table.get_record(r.slot_id);
+
+    // Set up FORWARDED state
+    rec.kind = FORWARDED;
+    ObjectHandle forward_target;
+    forward_target.region_id = (RegionId)10;
+    forward_target.slot_id = (SlotId)20;
+    forward_target.generation = (Generation)5;
+    rec.forward_target = forward_target;
+
+    // Verify fields
+    if (rec.kind != FORWARDED) {
+        result.record_fail(test_name, "Kind should be FORWARDED");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    if ((uint)rec.forward_target.region_id != 10) {
+        result.record_fail(test_name, "forward_target.region_id mismatch");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    if ((uint)rec.forward_target.slot_id != 20) {
+        result.record_fail(test_name, "forward_target.slot_id mismatch");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    if ((uint)rec.forward_target.generation != 5) {
+        result.record_fail(test_name, "forward_target.generation mismatch");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    result.record_pass(test_name);
+    st_destroy_test_slot_table(&table);
+}
+
+/**
+ * Test that DEAD record state is correctly set.
+ */
+fn void test_record_dead_state(SlotTableTestResult* result) {
+    String test_name = "test_record_dead_state";
+    SlotTable table = st_create_test_slot_table();
+
+    SlotAllocationResult r = table.allocate();
+    ObjectRecord* rec = table.get_record(r.slot_id);
+
+    // Set to LIVE first, then release (which sets to DEAD)
+    rec.kind = LIVE;
+    table.release(r.slot_id);
+
+    if (rec.kind != DEAD) {
+        result.record_fail(test_name, "Kind should be DEAD after release");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    result.record_pass(test_name);
+    st_destroy_test_slot_table(&table);
+}
+
+// =============================================================================
+// SECTION 5: GENERATION VALIDATION TESTS
+// =============================================================================
+
+/**
+ * Test that old generation handles are detected as invalid.
+ */
+fn void test_old_generation_invalid(SlotTableTestResult* result) {
+    String test_name = "test_old_generation_invalid";
+    SlotTable table = st_create_test_slot_table();
+
+    // Allocate, capture generation, release, reallocate
+    SlotAllocationResult r1 = table.allocate();
+    Generation old_generation = r1.generation;
+    SlotId slot_id = r1.slot_id;
+
+    table.release(slot_id);
+    SlotAllocationResult r2 = table.allocate();
+
+    // The slot should be reused
+    if ((uint)r2.slot_id != (uint)slot_id) {
+        result.record_fail(test_name, "Expected slot to be recycled");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    // Old generation should not match current
+    ObjectRecord* rec = table.get_record(slot_id);
+    if ((uint)rec.generation == (uint)old_generation) {
+        result.record_fail(test_name, "Old generation should be invalid");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    // Simulating handle validation: old_generation != rec.generation
+    bool handle_valid = ((uint)old_generation == (uint)rec.generation);
+    if (handle_valid) {
+        result.record_fail(test_name, "Stale handle should be invalid");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    result.record_pass(test_name);
+    st_destroy_test_slot_table(&table);
+}
+
+/**
+ * Test that current generation handles are valid.
+ */
+fn void test_current_generation_valid(SlotTableTestResult* result) {
+    String test_name = "test_current_generation_valid";
+    SlotTable table = st_create_test_slot_table();
+
+    SlotAllocationResult r = table.allocate();
+    Generation handle_generation = r.generation;
+    SlotId slot_id = r.slot_id;
+
+    ObjectRecord* rec = table.get_record(slot_id);
+
+    // Handle generation should match record generation
+    bool handle_valid = ((uint)handle_generation == (uint)rec.generation);
+    if (!handle_valid) {
+        result.record_fail(test_name, "Fresh handle should be valid");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    result.record_pass(test_name);
+    st_destroy_test_slot_table(&table);
+}
+
+// =============================================================================
+// SECTION 6: LIVE SLOT TRACKING TESTS
+// =============================================================================
+
+/**
+ * Test that live tracker is empty initially.
+ */
+fn void test_live_tracker_empty_initially(SlotTableTestResult* result) {
+    String test_name = "test_live_tracker_empty_initially";
+    SlotTable table = st_create_test_slot_table();
+
+    if (table.live_slot_tracker.live_count != 0) {
+        result.record_fail(test_name, "Live tracker should be empty initially");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    result.record_pass(test_name);
+    st_destroy_test_slot_table(&table);
+}
+
+/**
+ * Test live tracker count after multiple allocations.
+ */
+fn void test_live_tracker_after_allocations(SlotTableTestResult* result) {
+    String test_name = "test_live_tracker_after_allocations";
+    SlotTable table = st_create_test_slot_table();
+
+    // Allocate 5 slots
+    for (int i = 0; i < 5; i++) {
+        table.allocate();
+    }
+
+    if (table.live_slot_tracker.live_count != 5) {
+        result.record_fail(test_name, "Live count should be 5");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    result.record_pass(test_name);
+    st_destroy_test_slot_table(&table);
+}
+
+/**
+ * Test live tracker count decrements after releases.
+ */
+fn void test_live_tracker_after_releases(SlotTableTestResult* result) {
+    String test_name = "test_live_tracker_after_releases";
+    SlotTable table = st_create_test_slot_table();
+
+    // Allocate 5 slots
+    SlotAllocationResult[5] results;
+    for (int i = 0; i < 5; i++) {
+        results[i] = table.allocate();
+    }
+
+    if (table.live_slot_tracker.live_count != 5) {
+        result.record_fail(test_name, "Initial live count should be 5");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    // Release 2 slots
+    table.release(results[0].slot_id);
+    table.release(results[2].slot_id);
+
+    if (table.live_slot_tracker.live_count != 3) {
+        result.record_fail(test_name, "Live count should be 3 after 2 releases");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    // Verify remaining slots are still tracked
+    if (!table.live_slot_tracker.contains((uint)results[1].slot_id)) {
+        result.record_fail(test_name, "Slot 1 should still be tracked");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    if (!table.live_slot_tracker.contains((uint)results[3].slot_id)) {
+        result.record_fail(test_name, "Slot 3 should still be tracked");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    if (!table.live_slot_tracker.contains((uint)results[4].slot_id)) {
+        result.record_fail(test_name, "Slot 4 should still be tracked");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    // Verify released slots are not tracked
+    if (table.live_slot_tracker.contains((uint)results[0].slot_id)) {
+        result.record_fail(test_name, "Slot 0 should not be tracked");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    if (table.live_slot_tracker.contains((uint)results[2].slot_id)) {
+        result.record_fail(test_name, "Slot 2 should not be tracked");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    result.record_pass(test_name);
+    st_destroy_test_slot_table(&table);
+}
+
+// =============================================================================
+// ADDITIONAL EDGE CASE TESTS
+// =============================================================================
+
+/**
+ * Test multiple recycle cycles on the same slot.
+ */
+fn void test_multiple_recycle_cycles(SlotTableTestResult* result) {
+    String test_name = "test_multiple_recycle_cycles";
+    SlotTable table = st_create_test_slot_table();
+
+    // Allocate, release, and reallocate multiple times
+    SlotAllocationResult r = table.allocate();
+    SlotId original_id = r.slot_id;
+    Generation[4] generations;
+    generations[0] = r.generation;
+
+    for (int cycle = 1; cycle < 4; cycle++) {
+        table.release(r.slot_id);
+        r = table.allocate();
+        generations[cycle] = r.generation;
+
+        // Should reuse same slot
+        if ((uint)r.slot_id != (uint)original_id) {
+            result.record_fail(test_name, "Slot ID should be reused");
+            st_destroy_test_slot_table(&table);
+            return;
+        }
+    }
+
+    // Each generation should be strictly increasing
+    for (int i = 0; i < 3; i++) {
+        if ((uint)generations[i] >= (uint)generations[i + 1]) {
+            result.record_fail(test_name, "Generations should strictly increase");
+            st_destroy_test_slot_table(&table);
+            return;
+        }
+    }
+
+    result.record_pass(test_name);
+    st_destroy_test_slot_table(&table);
+}
+
+/**
+ * Test LIFO behavior of recycle stack.
+ */
+fn void test_recycle_stack_lifo(SlotTableTestResult* result) {
+    String test_name = "test_recycle_stack_lifo";
+    SlotTable table = st_create_test_slot_table();
+
+    // Allocate 3 slots
+    SlotAllocationResult r1 = table.allocate();
+    SlotAllocationResult r2 = table.allocate();
+    SlotAllocationResult r3 = table.allocate();
+
+    // Release in order: r1, r2, r3
+    table.release(r1.slot_id);
+    table.release(r2.slot_id);
+    table.release(r3.slot_id);
+
+    // Reallocate should return in LIFO order: r3, r2, r1
+    SlotAllocationResult n1 = table.allocate();
+    SlotAllocationResult n2 = table.allocate();
+    SlotAllocationResult n3 = table.allocate();
+
+    if ((uint)n1.slot_id != (uint)r3.slot_id) {
+        result.record_fail(test_name, "First realloc should get last released (r3)");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    if ((uint)n2.slot_id != (uint)r2.slot_id) {
+        result.record_fail(test_name, "Second realloc should get second-last released (r2)");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    if ((uint)n3.slot_id != (uint)r1.slot_id) {
+        result.record_fail(test_name, "Third realloc should get first released (r1)");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    result.record_pass(test_name);
+    st_destroy_test_slot_table(&table);
+}
+
+/**
+ * Test that fresh allocations occur when recycle stack is empty.
+ */
+fn void test_fresh_allocation_when_no_recycled(SlotTableTestResult* result) {
+    String test_name = "test_fresh_allocation_when_no_recycled";
+    SlotTable table = st_create_test_slot_table();
+
+    // Initial allocation - should get slot 0
+    SlotAllocationResult r1 = table.allocate();
+    if ((uint)r1.slot_id != 0) {
+        result.record_fail(test_name, "First slot should be 0");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    // Second allocation - should get slot 1
+    SlotAllocationResult r2 = table.allocate();
+    if ((uint)r2.slot_id != 1) {
+        result.record_fail(test_name, "Second slot should be 1");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    // Third allocation - should get slot 2
+    SlotAllocationResult r3 = table.allocate();
+    if ((uint)r3.slot_id != 2) {
+        result.record_fail(test_name, "Third slot should be 2");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    // Verify records array grew
+    if (table.object_records.len() != 3) {
+        result.record_fail(test_name, "Object records should have 3 entries");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    result.record_pass(test_name);
+    st_destroy_test_slot_table(&table);
+}
+
+/**
+ * Test that get_record returns correct pointer.
+ */
+fn void test_get_record_returns_correct_pointer(SlotTableTestResult* result) {
+    String test_name = "test_get_record_returns_correct_pointer";
+    SlotTable table = st_create_test_slot_table();
+
+    SlotAllocationResult r1 = table.allocate();
+    SlotAllocationResult r2 = table.allocate();
+
+    ObjectRecord* rec1 = table.get_record(r1.slot_id);
+    ObjectRecord* rec2 = table.get_record(r2.slot_id);
+
+    // Pointers should be different
+    if (rec1 == rec2) {
+        result.record_fail(test_name, "Different slots should have different record pointers");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    // Modify one and verify the other is unchanged
+    rec1.kind = LIVE;
+    rec2.kind = FORWARDED;
+
+    ObjectRecord* rec1_again = table.get_record(r1.slot_id);
+    ObjectRecord* rec2_again = table.get_record(r2.slot_id);
+
+    if (rec1_again.kind != LIVE) {
+        result.record_fail(test_name, "rec1 kind should be LIVE");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    if (rec2_again.kind != FORWARDED) {
+        result.record_fail(test_name, "rec2 kind should be FORWARDED");
+        st_destroy_test_slot_table(&table);
+        return;
+    }
+
+    result.record_pass(test_name);
+    st_destroy_test_slot_table(&table);
+}
+
+// =============================================================================
+// TEST RUNNER
+// =============================================================================
+
+/**
+ * Run all SlotTable unit tests.
+ */
+fn void run_slot_table_tests() {
+    io::printfn("==================================================");
+    io::printfn("SlotTable Unit Tests");
+    io::printfn("==================================================\n");
+
+    SlotTableTestResult result;
+    result.init();
+
+    // Section 1: Allocation Tests
+    io::printfn("--- Allocation Tests ---");
+    test_allocate_returns_unique_ids(&result);
+    test_allocate_increments_generation(&result);
+    test_allocate_tracks_live(&result);
+
+    // Section 2: Release Tests
+    io::printfn("\n--- Release Tests ---");
+    test_release_marks_dead(&result);
+    test_release_bumps_generation(&result);
+    test_release_removes_from_tracker(&result);
+    test_release_recycles_id(&result);
+
+    // Section 3: ID Recycling Tests
+    io::printfn("\n--- ID Recycling Tests ---");
+    test_recycled_id_reused(&result);
+    test_recycled_has_new_generation(&result);
+
+    // Section 4: Record States Tests
+    io::printfn("\n--- Record States Tests ---");
+    test_record_live_state(&result);
+    test_record_forwarded_state(&result);
+    test_record_dead_state(&result);
+
+    // Section 5: Generation Validation Tests
+    io::printfn("\n--- Generation Validation Tests ---");
+    test_old_generation_invalid(&result);
+    test_current_generation_valid(&result);
+
+    // Section 6: Live Slot Tracking Tests
+    io::printfn("\n--- Live Slot Tracking Tests ---");
+    test_live_tracker_empty_initially(&result);
+    test_live_tracker_after_allocations(&result);
+    test_live_tracker_after_releases(&result);
+
+    // Additional Edge Case Tests
+    io::printfn("\n--- Edge Case Tests ---");
+    test_multiple_recycle_cycles(&result);
+    test_recycle_stack_lifo(&result);
+    test_fresh_allocation_when_no_recycled(&result);
+    test_get_record_returns_correct_pointer(&result);
+
+    result.print_summary();
+}

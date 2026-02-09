@@ -1,0 +1,279 @@
+/**
+ * =============================================================================
+ * TEST: Arena Free-List Multi-Arena Bug
+ * =============================================================================
+ *
+ * These tests verify that the free-list correctly tracks which arena a freed
+ * chunk belongs to. The bug was that arena_alloc() always used arenas[0] when
+ * reusing free-list entries, regardless of which arena the free chunk was in.
+ *
+ * To run: c3c compile-test src/main.c3 src/test_arena_bug.c3
+ */
+module main;
+
+import std::io;
+
+// =============================================================================
+// TEST HELPER FUNCTIONS
+// =============================================================================
+
+fn Pool create_arena_test_pool() {
+    Pool pool;
+    pool.slot_count = 0;
+    pool.next_pool_id = (PoolId)0;
+    return pool;
+}
+
+fn void cleanup_arena_test_pool(Pool* pool) {
+    // Free arena memory
+    foreach (&arena : pool.arenas) {
+        mem::free(arena.data);
+    }
+    // Free internal lists
+    pool.packed_slots.free();
+    pool.pool_id_position_index.free();
+    pool.position_owner_index.free();
+    pool.recycled_pool_ids.free();
+    pool.arenas.free();
+    pool.free_list.free();
+}
+
+// =============================================================================
+// TEST 1: Free-list multi-arena bug (the primary bug being fixed)
+// =============================================================================
+
+/**
+ * Test that freeing and reallocating in arena 1+ works correctly.
+ *
+ * BEFORE FIX: This test FAILS because arena_alloc uses arenas[0].data for
+ *             free-list entries, even when the entry is in arena 1.
+ * AFTER FIX:  This test PASSES because we track arena_index in FreeListEntry.
+ *
+ * Strategy:
+ * 1. Fill arena 0 completely to force arena 1 creation
+ * 2. Allocate an object in arena 1
+ * 3. Free that object (adds entry to free-list with arena 1 info)
+ * 4. Allocate a new object that should reuse the freed space
+ * 5. Verify the pointer is in arena 1, not arena 0
+ */
+fn void test_freelist_multi_arena_bug() @test {
+    io::printn("TEST: test_freelist_multi_arena_bug");
+
+    Pool pool = create_arena_test_pool();
+
+    // ARENA_SIZE is 64KB = 65536 bytes
+    usz arena_size = 64 * 1024;
+
+    // Step 1: Fill arena 0 completely by allocating arena_size bytes
+    // This forces the next allocation to create arena 1
+    void* fill_arena_0 = pool.arena_alloc(arena_size);
+
+    // Now we should have exactly 1 arena, completely full
+    assert(pool.arenas.len() == 1, "Should have 1 arena after filling");
+    assert(pool.arenas[0].used == arena_size, "Arena 0 should be full");
+
+    // Step 2: Allocate a small object - this will create arena 1
+    usz test_size = 256;
+    void* ptr_in_arena1 = pool.arena_alloc(test_size);
+
+    // Verify we now have 2 arenas
+    assert(pool.arenas.len() == 2, "Should have 2 arenas now");
+
+    // Verify ptr_in_arena1 is in arena 1, not arena 0
+    char* arena0_start = pool.arenas[0].data;
+    char* arena0_end = arena0_start + pool.arenas[0].capacity;
+    char* arena1_start = pool.arenas[1].data;
+    char* arena1_end = arena1_start + pool.arenas[1].capacity;
+
+    bool in_arena0 = (char*)ptr_in_arena1 >= arena0_start && (char*)ptr_in_arena1 < arena0_end;
+    bool in_arena1 = (char*)ptr_in_arena1 >= arena1_start && (char*)ptr_in_arena1 < arena1_end;
+
+    assert(!in_arena0, "ptr_in_arena1 should NOT be in arena 0");
+    assert(in_arena1, "ptr_in_arena1 SHOULD be in arena 1");
+
+    // Write a marker pattern to the allocated memory
+    char* data = (char*)ptr_in_arena1;
+    for (usz i = 0; i < test_size; i++) {
+        data[i] = (char)(i & 0xFF);
+    }
+
+    // Step 3: Free the object in arena 1
+    pool.arena_free(ptr_in_arena1, test_size);
+
+    // Verify free-list has an entry
+    assert(pool.free_list.len() == 1, "Free list should have 1 entry");
+
+    // Step 4: Allocate again - should reuse the freed space in arena 1
+    void* ptr_reused = pool.arena_alloc(test_size);
+
+    // THE BUG: Before fix, this pointer would be in arena 0 (wrong!)
+    // because arena_alloc used: arenas[0].data + free_list[i].offset
+
+    // Step 5: Verify the reused pointer is in arena 1
+    bool reused_in_arena0 = (char*)ptr_reused >= arena0_start && (char*)ptr_reused < arena0_end;
+    bool reused_in_arena1 = (char*)ptr_reused >= arena1_start && (char*)ptr_reused < arena1_end;
+
+    // This assertion fails BEFORE the fix (ptr_reused would be in arena 0)
+    assert(!reused_in_arena0, "BUG: Reused pointer should NOT be in arena 0!");
+    assert(reused_in_arena1, "Reused pointer SHOULD be in arena 1");
+
+    // Also verify we got back the same address (exact fit reuse)
+    assert(ptr_reused == ptr_in_arena1, "Should reuse exact same address");
+
+    cleanup_arena_test_pool(&pool);
+    io::printn("  PASSED: Free-list correctly uses arena index");
+}
+
+// =============================================================================
+// TEST 2: Arena 0 still works (regression test)
+// =============================================================================
+
+/**
+ * Test that basic free-list functionality in arena 0 still works.
+ * This is a regression test to ensure the fix doesn't break the simple case.
+ */
+fn void test_freelist_arena_0_still_works() @test {
+    io::printn("TEST: test_freelist_arena_0_still_works");
+
+    Pool pool = create_arena_test_pool();
+
+    // Allocate a small object (stays in arena 0)
+    usz test_size = 128;
+    void* ptr1 = pool.arena_alloc(test_size);
+
+    // Should have 1 arena
+    assert(pool.arenas.len() == 1, "Should have 1 arena");
+
+    // Free it
+    pool.arena_free(ptr1, test_size);
+    assert(pool.free_list.len() == 1, "Free list should have 1 entry");
+
+    // Reallocate - should reuse
+    void* ptr2 = pool.arena_alloc(test_size);
+
+    // Should get same address back
+    assert(ptr2 == ptr1, "Should reuse same address in arena 0");
+    assert(pool.free_list.len() == 0, "Free list should be empty after reuse");
+
+    cleanup_arena_test_pool(&pool);
+    io::printn("  PASSED: Arena 0 free-list works correctly");
+}
+
+// =============================================================================
+// TEST 3: Multiple arenas (3+)
+// =============================================================================
+
+/**
+ * Test that free-list works correctly with 3 or more arenas.
+ * Verifies the fix generalizes beyond just 2 arenas.
+ */
+fn void test_freelist_arena_2_plus() @test {
+    io::printn("TEST: test_freelist_arena_2_plus");
+
+    Pool pool = create_arena_test_pool();
+
+    usz arena_size = 64 * 1024;
+    usz test_size = 512;
+
+    // Fill arena 0
+    void* fill0 = pool.arena_alloc(arena_size);
+    assert(pool.arenas.len() == 1, "Should have 1 arena");
+
+    // Fill arena 1
+    void* fill1 = pool.arena_alloc(arena_size);
+    assert(pool.arenas.len() == 2, "Should have 2 arenas");
+
+    // Allocate in arena 2
+    void* ptr_arena2 = pool.arena_alloc(test_size);
+    assert(pool.arenas.len() == 3, "Should have 3 arenas");
+
+    // Verify ptr is in arena 2
+    char* arena2_start = pool.arenas[2].data;
+    char* arena2_end = arena2_start + pool.arenas[2].capacity;
+    bool in_arena2 = (char*)ptr_arena2 >= arena2_start && (char*)ptr_arena2 < arena2_end;
+    assert(in_arena2, "ptr_arena2 should be in arena 2");
+
+    // Free it
+    pool.arena_free(ptr_arena2, test_size);
+    assert(pool.free_list.len() == 1, "Free list should have 1 entry");
+
+    // Reallocate - should get back same address in arena 2
+    void* ptr_reused = pool.arena_alloc(test_size);
+
+    bool reused_in_arena2 = (char*)ptr_reused >= arena2_start && (char*)ptr_reused < arena2_end;
+    assert(reused_in_arena2, "Reused pointer should be in arena 2");
+    assert(ptr_reused == ptr_arena2, "Should reuse exact same address");
+
+    cleanup_arena_test_pool(&pool);
+    io::printn("  PASSED: Arena 2+ free-list works correctly");
+}
+
+// =============================================================================
+// TEST 4: Mixed free-list entries from multiple arenas
+// =============================================================================
+
+/**
+ * Test that the free-list can contain entries from different arenas
+ * and allocations correctly pick the right one.
+ */
+fn void test_freelist_mixed_arenas() @test {
+    io::printn("TEST: test_freelist_mixed_arenas");
+
+    Pool pool = create_arena_test_pool();
+
+    usz arena_size = 64 * 1024;
+    usz small_size = 100;
+    usz medium_size = 200;
+
+    // Create arena 0 with some used space but not full
+    void* ptr0_a = pool.arena_alloc(small_size);
+    void* ptr0_b = pool.arena_alloc(medium_size);
+
+    // Fill rest of arena 0 to force arena 1
+    usz remaining = arena_size - pool.arenas[0].used;
+    void* fill0 = pool.arena_alloc(remaining);
+
+    // Allocate in arena 1
+    void* ptr1_a = pool.arena_alloc(small_size);
+    void* ptr1_b = pool.arena_alloc(medium_size);
+
+    assert(pool.arenas.len() == 2, "Should have 2 arenas");
+
+    // Free objects in both arenas (creating mixed free-list)
+    pool.arena_free(ptr0_a, small_size);  // Entry for arena 0
+    pool.arena_free(ptr1_b, medium_size); // Entry for arena 1
+    pool.arena_free(ptr0_b, medium_size); // Entry for arena 0
+    pool.arena_free(ptr1_a, small_size);  // Entry for arena 1
+
+    assert(pool.free_list.len() == 4, "Free list should have 4 entries");
+
+    // Allocate medium - should get one of the medium slots
+    void* new_medium = pool.arena_alloc(medium_size);
+
+    // Verify it's in either arena 0 or arena 1 (a valid reuse)
+    char* arena0_start = pool.arenas[0].data;
+    char* arena0_end = arena0_start + pool.arenas[0].capacity;
+    char* arena1_start = pool.arenas[1].data;
+    char* arena1_end = arena1_start + pool.arenas[1].capacity;
+
+    bool in_arena0 = (char*)new_medium >= arena0_start && (char*)new_medium < arena0_end;
+    bool in_arena1 = (char*)new_medium >= arena1_start && (char*)new_medium < arena1_end;
+
+    assert(in_arena0 || in_arena1, "Reused medium should be in arena 0 or 1");
+
+    // It should match one of the original addresses
+    bool matches_original = (new_medium == ptr0_b || new_medium == ptr1_b);
+    assert(matches_original, "Should reuse one of the original medium addresses");
+
+    cleanup_arena_test_pool(&pool);
+    io::printn("  PASSED: Mixed arena free-list works correctly");
+}
+
+// =============================================================================
+// RUN ALL ARENA TESTS
+// =============================================================================
+
+fn void run_arena_bug_tests() {
+    io::printn("\n=== Arena Free-List Bug Tests ===\n");
+    // Tests are run by c3c test, this function is for documentation
+}

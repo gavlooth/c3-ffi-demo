@@ -1,0 +1,703 @@
+/**
+ * =============================================================================
+ * REGION REGISTRY UNIT TESTS
+ * =============================================================================
+ *
+ * Comprehensive unit tests for the RegionRegistry (lines 1215-1786 in main.c3).
+ * Tests cover initialization, region creation, reference counting, destruction,
+ * object promotion, handle validation, dereference, and child reparenting.
+ *
+ * Run tests by calling: run_registry_tests()
+ */
+module main;
+
+import std::io;
+
+// =============================================================================
+// TEST INFRASTRUCTURE
+// =============================================================================
+
+int g_tests_passed;
+int g_tests_failed;
+
+/**
+ * Assert a condition is true. Logs pass/fail.
+ *
+ * @param condition  The condition to check
+ * @param test_name  Name of the test for logging
+ */
+fn void assert_test(bool condition, String test_name) {
+    if (condition) {
+        io::printfn("[PASS] %s", test_name);
+        g_tests_passed++;
+    } else {
+        io::printfn("[FAIL] %s", test_name);
+        g_tests_failed++;
+    }
+}
+
+/**
+ * Assert two integers are equal.
+ */
+fn void assert_eq_int(int actual, int expected, String test_name) {
+    if (actual == expected) {
+        io::printfn("[PASS] %s", test_name);
+        g_tests_passed++;
+    } else {
+        io::printfn("[FAIL] %s - expected %d, got %d", test_name, expected, actual);
+        g_tests_failed++;
+    }
+}
+
+/**
+ * Assert two unsigned integers are equal.
+ */
+fn void assert_eq_uint(uint actual, uint expected, String test_name) {
+    if (actual == expected) {
+        io::printfn("[PASS] %s", test_name);
+        g_tests_passed++;
+    } else {
+        io::printfn("[FAIL] %s - expected %d, got %d", test_name, expected, actual);
+        g_tests_failed++;
+    }
+}
+
+// =============================================================================
+// SECTION 1: INITIALIZATION TESTS
+// =============================================================================
+
+/**
+ * Test that init() creates a root region.
+ */
+fn void test_init_creates_root() {
+    RegionRegistry registry;
+    registry.init();
+
+    // Root should exist at index 0
+    assert_test(registry.region_storage.len() > 0, "test_init_creates_root: storage has root");
+    assert_test(registry.region_alive_flags[0], "test_init_creates_root: root is alive");
+}
+
+/**
+ * Test that the root handle is valid after init.
+ */
+fn void test_root_is_valid() {
+    RegionRegistry registry;
+    registry.init();
+
+    RegionHandle root_handle;
+    root_handle.region_id = registry.root_id;
+    root_handle.generation = registry.region_generations[0];
+
+    assert_test(registry.is_valid_region(root_handle), "test_root_is_valid: root handle valid");
+}
+
+/**
+ * Test that the root region has NO_PARENT.
+ */
+fn void test_root_has_no_parent() {
+    RegionRegistry registry;
+    registry.init();
+
+    Region* root = &registry.region_storage[0];
+    assert_test(root.parent == NO_PARENT, "test_root_has_no_parent: root parent is NO_PARENT");
+}
+
+// =============================================================================
+// SECTION 2: REGION CREATION TESTS
+// =============================================================================
+
+/**
+ * Test creating a region under root using INVALID_REGION_HANDLE.
+ */
+fn void test_create_under_root() {
+    RegionRegistry registry;
+    registry.init();
+
+    RegionHandle child = registry.create_region(INVALID_REGION_HANDLE);
+
+    assert_test(registry.is_valid_region(child), "test_create_under_root: child is valid");
+
+    usz child_idx = (usz)(uint)child.region_id;
+    Region* child_region = &registry.region_storage[child_idx];
+    assert_test(child_region.parent == registry.root_id, "test_create_under_root: parent is root");
+}
+
+/**
+ * Test creating a region with an explicit parent.
+ */
+fn void test_create_with_parent() {
+    RegionRegistry registry;
+    registry.init();
+
+    // Create parent
+    RegionHandle parent = registry.create_region(INVALID_REGION_HANDLE);
+    // Create child under parent
+    RegionHandle child = registry.create_region(parent);
+
+    assert_test(registry.is_valid_region(child), "test_create_with_parent: child is valid");
+
+    usz child_idx = (usz)(uint)child.region_id;
+    Region* child_region = &registry.region_storage[child_idx];
+    assert_test(child_region.parent == parent.region_id, "test_create_with_parent: parent matches");
+}
+
+/**
+ * Test that creating with invalid parent defaults to root.
+ */
+fn void test_create_invalid_parent_defaults_root() {
+    RegionRegistry registry;
+    registry.init();
+
+    // Create a fake invalid handle (generation mismatch)
+    RegionHandle invalid_parent;
+    invalid_parent.region_id = (RegionId)999;
+    invalid_parent.generation = (Generation)999;
+
+    RegionHandle child = registry.create_region(invalid_parent);
+
+    assert_test(registry.is_valid_region(child), "test_create_invalid_parent_defaults_root: child is valid");
+
+    usz child_idx = (usz)(uint)child.region_id;
+    Region* child_region = &registry.region_storage[child_idx];
+    assert_test(child_region.parent == registry.root_id, "test_create_invalid_parent_defaults_root: defaults to root");
+}
+
+/**
+ * Test that creating a region increments the generation.
+ */
+fn void test_create_increments_generation() {
+    RegionRegistry registry;
+    registry.init();
+
+    // Create first child
+    RegionHandle child1 = registry.create_region(INVALID_REGION_HANDLE);
+    Generation gen1 = child1.generation;
+
+    // Release child1 completely to recycle the ID
+    // Child starts with refcount 2, release twice
+    registry.release_region(child1);
+    registry.release_region(child1);
+
+    // Create second child (should reuse ID with higher generation)
+    RegionHandle child2 = registry.create_region(INVALID_REGION_HANDLE);
+
+    if (child2.region_id == child1.region_id) {
+        // Same ID, should have higher generation
+        assert_test((uint)child2.generation > (uint)gen1, "test_create_increments_generation: generation increased");
+    } else {
+        // Different ID (first time), generation should be at least 1
+        assert_test((uint)child2.generation >= 1, "test_create_increments_generation: new ID has valid generation");
+    }
+}
+
+/**
+ * Test that creating a child adds it to parent's child list.
+ */
+fn void test_create_adds_to_parent_children() {
+    RegionRegistry registry;
+    registry.init();
+
+    // Create child under root
+    RegionHandle child = registry.create_region(INVALID_REGION_HANDLE);
+
+    // Check root's child list
+    usz root_idx = (usz)(uint)registry.root_id;
+    List{RegionId}* children = &registry.child_region_lists[root_idx];
+
+    bool found = false;
+    foreach (cid : *children) {
+        if ((uint)cid == (uint)child.region_id) {
+            found = true;
+            break;
+        }
+    }
+
+    assert_test(found, "test_create_adds_to_parent_children: child in parent's list");
+}
+
+// =============================================================================
+// SECTION 3: REFERENCE COUNTING TESTS
+// =============================================================================
+
+/**
+ * Test that retain increments refcount.
+ */
+fn void test_retain_increments_refcount() {
+    RegionRegistry registry;
+    registry.init();
+
+    RegionHandle child = registry.create_region(INVALID_REGION_HANDLE);
+    usz child_idx = (usz)(uint)child.region_id;
+
+    uint initial_refcount = (uint)registry.region_storage[child_idx].refcount;
+    registry.retain_region(child);
+    uint new_refcount = (uint)registry.region_storage[child_idx].refcount;
+
+    assert_eq_uint(new_refcount, initial_refcount + 1, "test_retain_increments_refcount");
+}
+
+/**
+ * Test that release decrements refcount.
+ */
+fn void test_release_decrements_refcount() {
+    RegionRegistry registry;
+    registry.init();
+
+    RegionHandle child = registry.create_region(INVALID_REGION_HANDLE);
+    usz child_idx = (usz)(uint)child.region_id;
+
+    // Retain first to have room to release without destroying
+    registry.retain_region(child);
+    uint before_refcount = (uint)registry.region_storage[child_idx].refcount;
+    registry.release_region(child);
+    uint after_refcount = (uint)registry.region_storage[child_idx].refcount;
+
+    assert_eq_uint(after_refcount, before_refcount - 1, "test_release_decrements_refcount");
+}
+
+/**
+ * Test that releasing to zero destroys the region.
+ */
+fn void test_release_to_zero_destroys() {
+    RegionRegistry registry;
+    registry.init();
+
+    RegionHandle child = registry.create_region(INVALID_REGION_HANDLE);
+    usz child_idx = (usz)(uint)child.region_id;
+
+    // Child has refcount 2 initially (+1 creator, +1 parent)
+    // Release twice to destroy
+    registry.release_region(child);
+    registry.release_region(child);
+
+    // Region should now be dead
+    assert_test(!registry.region_alive_flags[child_idx], "test_release_to_zero_destroys: region is dead");
+    assert_test(!registry.is_valid_region(child), "test_release_to_zero_destroys: handle invalid");
+}
+
+// =============================================================================
+// SECTION 4: REGION DESTRUCTION & PROMOTION TESTS
+// =============================================================================
+
+/**
+ * Test that destroying a region promotes objects to parent.
+ */
+fn void test_destroy_promotes_objects() {
+    RegionRegistry registry;
+    registry.init();
+
+    RegionHandle child = registry.create_region(INVALID_REGION_HANDLE);
+    usz child_idx = (usz)(uint)child.region_id;
+    Region* child_region = &registry.region_storage[child_idx];
+
+    // Allocate an object in child
+    int value = 42;
+    ObjectHandle obj = child_region.allocate_typed(child_region, int, value);
+
+    // Parent (root) should have 0 live objects initially
+    usz root_idx = (usz)(uint)registry.root_id;
+    Region* root_region = &registry.region_storage[root_idx];
+    uint root_objects_before = root_region.live_object_count;
+
+    // Destroy child (release twice for refcount 2)
+    registry.release_region(child);
+    registry.release_region(child);
+
+    // Root should now have 1 more object
+    uint root_objects_after = root_region.live_object_count;
+    assert_eq_uint(root_objects_after, root_objects_before + 1, "test_destroy_promotes_objects: object count increased");
+}
+
+/**
+ * Test that a promoted object is still accessible via old handle.
+ */
+fn void test_promoted_object_accessible() {
+    RegionRegistry registry;
+    registry.init();
+
+    RegionHandle child = registry.create_region(INVALID_REGION_HANDLE);
+    usz child_idx = (usz)(uint)child.region_id;
+    Region* child_region = &registry.region_storage[child_idx];
+
+    // Allocate an object
+    int value = 12345;
+    ObjectHandle obj = child_region.allocate_typed(child_region, int, value);
+
+    // Destroy child
+    registry.release_region(child);
+    registry.release_region(child);
+
+    // Object should still be valid (via ghost table forwarding)
+    assert_test(registry.is_valid_object(obj), "test_promoted_object_accessible: object still valid");
+
+    // Dereference should return correct value
+    int* ptr = registry.dereference_as(&registry, int, obj);
+    assert_eq_int(*ptr, 12345, "test_promoted_object_accessible: value preserved");
+}
+
+/**
+ * Test that forwarding chain works correctly.
+ */
+fn void test_forwarding_chain_works() {
+    RegionRegistry registry;
+    registry.init();
+
+    // Create grandparent -> parent -> child hierarchy
+    RegionHandle grandparent = registry.create_region(INVALID_REGION_HANDLE);
+    RegionHandle parent_h = registry.create_region(grandparent);
+    RegionHandle child_h = registry.create_region(parent_h);
+
+    // Allocate object in child
+    usz child_idx = (usz)(uint)child_h.region_id;
+    Region* child_region = &registry.region_storage[child_idx];
+    int value = 9999;
+    ObjectHandle obj = child_region.allocate_typed(child_region, int, value);
+
+    // Destroy child (promotes to parent)
+    registry.release_region(child_h);
+    registry.release_region(child_h);
+
+    // Object should still be valid
+    assert_test(registry.is_valid_object(obj), "test_forwarding_chain_works: object valid after child death");
+
+    // Destroy parent (promotes to grandparent)
+    registry.release_region(parent_h);
+    registry.release_region(parent_h);
+
+    // Object should still be valid (now in grandparent, accessed via ghost chain)
+    assert_test(registry.is_valid_object(obj), "test_forwarding_chain_works: object valid after parent death");
+
+    // Value should be preserved through the chain
+    int* ptr = registry.dereference_as(&registry, int, obj);
+    assert_eq_int(*ptr, 9999, "test_forwarding_chain_works: value preserved");
+}
+
+/**
+ * Test that ghost table is created for dead region with promoted objects.
+ */
+fn void test_ghost_table_created() {
+    RegionRegistry registry;
+    registry.init();
+
+    RegionHandle child = registry.create_region(INVALID_REGION_HANDLE);
+    usz child_idx = (usz)(uint)child.region_id;
+    Region* child_region = &registry.region_storage[child_idx];
+
+    // Allocate object
+    int value = 777;
+    ObjectHandle obj = child_region.allocate_typed(child_region, int, value);
+
+    // Remember child's region id
+    RegionId dying_id = child.region_id;
+
+    // Destroy child
+    registry.release_region(child);
+    registry.release_region(child);
+
+    // Check ghost index has an entry for the dead region
+    bool found_ghost = false;
+    for (usz i = 0; i < registry.ghost_source_ids.len(); i++) {
+        if ((uint)registry.ghost_source_ids[i] == (uint)dying_id) {
+            found_ghost = true;
+            break;
+        }
+    }
+
+    assert_test(found_ghost, "test_ghost_table_created: ghost entry exists");
+}
+
+// =============================================================================
+// SECTION 5: HANDLE VALIDATION TESTS
+// =============================================================================
+
+/**
+ * Test is_valid_region returns true for valid handle.
+ */
+fn void test_is_valid_region_true() {
+    RegionRegistry registry;
+    registry.init();
+
+    RegionHandle child = registry.create_region(INVALID_REGION_HANDLE);
+    assert_test(registry.is_valid_region(child), "test_is_valid_region_true");
+}
+
+/**
+ * Test is_valid_region returns false for dead region.
+ */
+fn void test_is_valid_region_false_dead() {
+    RegionRegistry registry;
+    registry.init();
+
+    RegionHandle child = registry.create_region(INVALID_REGION_HANDLE);
+
+    // Destroy child
+    registry.release_region(child);
+    registry.release_region(child);
+
+    assert_test(!registry.is_valid_region(child), "test_is_valid_region_false_dead");
+}
+
+/**
+ * Test is_valid_region returns false for stale generation.
+ */
+fn void test_is_valid_region_false_generation() {
+    RegionRegistry registry;
+    registry.init();
+
+    RegionHandle child = registry.create_region(INVALID_REGION_HANDLE);
+    RegionHandle stale = child;
+    stale.generation = (Generation)((uint)stale.generation - 1);
+
+    assert_test(!registry.is_valid_region(stale), "test_is_valid_region_false_generation");
+}
+
+/**
+ * Test is_valid_object for live object.
+ */
+fn void test_is_valid_object_live() {
+    RegionRegistry registry;
+    registry.init();
+
+    RegionHandle child = registry.create_region(INVALID_REGION_HANDLE);
+    usz child_idx = (usz)(uint)child.region_id;
+    Region* child_region = &registry.region_storage[child_idx];
+
+    int value = 123;
+    ObjectHandle obj = child_region.allocate_typed(child_region, int, value);
+
+    assert_test(registry.is_valid_object(obj), "test_is_valid_object_live");
+}
+
+/**
+ * Test is_valid_object for forwarded object.
+ */
+fn void test_is_valid_object_forwarded() {
+    RegionRegistry registry;
+    registry.init();
+
+    RegionHandle child = registry.create_region(INVALID_REGION_HANDLE);
+    usz child_idx = (usz)(uint)child.region_id;
+    Region* child_region = &registry.region_storage[child_idx];
+
+    int value = 456;
+    ObjectHandle obj = child_region.allocate_typed(child_region, int, value);
+
+    // Destroy child to trigger promotion
+    registry.release_region(child);
+    registry.release_region(child);
+
+    // Object should still be valid (via ghost table)
+    assert_test(registry.is_valid_object(obj), "test_is_valid_object_forwarded");
+}
+
+/**
+ * Test is_valid_object for explicitly freed object.
+ */
+fn void test_is_valid_object_dead() {
+    RegionRegistry registry;
+    registry.init();
+
+    RegionHandle child = registry.create_region(INVALID_REGION_HANDLE);
+    usz child_idx = (usz)(uint)child.region_id;
+    Region* child_region = &registry.region_storage[child_idx];
+
+    int value = 789;
+    ObjectHandle obj = child_region.allocate_typed(child_region, int, value);
+
+    // Explicitly free the object
+    child_region.free_object(obj);
+
+    assert_test(!registry.is_valid_object(obj), "test_is_valid_object_dead");
+}
+
+// =============================================================================
+// SECTION 6: DEREFERENCE TESTS
+// =============================================================================
+
+/**
+ * Test dereferencing a live object.
+ */
+fn void test_dereference_live() {
+    RegionRegistry registry;
+    registry.init();
+
+    RegionHandle child = registry.create_region(INVALID_REGION_HANDLE);
+    usz child_idx = (usz)(uint)child.region_id;
+    Region* child_region = &registry.region_storage[child_idx];
+
+    int value = 54321;
+    ObjectHandle obj = child_region.allocate_typed(child_region, int, value);
+
+    int* ptr = registry.dereference_as(&registry, int, obj);
+    assert_eq_int(*ptr, 54321, "test_dereference_live");
+}
+
+/**
+ * Test dereferencing follows forwarding chain.
+ */
+fn void test_dereference_forwarded() {
+    RegionRegistry registry;
+    registry.init();
+
+    RegionHandle child = registry.create_region(INVALID_REGION_HANDLE);
+    usz child_idx = (usz)(uint)child.region_id;
+    Region* child_region = &registry.region_storage[child_idx];
+
+    int value = 11111;
+    ObjectHandle obj = child_region.allocate_typed(child_region, int, value);
+
+    // Destroy child to create forwarding
+    registry.release_region(child);
+    registry.release_region(child);
+
+    // Dereference should follow the forwarding chain
+    int* ptr = registry.dereference_as(&registry, int, obj);
+    assert_eq_int(*ptr, 11111, "test_dereference_forwarded");
+}
+
+/**
+ * Test dereferencing via ghost table lookup.
+ */
+fn void test_dereference_via_ghost() {
+    RegionRegistry registry;
+    registry.init();
+
+    RegionHandle child = registry.create_region(INVALID_REGION_HANDLE);
+    usz child_idx = (usz)(uint)child.region_id;
+    Region* child_region = &registry.region_storage[child_idx];
+
+    int value = 22222;
+    ObjectHandle obj = child_region.allocate_typed(child_region, int, value);
+
+    // Destroy child
+    registry.release_region(child);
+    registry.release_region(child);
+
+    // The dereference must go through ghost table since the region is dead
+    int* ptr = registry.dereference_as(&registry, int, obj);
+    assert_eq_int(*ptr, 22222, "test_dereference_via_ghost");
+}
+
+// =============================================================================
+// SECTION 7: CHILD REPARENTING TESTS
+// =============================================================================
+
+/**
+ * Test that surviving children are reparented to grandparent.
+ */
+fn void test_child_reparented_on_parent_death() {
+    RegionRegistry registry;
+    registry.init();
+
+    // Create parent under root
+    RegionHandle parent_h = registry.create_region(INVALID_REGION_HANDLE);
+    usz parent_idx = (usz)(uint)parent_h.region_id;
+
+    // Create grandchild under parent
+    RegionHandle grandchild_h = registry.create_region(parent_h);
+    usz grandchild_idx = (usz)(uint)grandchild_h.region_id;
+
+    // Retain grandchild to ensure it survives
+    registry.retain_region(grandchild_h);
+
+    // Destroy parent
+    registry.release_region(parent_h);
+    registry.release_region(parent_h);
+
+    // Grandchild should still be valid
+    assert_test(registry.is_valid_region(grandchild_h), "test_child_reparented_on_parent_death: grandchild still valid");
+
+    // Grandchild should now have root as parent
+    Region* grandchild_region = &registry.region_storage[grandchild_idx];
+    assert_test(grandchild_region.parent == registry.root_id, "test_child_reparented_on_parent_death: reparented to root");
+
+    // Root's child list should contain grandchild
+    usz root_idx = (usz)(uint)registry.root_id;
+    List{RegionId}* root_children = &registry.child_region_lists[root_idx];
+
+    bool found = false;
+    foreach (cid : *root_children) {
+        if ((uint)cid == (uint)grandchild_h.region_id) {
+            found = true;
+            break;
+        }
+    }
+
+    assert_test(found, "test_child_reparented_on_parent_death: grandchild in root's child list");
+}
+
+// =============================================================================
+// TEST RUNNER
+// =============================================================================
+
+/**
+ * Run all RegionRegistry unit tests.
+ */
+fn void run_registry_tests() {
+    io::printfn("=============================================================================");
+    io::printfn("REGION REGISTRY UNIT TESTS");
+    io::printfn("=============================================================================");
+    io::printfn("");
+
+    g_tests_passed = 0;
+    g_tests_failed = 0;
+
+    // Section 1: Initialization
+    io::printfn("--- Initialization Tests ---");
+    test_init_creates_root();
+    test_root_is_valid();
+    test_root_has_no_parent();
+    io::printfn("");
+
+    // Section 2: Region Creation
+    io::printfn("--- Region Creation Tests ---");
+    test_create_under_root();
+    test_create_with_parent();
+    test_create_invalid_parent_defaults_root();
+    test_create_increments_generation();
+    test_create_adds_to_parent_children();
+    io::printfn("");
+
+    // Section 3: Reference Counting
+    io::printfn("--- Reference Counting Tests ---");
+    test_retain_increments_refcount();
+    test_release_decrements_refcount();
+    test_release_to_zero_destroys();
+    io::printfn("");
+
+    // Section 4: Region Destruction & Promotion
+    io::printfn("--- Region Destruction & Promotion Tests ---");
+    test_destroy_promotes_objects();
+    test_promoted_object_accessible();
+    test_forwarding_chain_works();
+    test_ghost_table_created();
+    io::printfn("");
+
+    // Section 5: Handle Validation
+    io::printfn("--- Handle Validation Tests ---");
+    test_is_valid_region_true();
+    test_is_valid_region_false_dead();
+    test_is_valid_region_false_generation();
+    test_is_valid_object_live();
+    test_is_valid_object_forwarded();
+    test_is_valid_object_dead();
+    io::printfn("");
+
+    // Section 6: Dereference
+    io::printfn("--- Dereference Tests ---");
+    test_dereference_live();
+    test_dereference_forwarded();
+    test_dereference_via_ghost();
+    io::printfn("");
+
+    // Section 7: Child Reparenting
+    io::printfn("--- Child Reparenting Tests ---");
+    test_child_reparented_on_parent_death();
+    io::printfn("");
+
+    // Summary
+    io::printfn("=============================================================================");
+    io::printfn("TEST SUMMARY: %d passed, %d failed", g_tests_passed, g_tests_failed);
+    io::printfn("=============================================================================");
+}

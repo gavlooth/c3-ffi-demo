@@ -57,6 +57,7 @@ module main;
 
 import std::collections::list;
 import std::io;
+import lisp;
 
 // =============================================================================
 // SECTION 1: PRIMITIVE TYPE ALIASES
@@ -747,6 +748,9 @@ fn void Pool.destroy_all(Pool* self) {
 /**
  * SlotKind — The routing state of an ObjectRecord.
  *
+ * DEPRECATED: This enum is kept for compatibility with ghost tables but
+ * the primary ObjectRecord now uses escaped/forwarded booleans instead.
+ *
  * LIVE:      Object data exists in this region's pool
  * FORWARDED: Object was promoted; follow forward_target to find it
  * DEAD:      Slot is free and will be recycled; handle is invalid
@@ -776,25 +780,29 @@ struct ObjectLiveInfo {
 }
 
 /**
- * ObjectRecord — Per-slot metadata tracking an object's routing state.
+ * ObjectRecord — Per-slot metadata with escape tracking.
  *
  * This is the core of the indirection layer. An ObjectHandle's slot_id
- * indexes into the SlotTable to find the ObjectRecord, which tells us:
- * - Is the object still alive here? → LIVE, use live_info.pool_id
- * - Was it promoted elsewhere? → FORWARDED, follow forward_target
- * - Was it freed? → DEAD, handle is invalid
+ * indexes into the SlotTable to find the ObjectRecord.
+ *
+ * States:
+ *   !forwarded && !escaped → LOCAL: object lives here, dies with region
+ *   !forwarded && escaped  → ESCAPED: object lives here, will be promoted
+ *   forwarded              → FORWARDED: object was promoted, follow forward_target
  *
  * The generation counter is incremented on each reuse. A handle is only
  * valid if its generation matches the record's current generation.
  */
 struct ObjectRecord {
-    SlotKind   kind;        // LIVE, FORWARDED, or DEAD
-    Generation generation;  // Incremented on each slot reuse
+    Generation generation;  // Validity check - incremented on each slot reuse
 
-    // Tagged union based on `kind`:
+    bool escaped;           // Handle crossed region boundary?
+    bool forwarded;         // Was promoted to parent?
+
+    // Tagged union based on `forwarded`:
     union {
-        ObjectLiveInfo live_info;       // Valid when kind == LIVE
-        ObjectHandle   forward_target;  // Valid when kind == FORWARDED
+        ObjectLiveInfo live_info;       // If !forwarded: location + metadata
+        ObjectHandle   forward_target;  // If forwarded: where it went
     }
 }
 
@@ -837,7 +845,8 @@ struct SlotAllocationResult {
  *
  * @return SlotAllocationResult with the new slot_id and generation
  *
- * Note: The caller must fill in the record's kind and data after allocation.
+ * Note: The caller must fill in the record's live_info after allocation.
+ * The slot is initialized with escaped=false and forwarded=false.
  */
 fn SlotAllocationResult SlotTable.allocate(SlotTable* self) {
     SlotId sid;
@@ -849,8 +858,9 @@ fn SlotAllocationResult SlotTable.allocate(SlotTable* self) {
         // Allocate a fresh slot at the end of the array
         sid = (SlotId)self.object_records.len();
         ObjectRecord new_record;
-        new_record.kind = DEAD;
         new_record.generation = (Generation)0;
+        new_record.escaped = false;
+        new_record.forwarded = false;
         self.object_records.push(new_record);
     }
 
@@ -859,6 +869,10 @@ fn SlotAllocationResult SlotTable.allocate(SlotTable* self) {
     self.object_records[idx].generation =
         (Generation)((uint)self.object_records[idx].generation + 1);
     Generation gen = self.object_records[idx].generation;
+
+    // Initialize escape tracking fields for the new allocation
+    self.object_records[idx].escaped = false;
+    self.object_records[idx].forwarded = false;
 
     // Track this slot as live
     self.live_slot_tracker.insert((uint)sid);
@@ -872,19 +886,21 @@ fn SlotAllocationResult SlotTable.allocate(SlotTable* self) {
 /**
  * Release a slot back to the recycling pool.
  *
- * Marks the slot as DEAD, bumps generation, and makes it available for reuse.
+ * Bumps generation (invalidating old handles) and makes slot available for reuse.
+ * The slot is no longer considered live after this.
  *
  * @param sid The SlotId to release
  */
 fn void SlotTable.release(SlotTable* self, SlotId sid) {
     usz idx = (usz)(uint)sid;
 
-    // Mark as dead
-    self.object_records[idx].kind = DEAD;
-
     // Bump generation so old handles become invalid
     self.object_records[idx].generation =
         (Generation)((uint)self.object_records[idx].generation + 1);
+
+    // Reset state flags
+    self.object_records[idx].escaped = false;
+    self.object_records[idx].forwarded = false;
 
     // Remove from live tracking and add to recycle stack
     self.live_slot_tracker.remove((uint)sid);
@@ -1022,9 +1038,8 @@ macro ObjectHandle Region.allocate_typed(&self, $Type, value) {
     SlotId slot_id = slot_result.slot_id;
     Generation gen = slot_result.generation;
 
-    // Initialize the object record as LIVE
+    // Initialize the object record (escaped/forwarded already false from allocate)
     ObjectRecord* record = self.slot_table.get_record(slot_id);
-    record.kind = LIVE;
     record.live_info.pool_id = pid;
     record.live_info.size = size;
     record.live_info.type_id = tid;
@@ -1063,9 +1078,8 @@ fn ObjectHandle Region.allocate_raw(Region* self, void* data, usz size, typeid t
     SlotId slot_id = slot_result.slot_id;
     Generation gen = slot_result.generation;
 
-    // Initialize the object record as LIVE
+    // Initialize the object record (escaped/forwarded already false from allocate)
     ObjectRecord* record = self.slot_table.get_record(slot_id);
-    record.kind = LIVE;
     record.live_info.pool_id = pid;
     record.live_info.size = size;
     record.live_info.type_id = tid;
@@ -1093,32 +1107,31 @@ fn ObjectHandle Region.allocate_raw(Region* self, void* data, usz size, typeid t
  * @param handle The object to free
  *
  * Behavior by state:
- * - LIVE: Run destructor, remove from pool, release slot
- * - FORWARDED: Just release the forwarding stub
- * - DEAD: No-op (already freed)
+ * - !forwarded: Run destructor, remove from pool, release slot
+ * - forwarded: Just release the forwarding stub
+ * - generation mismatch: No-op (already freed)
  */
 fn void Region.free_object(Region* self, ObjectHandle handle) {
     ObjectRecord* record = self.slot_table.get_record(handle.slot_id);
-    assert(record.generation == handle.generation);
 
-    switch (record.kind) {
-        case LIVE:
-            // Get data pointer for destructor
-            PoolSlot* pool_slot = self.pool.get_slot(record.live_info.pool_id);
-            void* data = pool_slot.is_inline ? (void*)&pool_slot.inline_data[0] : pool_slot.heap_ptr;
+    // Check for stale handle (generation mismatch means already freed)
+    if ((uint)record.generation != (uint)handle.generation) {
+        return;  // Already freed — no-op
+    }
 
-            // Run destructor, remove from pool, release slot
-            destructor_run(record.live_info.type_id, data);
-            self.pool.remove(record.live_info.pool_id);
-            self.slot_table.release(handle.slot_id);
-            self.live_object_count -= 1;
+    if (record.forwarded) {
+        // Object was promoted — just clean up the forwarding stub
+        self.slot_table.release(handle.slot_id);
+    } else {
+        // Object is live here — run destructor and remove
+        PoolSlot* pool_slot = self.pool.get_slot(record.live_info.pool_id);
+        void* data = pool_slot.is_inline ? (void*)&pool_slot.inline_data[0] : pool_slot.heap_ptr;
 
-        case FORWARDED:
-            // Object was promoted — just clean up the forwarding stub
-            self.slot_table.release(handle.slot_id);
-
-        case DEAD:
-            // Already freed — no-op
+        // Run destructor, remove from pool, release slot
+        destructor_run(record.live_info.type_id, data);
+        self.pool.remove(record.live_info.pool_id);
+        self.slot_table.release(handle.slot_id);
+        self.live_object_count -= 1;
     }
 }
 
@@ -1577,10 +1590,11 @@ fn void RegionRegistry.destroy_region(RegionRegistry* self, RegionId id) {
     }
 
     // ============================================================
-    //  PHASE 1: PROMOTE SURVIVORS TO PARENT
+    //  PHASE 1: PROMOTE ESCAPED OBJECTS, DESTROY LOCAL OBJECTS
     // ============================================================
-    // Copy each LIVE object to the parent region and convert slot to FORWARDED
-    if (region.live_object_count > 0 && has_parent) {
+    // Only objects that escaped (handles crossed region boundary) are promoted.
+    // Local objects (never escaped) are destroyed with the region.
+    if (has_parent) {
         usz parent_idx = (usz)(uint)parent_id;
         Region* parent_region = &self.region_storage[parent_idx];
 
@@ -1590,31 +1604,32 @@ fn void RegionRegistry.destroy_region(RegionRegistry* self, RegionId id) {
             SlotId sid = (SlotId)live_slots[i];
             ObjectRecord* record = region.slot_table.get_record(sid);
 
-            switch (record.kind) {
-                case LIVE:
-                    // Get object data
-                    PoolSlot* pool_slot =
-                        region.pool.get_slot(record.live_info.pool_id);
+            if (record.forwarded) {
+                continue;  // Already promoted
+            }
 
-                    void* data = pool_slot.is_inline ? (void*)&pool_slot.inline_data[0] : pool_slot.heap_ptr;
+            if (record.escaped) {
+                // Object escaped: promote to parent
+                PoolSlot* pool_slot = region.pool.get_slot(record.live_info.pool_id);
+                void* data = pool_slot.is_inline ?
+                    (void*)&pool_slot.inline_data[0] : pool_slot.heap_ptr;
 
-                    // Allocate copy in parent region
-                    ObjectHandle new_handle = parent_region.allocate_raw(
-                        data,
-                        pool_slot.size,
-                        pool_slot.type_id
-                    );
+                ObjectHandle new_handle = parent_region.allocate_raw(
+                    data,
+                    pool_slot.size,
+                    pool_slot.type_id
+                );
 
-                    // Convert original slot to forwarding stub
-                    record.kind = FORWARDED;
-                    record.forward_target = new_handle;
+                record.forwarded = true;
+                record.forward_target = new_handle;
+            } else {
+                // Object is local: destroy with region
+                PoolSlot* pool_slot = region.pool.get_slot(record.live_info.pool_id);
+                void* data = pool_slot.is_inline ?
+                    (void*)&pool_slot.inline_data[0] : pool_slot.heap_ptr;
 
-                case FORWARDED:
-                    // Already forwarded elsewhere — leave it
-                    nextcase;
-
-                case DEAD:
-                    // Skip dead slots
+                destructor_run(record.live_info.type_id, data);
+                // Slot will be cleaned up with region
             }
         }
     }
@@ -1733,7 +1748,7 @@ fn void RegionRegistry.transfer_ghost_table(
     for (usz i = 0; i < live_slots.len; i++) {
         ObjectRecord* record =
             dying_region.slot_table.get_record((SlotId)live_slots[i]);
-        if (record.kind == FORWARDED) {
+        if (record.forwarded) {
             has_forwarding_records = true;
             break;
         }
@@ -1836,7 +1851,8 @@ fn bool RegionRegistry.is_valid_region(RegionRegistry* self, RegionHandle handle
  * Check if an ObjectHandle is still valid.
  *
  * A handle is valid if either:
- * - It points to a live region with matching generation and non-DEAD slot
+ * - It points to a live region with matching generation
+ * - If forwarded, the forward target must also be valid
  * - It points to a dead region that has a ghost table with FORWARDED entry
  *
  * @param handle The handle to validate
@@ -1847,14 +1863,26 @@ fn bool RegionRegistry.is_valid_object(RegionRegistry* self, ObjectHandle handle
 
     // --- Try live region first ---
     if (idx < self.region_storage.len() && self.region_alive_flags[idx]) {
-        if (self.region_generations[idx] != handle.generation) return false;
+        if ((uint)self.region_generations[idx] != (uint)handle.generation) {
+            return false;
+        }
 
         Region* region = &self.region_storage[idx];
         usz slot_idx = (usz)(uint)handle.slot_id;
-        if (slot_idx >= region.slot_table.object_records.len()) return false;
+        if (slot_idx >= region.slot_table.object_records.len()) {
+            return false;
+        }
 
         ObjectRecord* record = region.slot_table.get_record(handle.slot_id);
-        return record.generation == handle.generation && record.kind != DEAD;
+        if ((uint)record.generation != (uint)handle.generation) {
+            return false;
+        }
+
+        // Valid if not forwarded, or if forward target is valid
+        if (record.forwarded) {
+            return self.is_valid_object(record.forward_target);
+        }
+        return true;
     }
 
     // --- Try ghost tables ---
@@ -1869,12 +1897,12 @@ fn bool RegionRegistry.is_valid_object(RegionRegistry* self, ObjectHandle handle
  * Get a pointer to an object's data.
  *
  * Handles both live and forwarded objects transparently.
- * Follows forwarding chains until a LIVE object is found.
+ * Follows forwarding chains until a non-forwarded object is found.
  *
  * @param handle The object to dereference
  * @return Pointer to the object's data
  *
- * Panics if handle is invalid or points to a dead object.
+ * Panics if handle is invalid (generation mismatch).
  */
 fn void* RegionRegistry.dereference(RegionRegistry* self, ObjectHandle handle) {
     usz idx = (usz)(uint)handle.region_id;
@@ -1883,20 +1911,16 @@ fn void* RegionRegistry.dereference(RegionRegistry* self, ObjectHandle handle) {
     if (idx < self.region_storage.len() && self.region_alive_flags[idx]) {
         Region* region = &self.region_storage[idx];
         ObjectRecord* record = region.slot_table.get_record(handle.slot_id);
-        assert(record.generation == handle.generation);
+        assert((uint)record.generation == (uint)handle.generation, "stale handle");
 
-        switch (record.kind) {
-            case LIVE:
-                // Object is here — return data pointer
-                PoolSlot* pool_slot = region.pool.get_slot(record.live_info.pool_id);
-                return pool_slot.is_inline ? (void*)&pool_slot.inline_data[0] : pool_slot.heap_ptr;
-
-            case FORWARDED:
-                // Object was promoted — follow the chain
-                return self.dereference(record.forward_target);
-
-            case DEAD:
-                unreachable("use-after-free: dereferencing dead object");
+        if (record.forwarded) {
+            // Object was promoted — follow the chain
+            return self.dereference(record.forward_target);
+        } else {
+            // Object is here — return data pointer
+            PoolSlot* pool_slot = region.pool.get_slot(record.live_info.pool_id);
+            return pool_slot.is_inline ?
+                (void*)&pool_slot.inline_data[0] : pool_slot.heap_ptr;
         }
     }
 
@@ -1927,18 +1951,14 @@ fn void* RegionRegistry.dereference_via_ghost(RegionRegistry* self, ObjectHandle
     GhostTable* ghost = &host_region.inherited_ghost_tables[result.ghost_idx];
 
     ObjectRecord* record = &ghost.forwarding_records[(usz)(uint)handle.slot_id];
-    assert(record.generation == handle.generation);
+    assert((uint)record.generation == (uint)handle.generation, "stale ghost handle");
 
-    switch (record.kind) {
-        case FORWARDED:
-            // Follow the forwarding pointer
-            return self.dereference(record.forward_target);
-
-        case DEAD:
-            unreachable("use-after-free in ghost table");
-
-        default:
-            unreachable("ghost table has live record");
+    // Ghost tables should only contain forwarded records
+    if (record.forwarded) {
+        // Follow the forwarding pointer
+        return self.dereference(record.forward_target);
+    } else {
+        unreachable("ghost table has non-forwarded record");
     }
 }
 
@@ -1958,7 +1978,7 @@ fn bool RegionRegistry.is_valid_ghost_handle(RegionRegistry* self, ObjectHandle 
     usz slot_idx = (usz)(uint)handle.slot_id;
     if (slot_idx >= ghost.forwarding_records.len()) return false;
     ObjectRecord* record = &ghost.forwarding_records[slot_idx];
-    return record.generation == handle.generation && record.kind == FORWARDED;
+    return (uint)record.generation == (uint)handle.generation && record.forwarded;
 }
 
 // -----------------------------------------------------------------------------
@@ -2006,8 +2026,8 @@ struct DereferenceResult {
  * Dereference with chain compression.
  *
  * Same as dereference(), but also compresses the forwarding chain.
- * All intermediate FORWARDED entries are updated to point directly
- * to the final LIVE object.
+ * All intermediate forwarded entries are updated to point directly
+ * to the final non-forwarded object.
  *
  * Use this for frequently-accessed objects with potentially long chains.
  *
@@ -2023,31 +2043,25 @@ fn DereferenceResult RegionRegistry.dereference_compressed(
     for (;;) {
         ObjectRecord* record = self.resolve_object_record(current);
 
-        switch (record.kind) {
-            case LIVE:
-                // Found the final object
-                Region* region = &self.region_storage[(usz)(uint)current.region_id];
-                PoolSlot* pool_slot = region.pool.get_slot(record.live_info.pool_id);
-                void* data = pool_slot.is_inline ? (void*)&pool_slot.inline_data[0] : pool_slot.heap_ptr;
+        if (!record.forwarded) {
+            // Found the final object
+            Region* region = &self.region_storage[(usz)(uint)current.region_id];
+            PoolSlot* pool_slot = region.pool.get_slot(record.live_info.pool_id);
+            void* data = pool_slot.is_inline ? (void*)&pool_slot.inline_data[0] : pool_slot.heap_ptr;
 
-                // Compress: update all intermediates to point directly here
-                foreach (&intermediate : chain) {
-                    ObjectRecord* inter_record = self.resolve_object_record(*intermediate);
-                    inter_record.kind = FORWARDED;
-                    inter_record.forward_target = current;
-                }
-                chain.free();
+            // Compress: update all intermediates to point directly here
+            foreach (&intermediate : chain) {
+                ObjectRecord* inter_record = self.resolve_object_record(*intermediate);
+                inter_record.forwarded = true;
+                inter_record.forward_target = current;
+            }
+            chain.free();
 
-                return { .data = data, .final_handle = current };
-
-            case FORWARDED:
-                // Add to chain and continue following
-                chain.push(current);
-                current = record.forward_target;
-
-            case DEAD:
-                chain.free();
-                unreachable("dangling forwarding chain");
+            return { .data = data, .final_handle = current };
+        } else {
+            // Add to chain and continue following
+            chain.push(current);
+            current = record.forward_target;
         }
     }
 }
@@ -2112,33 +2126,28 @@ fn ObjectHandle RegionRegistry.manual_promote(
     Region* source = &self.region_storage[(usz)(uint)handle.region_id];
     ObjectRecord* record = source.slot_table.get_record(handle.slot_id);
 
-    switch (record.kind) {
-        case LIVE:
-            // Get object data
-            PoolSlot* pool_slot = source.pool.get_slot(record.live_info.pool_id);
-            void* data = pool_slot.is_inline ? (void*)&pool_slot.inline_data[0] : pool_slot.heap_ptr;
-
-            // Allocate in target region
-            Region* target_region = &self.region_storage[(usz)(uint)target.region_id];
-            ObjectHandle new_handle = target_region.allocate_raw(
-                data, pool_slot.size, pool_slot.type_id
-            );
-
-            // Remove from source and convert to forwarding stub
-            source.pool.remove(record.live_info.pool_id);
-            record.kind = FORWARDED;
-            record.forward_target = new_handle;
-            source.live_object_count -= 1;
-
-            return new_handle;
-
-        case FORWARDED:
-            // Object already promoted elsewhere — follow and re-promote
-            return self.manual_promote(record.forward_target, target);
-
-        case DEAD:
-            unreachable("promoting dead object");
+    if (record.forwarded) {
+        // Object already promoted elsewhere — follow and re-promote
+        return self.manual_promote(record.forward_target, target);
     }
+
+    // Object is live here — promote it
+    PoolSlot* pool_slot = source.pool.get_slot(record.live_info.pool_id);
+    void* data = pool_slot.is_inline ? (void*)&pool_slot.inline_data[0] : pool_slot.heap_ptr;
+
+    // Allocate in target region
+    Region* target_region = &self.region_storage[(usz)(uint)target.region_id];
+    ObjectHandle new_handle = target_region.allocate_raw(
+        data, pool_slot.size, pool_slot.type_id
+    );
+
+    // Remove from source and convert to forwarding stub
+    source.pool.remove(record.live_info.pool_id);
+    record.forwarded = true;
+    record.forward_target = new_handle;
+    source.live_object_count -= 1;
+
+    return new_handle;
 }
 
 /**
@@ -2333,6 +2342,53 @@ macro ObjectHandle allocate_in(region_handle, $Type, value) {
     return region.allocate_typed($Type, value);
 }
 
+// -----------------------------------------------------------------------------
+// 13.3 Write Barrier for Escape Tracking
+// -----------------------------------------------------------------------------
+
+/**
+ * Write barrier for storing object handles.
+ *
+ * Call this whenever storing an ObjectHandle into a data structure
+ * that lives in a different region than the handle's home region.
+ *
+ * If the handle crosses a region boundary, marks the object as escaped.
+ *
+ * @param storing_region The region where the handle is being stored
+ * @param handle The handle being stored
+ */
+fn void write_barrier(RegionId storing_region, ObjectHandle handle) {
+    if ((uint)handle.region_id == (uint)storing_region) {
+        return;  // Same region, no escape
+    }
+
+    // Cross-region store: mark as escaped
+    usz idx = (usz)(uint)handle.region_id;
+    if (idx < thread_registry().region_storage.len() &&
+        thread_registry().region_alive_flags[idx]) {
+        Region* home = &thread_registry().region_storage[idx];
+        ObjectRecord* rec = home.slot_table.get_record(handle.slot_id);
+        if ((uint)rec.generation == (uint)handle.generation) {
+            rec.escaped = true;
+        }
+    }
+}
+
+/**
+ * Macro for storing handles with automatic barrier.
+ *
+ * Usage:
+ *   store_handle(storing_region, &my_struct.handle_field, some_handle);
+ *
+ * @param storing_region The region where the container lives
+ * @param $location Pointer to where the handle will be stored
+ * @param handle The handle being stored
+ */
+macro store_handle(storing_region, $location, handle) {
+    write_barrier(storing_region.region_id, handle);
+    *$location = handle;
+}
+
 // =============================================================================
 // SECTION 14: MAIN (Test Entry Point)
 // =============================================================================
@@ -2362,6 +2418,9 @@ fn void main() {
     // - Region integration
     // - Effect handler patterns
     run_delimited_tests();
+
+    // Run Lisp interpreter tests
+    lisp::run_lisp_tests();
 
     // Initialize thread-local registry (replaces manual RegionRegistry creation)
     thread_registry_init();

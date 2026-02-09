@@ -1,0 +1,301 @@
+/**
+ * =============================================================================
+ * TEST: Ghost Table O(1) Lookup
+ * =============================================================================
+ *
+ * TDD tests for verifying O(1) ghost table lookup performance.
+ * These tests should be written BEFORE implementing the hash map optimization.
+ *
+ * Test Strategy:
+ * 1. Functional tests - verify ghost lookup still works correctly
+ * 2. Performance tests - verify O(1) behavior with many ghost tables
+ */
+module main;
+
+import std::io;
+import std::time;
+import std::time::clock;
+
+// =============================================================================
+// TEST 1: Single Ghost Lookup
+// =============================================================================
+//
+// Verify basic ghost table lookup works after a region dies.
+// The handle to the dead region should still resolve via forwarding.
+//
+
+/**
+ * Test that a single ghost table lookup works correctly.
+ *
+ * Steps:
+ * 1. Create root registry
+ * 2. Create child region
+ * 3. Allocate object in child
+ * 4. Destroy child region (object promoted to root, ghost table created)
+ * 5. Verify handle still resolves via ghost table
+ */
+fn void test_ghost_lookup_single() {
+    io::printfn("[TEST] test_ghost_lookup_single");
+
+    // Setup
+    RegionRegistry registry;
+    registry.init();
+
+    // Create child region under root
+    RegionHandle child_handle = registry.create_region(INVALID_REGION_HANDLE);
+    Region* child = &registry.region_storage[(usz)(uint)child_handle.region_id];
+
+    // Allocate an integer in the child region
+    int value = 42;
+    ObjectHandle obj_handle = child.allocate_raw(&value, int.sizeof, int.typeid);
+
+    // Verify object is live and correct
+    assert(registry.is_valid_object(obj_handle), "Object should be valid before region death");
+    int* ptr_before = (int*)registry.dereference(obj_handle);
+    assert(*ptr_before == 42, "Object value should be 42");
+
+    // Release child region (should promote object to root and create ghost table)
+    registry.release_region(child_handle);
+
+    // Verify handle still resolves via ghost table
+    assert(registry.is_valid_object(obj_handle), "Object should still be valid via ghost table");
+    int* ptr_after = (int*)registry.dereference(obj_handle);
+    assert(*ptr_after == 42, "Object value should still be 42 after promotion");
+
+    io::printfn("[PASS] test_ghost_lookup_single");
+}
+
+// =============================================================================
+// TEST 2: Many Ghost Tables Lookup
+// =============================================================================
+//
+// Verify ghost table lookup works with many ghost tables.
+// This would be slow with O(n) lookup but fast with O(1) hash lookup.
+//
+
+/**
+ * Test ghost lookup with many ghost tables.
+ *
+ * Steps:
+ * 1. Create 100 child regions
+ * 2. Allocate object in each
+ * 3. Destroy all children (100 ghost tables created)
+ * 4. Verify all handles still resolve
+ */
+fn void test_ghost_lookup_many_ghosts() {
+    io::printfn("[TEST] test_ghost_lookup_many_ghosts");
+
+    const usz NUM_GHOSTS = 100;
+
+    RegionRegistry registry;
+    registry.init();
+
+    // Create arrays to track handles
+    ObjectHandle[NUM_GHOSTS] obj_handles;
+    RegionHandle[NUM_GHOSTS] region_handles;
+
+    // Create child regions and allocate objects
+    for (usz i = 0; i < NUM_GHOSTS; i++) {
+        RegionHandle child_handle = registry.create_region(INVALID_REGION_HANDLE);
+        Region* child = &registry.region_storage[(usz)(uint)child_handle.region_id];
+
+        int value = (int)i;
+        ObjectHandle obj_handle = child.allocate_raw(&value, int.sizeof, int.typeid);
+
+        obj_handles[i] = obj_handle;
+        region_handles[i] = child_handle;
+    }
+
+    // Destroy all child regions (creates 100 ghost tables)
+    for (usz i = 0; i < NUM_GHOSTS; i++) {
+        registry.release_region(region_handles[i]);
+    }
+
+    // Verify all handles still resolve correctly via ghost tables
+    for (usz i = 0; i < NUM_GHOSTS; i++) {
+        assert(registry.is_valid_object(obj_handles[i]),
+            "Object should still be valid via ghost table");
+        int* ptr = (int*)registry.dereference(obj_handles[i]);
+        assert(*ptr == (int)i, "Object should have correct value");
+    }
+
+    io::printfn("[PASS] test_ghost_lookup_many_ghosts");
+}
+
+// =============================================================================
+// TEST 3: Ghost Lookup Performance
+// =============================================================================
+//
+// Performance test to verify O(1) behavior.
+// With O(n) linear search, looking up the last ghost table after creating
+// 1000 tables would require scanning all 1000 entries.
+// With O(1) hash lookup, it should be constant time.
+//
+
+/**
+ * Test ghost lookup performance with many ghost tables.
+ *
+ * This test creates 1000 ghost tables and times the lookup of the
+ * first one created (which would be the worst case for linear search
+ * if we prepend, or requires full scan if we append).
+ *
+ * Expected behavior:
+ * - O(n): ~1000x slower lookup as table count grows
+ * - O(1): Constant time regardless of table count
+ */
+fn void test_ghost_lookup_performance() {
+    io::printfn("[TEST] test_ghost_lookup_performance");
+
+    const usz NUM_GHOSTS = 1000;
+    const usz NUM_LOOKUPS = 10000;
+
+    RegionRegistry registry;
+    registry.init();
+
+    // Create first child and allocate object (this will be our target)
+    RegionHandle first_child = registry.create_region(INVALID_REGION_HANDLE);
+    Region* first_region = &registry.region_storage[(usz)(uint)first_child.region_id];
+    int first_value = 999;
+    ObjectHandle first_handle = first_region.allocate_raw(&first_value, int.sizeof, int.typeid);
+
+    // Create remaining children
+    RegionHandle[NUM_GHOSTS - 1] other_handles;
+    for (usz i = 0; i < NUM_GHOSTS - 1; i++) {
+        RegionHandle child = registry.create_region(INVALID_REGION_HANDLE);
+        Region* region = &registry.region_storage[(usz)(uint)child.region_id];
+        int value = (int)i;
+        (void)region.allocate_raw(&value, int.sizeof, int.typeid);
+        other_handles[i] = child;
+    }
+
+    // Destroy all regions (first one first, so its ghost table is earliest)
+    registry.release_region(first_child);
+    for (usz i = 0; i < NUM_GHOSTS - 1; i++) {
+        registry.release_region(other_handles[i]);
+    }
+
+    // Time lookups of the first ghost table (worst case for linear search)
+    time::Clock start = clock::now();
+
+    for (usz i = 0; i < NUM_LOOKUPS; i++) {
+        assert(registry.is_valid_object(first_handle));
+        int* ptr = (int*)registry.dereference(first_handle);
+        assert(*ptr == 999);
+    }
+
+    time::NanoDuration elapsed = clock::now() - start;
+    double elapsed_ms = (double)elapsed.to_ms();
+    double per_lookup_us = elapsed.to_sec() * 1_000_000.0 / (double)NUM_LOOKUPS;
+
+    io::printfn("  %d lookups across %d ghost tables: %.2f ms (%.2f us/lookup)",
+        NUM_LOOKUPS, NUM_GHOSTS, elapsed_ms, per_lookup_us);
+
+    // With O(1) lookup, each dereference should take < 1us typically
+    // With O(n) lookup over 1000 entries, it would be much slower
+    // We use a generous threshold to avoid flaky tests
+    assert(per_lookup_us < 100.0,
+        "Lookup is too slow - likely O(n) instead of O(1)");
+
+    io::printfn("[PASS] test_ghost_lookup_performance");
+}
+
+// =============================================================================
+// TEST 4: Ghost Lookup After Multiple Promotions
+// =============================================================================
+//
+// Test that ghost lookup works correctly through multiple levels of
+// region destruction (child -> parent -> grandparent).
+//
+
+fn void test_ghost_lookup_chained() {
+    io::printfn("[TEST] test_ghost_lookup_chained");
+
+    RegionRegistry registry;
+    registry.init();
+
+    // Create grandchild under child under root
+    RegionHandle child = registry.create_region(INVALID_REGION_HANDLE);
+    RegionHandle grandchild = registry.create_region(child);
+
+    Region* gc_region = &registry.region_storage[(usz)(uint)grandchild.region_id];
+
+    // Allocate in grandchild
+    int value = 123;
+    ObjectHandle obj = gc_region.allocate_raw(&value, int.sizeof, int.typeid);
+
+    // Verify object works
+    assert(registry.is_valid_object(obj));
+    assert(*(int*)registry.dereference(obj) == 123);
+
+    // Destroy grandchild (object promoted to child)
+    registry.release_region(grandchild);
+    assert(registry.is_valid_object(obj), "Should be valid after grandchild death");
+    assert(*(int*)registry.dereference(obj) == 123);
+
+    // Destroy child (object promoted to root, ghost table also promoted)
+    registry.release_region(child);
+    assert(registry.is_valid_object(obj), "Should be valid after child death");
+    assert(*(int*)registry.dereference(obj) == 123);
+
+    io::printfn("[PASS] test_ghost_lookup_chained");
+}
+
+// =============================================================================
+// TEST 5: Ghost Index Consistency
+// =============================================================================
+//
+// Test that the ghost index remains consistent after various operations.
+//
+
+fn void test_ghost_index_consistency() {
+    io::printfn("[TEST] test_ghost_index_consistency");
+
+    RegionRegistry registry;
+    registry.init();
+
+    // Create and destroy regions in various patterns
+    RegionHandle[10] handles;
+    ObjectHandle[10] obj_handles;
+
+    // Create all
+    for (usz i = 0; i < 10; i++) {
+        handles[i] = registry.create_region(INVALID_REGION_HANDLE);
+        Region* r = &registry.region_storage[(usz)(uint)handles[i].region_id];
+        int val = (int)(i * 10);
+        obj_handles[i] = r.allocate_raw(&val, int.sizeof, int.typeid);
+    }
+
+    // Destroy in non-sequential order: 5, 3, 7, 1, 9, 0, 2, 4, 6, 8
+    usz[10] destroy_order = {5, 3, 7, 1, 9, 0, 2, 4, 6, 8};
+    for (usz i = 0; i < 10; i++) {
+        usz idx = destroy_order[i];
+        registry.release_region(handles[idx]);
+
+        // After each destruction, verify all destroyed regions' objects still work
+        for (usz j = 0; j <= i; j++) {
+            usz check_idx = destroy_order[j];
+            assert(registry.is_valid_object(obj_handles[check_idx]),
+                "Object should still be valid via ghost table");
+            int* ptr = (int*)registry.dereference(obj_handles[check_idx]);
+            assert(*ptr == (int)(check_idx * 10), "Object value should be preserved");
+        }
+    }
+
+    io::printfn("[PASS] test_ghost_index_consistency");
+}
+
+// =============================================================================
+// TEST RUNNER
+// =============================================================================
+
+fn void run_ghost_lookup_tests() {
+    io::printfn("\n=== Ghost Lookup Tests ===\n");
+
+    test_ghost_lookup_single();
+    test_ghost_lookup_many_ghosts();
+    test_ghost_lookup_performance();
+    test_ghost_lookup_chained();
+    test_ghost_index_consistency();
+
+    io::printfn("\n=== All Ghost Lookup Tests Passed ===");
+}

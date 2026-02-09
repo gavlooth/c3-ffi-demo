@@ -1,0 +1,792 @@
+/**
+ * =============================================================================
+ * POOL UNIT TESTS
+ * =============================================================================
+ *
+ * Comprehensive unit tests for the Pool data structure.
+ * Tests cover:
+ *   - Inline allocation (objects <= 16 bytes)
+ *   - Arena allocation (objects > 16 bytes)
+ *   - Removal and compaction (swap-and-pop)
+ *   - Free list management
+ *   - Edge cases
+ *   - get_data correctness
+ */
+module main;
+
+import std::io;
+
+// =============================================================================
+// TEST HELPER TYPES
+// =============================================================================
+
+/**
+ * Small struct that fits inline (exactly 16 bytes).
+ * 4 + 4 + 8 = 16 bytes
+ */
+struct SmallStruct {
+    int a;
+    int b;
+    long c;
+}
+
+/**
+ * Large struct that requires arena allocation (> 16 bytes).
+ * 4 * 8 = 32 bytes
+ */
+struct LargeStruct {
+    long a;
+    long b;
+    long c;
+    long d;
+}
+
+/**
+ * Struct exactly at the threshold boundary (16 bytes).
+ * 8 + 8 = 16 bytes
+ */
+struct ExactThreshold {
+    long x;
+    long y;
+}
+
+/**
+ * Struct one byte over threshold (17 bytes).
+ * Forces arena allocation.
+ */
+struct ThresholdPlusOne {
+    long x;
+    long y;
+    char z;
+}
+
+// =============================================================================
+// TEST HELPER FUNCTIONS
+// =============================================================================
+
+fn Pool create_test_pool() {
+    Pool pool;
+    pool.slot_count = 0;
+    pool.next_pool_id = (PoolId)0;
+    return pool;
+}
+
+fn void cleanup_test_pool(Pool* pool) {
+    // Free arena memory
+    foreach (&arena : pool.arenas) {
+        mem::free(arena.data);
+    }
+    // Free internal lists
+    pool.packed_slots.free();
+    pool.pool_id_position_index.free();
+    pool.position_owner_index.free();
+    pool.recycled_pool_ids.free();
+    pool.arenas.free();
+    pool.free_list.free();
+}
+
+macro void assert_true(bool condition, String message) {
+    if (!condition) {
+        io::printfn("ASSERTION FAILED: %s", message);
+    }
+}
+
+macro void assert_eq($a, $b, String message) {
+    if ($a != $b) {
+        io::printfn("ASSERTION FAILED: %s (got %s, expected %s)", message, $a, $b);
+    }
+}
+
+// =============================================================================
+// SECTION 1: INLINE ALLOCATION TESTS (objects <= 16 bytes)
+// =============================================================================
+
+/**
+ * Test: Allocate a single int and verify data is preserved.
+ */
+fn bool test_allocate_int() {
+    Pool pool = create_test_pool();
+    defer cleanup_test_pool(&pool);
+
+    int value = 42;
+    PoolId pid = pool.allocate(&value, int.sizeof, int.typeid);
+
+    // Verify slot count incremented
+    if (pool.slot_count != 1) {
+        io::printn("FAIL: test_allocate_int - slot_count should be 1");
+        return false;
+    }
+
+    // Verify data is correct
+    int* data = (int*)pool.get_data(pid);
+    if (*data != 42) {
+        io::printn("FAIL: test_allocate_int - data should be 42");
+        return false;
+    }
+
+    // Verify is inline
+    PoolSlot* slot = pool.get_slot(pid);
+    if (!slot.is_inline) {
+        io::printn("FAIL: test_allocate_int - should be inline");
+        return false;
+    }
+
+    io::printn("PASS: test_allocate_int");
+    return true;
+}
+
+/**
+ * Test: Allocate a 16-byte struct (should go inline).
+ */
+fn bool test_allocate_small_struct() {
+    Pool pool = create_test_pool();
+    defer cleanup_test_pool(&pool);
+
+    SmallStruct value = { .a = 1, .b = 2, .c = 3 };
+    PoolId pid = pool.allocate(&value, SmallStruct.sizeof, SmallStruct.typeid);
+
+    // Verify it's inline (16 bytes == INLINE_THRESHOLD)
+    PoolSlot* slot = pool.get_slot(pid);
+    if (!slot.is_inline) {
+        io::printn("FAIL: test_allocate_small_struct - should be inline");
+        return false;
+    }
+
+    // Verify data preserved
+    SmallStruct* data = (SmallStruct*)pool.get_data(pid);
+    if (data.a != 1 || data.b != 2 || data.c != 3) {
+        io::printn("FAIL: test_allocate_small_struct - data corrupted");
+        return false;
+    }
+
+    io::printn("PASS: test_allocate_small_struct");
+    return true;
+}
+
+/**
+ * Test: Inline data is preserved correctly across multiple allocations.
+ */
+fn bool test_inline_data_preserved() {
+    Pool pool = create_test_pool();
+    defer cleanup_test_pool(&pool);
+
+    // Allocate several inline objects
+    int v1 = 100;
+    int v2 = 200;
+    int v3 = 300;
+
+    PoolId pid1 = pool.allocate(&v1, int.sizeof, int.typeid);
+    PoolId pid2 = pool.allocate(&v2, int.sizeof, int.typeid);
+    PoolId pid3 = pool.allocate(&v3, int.sizeof, int.typeid);
+
+    // Verify all data still correct
+    int* d1 = (int*)pool.get_data(pid1);
+    int* d2 = (int*)pool.get_data(pid2);
+    int* d3 = (int*)pool.get_data(pid3);
+
+    if (*d1 != 100 || *d2 != 200 || *d3 != 300) {
+        io::printn("FAIL: test_inline_data_preserved - data corrupted");
+        return false;
+    }
+
+    io::printn("PASS: test_inline_data_preserved");
+    return true;
+}
+
+// =============================================================================
+// SECTION 2: ARENA ALLOCATION TESTS (objects > 16 bytes)
+// =============================================================================
+
+/**
+ * Test: Large struct (>16 bytes) uses arena allocation.
+ */
+fn bool test_allocate_large_struct() {
+    Pool pool = create_test_pool();
+    defer cleanup_test_pool(&pool);
+
+    LargeStruct value = { .a = 10, .b = 20, .c = 30, .d = 40 };
+    PoolId pid = pool.allocate(&value, LargeStruct.sizeof, LargeStruct.typeid);
+
+    // Verify it's NOT inline
+    PoolSlot* slot = pool.get_slot(pid);
+    if (slot.is_inline) {
+        io::printn("FAIL: test_allocate_large_struct - should NOT be inline");
+        return false;
+    }
+
+    // Verify data preserved
+    LargeStruct* data = (LargeStruct*)pool.get_data(pid);
+    if (data.a != 10 || data.b != 20 || data.c != 30 || data.d != 40) {
+        io::printn("FAIL: test_allocate_large_struct - data corrupted");
+        return false;
+    }
+
+    io::printn("PASS: test_allocate_large_struct");
+    return true;
+}
+
+/**
+ * Test: First large allocation creates an arena on demand.
+ */
+fn bool test_arena_created_on_demand() {
+    Pool pool = create_test_pool();
+    defer cleanup_test_pool(&pool);
+
+    // Before allocation: no arenas
+    if (pool.arenas.len() != 0) {
+        io::printn("FAIL: test_arena_created_on_demand - should start with 0 arenas");
+        return false;
+    }
+
+    // Allocate something large
+    LargeStruct value = { .a = 1, .b = 2, .c = 3, .d = 4 };
+    pool.allocate(&value, LargeStruct.sizeof, LargeStruct.typeid);
+
+    // After allocation: one arena
+    if (pool.arenas.len() != 1) {
+        io::printn("FAIL: test_arena_created_on_demand - should have 1 arena");
+        return false;
+    }
+
+    io::printn("PASS: test_arena_created_on_demand");
+    return true;
+}
+
+/**
+ * Test: Multiple large objects all go to arena.
+ */
+fn bool test_multiple_arena_allocations() {
+    Pool pool = create_test_pool();
+    defer cleanup_test_pool(&pool);
+
+    LargeStruct v1 = { .a = 1, .b = 2, .c = 3, .d = 4 };
+    LargeStruct v2 = { .a = 5, .b = 6, .c = 7, .d = 8 };
+    LargeStruct v3 = { .a = 9, .b = 10, .c = 11, .d = 12 };
+
+    PoolId pid1 = pool.allocate(&v1, LargeStruct.sizeof, LargeStruct.typeid);
+    PoolId pid2 = pool.allocate(&v2, LargeStruct.sizeof, LargeStruct.typeid);
+    PoolId pid3 = pool.allocate(&v3, LargeStruct.sizeof, LargeStruct.typeid);
+
+    // Verify all are arena-allocated
+    if (pool.get_slot(pid1).is_inline ||
+        pool.get_slot(pid2).is_inline ||
+        pool.get_slot(pid3).is_inline) {
+        io::printn("FAIL: test_multiple_arena_allocations - all should be arena");
+        return false;
+    }
+
+    // Verify data preserved for all
+    LargeStruct* d1 = (LargeStruct*)pool.get_data(pid1);
+    LargeStruct* d2 = (LargeStruct*)pool.get_data(pid2);
+    LargeStruct* d3 = (LargeStruct*)pool.get_data(pid3);
+
+    if (d1.a != 1 || d2.a != 5 || d3.a != 9) {
+        io::printn("FAIL: test_multiple_arena_allocations - data corrupted");
+        return false;
+    }
+
+    io::printn("PASS: test_multiple_arena_allocations");
+    return true;
+}
+
+// =============================================================================
+// SECTION 3: REMOVAL AND COMPACTION TESTS
+// =============================================================================
+
+/**
+ * Test: Remove a single object and verify slot freed.
+ */
+fn bool test_remove_single() {
+    Pool pool = create_test_pool();
+    defer cleanup_test_pool(&pool);
+
+    int value = 42;
+    PoolId pid = pool.allocate(&value, int.sizeof, int.typeid);
+
+    if (pool.slot_count != 1) {
+        io::printn("FAIL: test_remove_single - slot_count should be 1 before remove");
+        return false;
+    }
+
+    pool.remove(pid);
+
+    if (pool.slot_count != 0) {
+        io::printn("FAIL: test_remove_single - slot_count should be 0 after remove");
+        return false;
+    }
+
+    io::printn("PASS: test_remove_single");
+    return true;
+}
+
+/**
+ * Test: Remove from middle causes swap-and-pop compaction.
+ */
+fn bool test_remove_middle_compacts() {
+    Pool pool = create_test_pool();
+    defer cleanup_test_pool(&pool);
+
+    int v1 = 100;
+    int v2 = 200;
+    int v3 = 300;
+
+    PoolId pid1 = pool.allocate(&v1, int.sizeof, int.typeid);
+    PoolId pid2 = pool.allocate(&v2, int.sizeof, int.typeid);
+    PoolId pid3 = pool.allocate(&v3, int.sizeof, int.typeid);
+
+    // Remove middle element (pid2)
+    pool.remove(pid2);
+
+    // Slot count should be 2
+    if (pool.slot_count != 2) {
+        io::printn("FAIL: test_remove_middle_compacts - slot_count should be 2");
+        return false;
+    }
+
+    // pid1 and pid3 should still be valid with correct data
+    int* d1 = (int*)pool.get_data(pid1);
+    int* d3 = (int*)pool.get_data(pid3);
+
+    if (*d1 != 100 || *d3 != 300) {
+        io::printn("FAIL: test_remove_middle_compacts - remaining data corrupted");
+        return false;
+    }
+
+    io::printn("PASS: test_remove_middle_compacts");
+    return true;
+}
+
+/**
+ * Test: PoolIds remain stable after removal of other items.
+ */
+fn bool test_pool_id_stable_after_removal() {
+    Pool pool = create_test_pool();
+    defer cleanup_test_pool(&pool);
+
+    int v1 = 111;
+    int v2 = 222;
+    int v3 = 333;
+    int v4 = 444;
+
+    PoolId pid1 = pool.allocate(&v1, int.sizeof, int.typeid);
+    PoolId pid2 = pool.allocate(&v2, int.sizeof, int.typeid);
+    PoolId pid3 = pool.allocate(&v3, int.sizeof, int.typeid);
+    PoolId pid4 = pool.allocate(&v4, int.sizeof, int.typeid);
+
+    // Remove pid2 and pid3
+    pool.remove(pid2);
+    pool.remove(pid3);
+
+    // pid1 and pid4 should still work correctly
+    int* d1 = (int*)pool.get_data(pid1);
+    int* d4 = (int*)pool.get_data(pid4);
+
+    if (*d1 != 111) {
+        io::printn("FAIL: test_pool_id_stable_after_removal - pid1 data wrong");
+        return false;
+    }
+    if (*d4 != 444) {
+        io::printn("FAIL: test_pool_id_stable_after_removal - pid4 data wrong");
+        return false;
+    }
+
+    io::printn("PASS: test_pool_id_stable_after_removal");
+    return true;
+}
+
+/**
+ * Test: Removed PoolId is recycled for next allocation.
+ */
+fn bool test_pool_id_recycled() {
+    Pool pool = create_test_pool();
+    defer cleanup_test_pool(&pool);
+
+    int v1 = 10;
+    PoolId pid1 = pool.allocate(&v1, int.sizeof, int.typeid);
+
+    // Remove it
+    pool.remove(pid1);
+
+    // Allocate again - should recycle pid1
+    int v2 = 20;
+    PoolId pid2 = pool.allocate(&v2, int.sizeof, int.typeid);
+
+    // pid2 should equal pid1 (recycled)
+    if ((uint)pid2 != (uint)pid1) {
+        io::printn("FAIL: test_pool_id_recycled - ID should be recycled");
+        return false;
+    }
+
+    // Data should be correct
+    int* data = (int*)pool.get_data(pid2);
+    if (*data != 20) {
+        io::printn("FAIL: test_pool_id_recycled - recycled slot has wrong data");
+        return false;
+    }
+
+    io::printn("PASS: test_pool_id_recycled");
+    return true;
+}
+
+// =============================================================================
+// SECTION 4: FREE LIST TESTS
+// =============================================================================
+
+/**
+ * Test: Freeing arena memory adds entry to free list.
+ */
+fn bool test_arena_free_adds_to_freelist() {
+    Pool pool = create_test_pool();
+    defer cleanup_test_pool(&pool);
+
+    LargeStruct value = { .a = 1, .b = 2, .c = 3, .d = 4 };
+    PoolId pid = pool.allocate(&value, LargeStruct.sizeof, LargeStruct.typeid);
+
+    // Free list should be empty before removal
+    if (pool.free_list.len() != 0) {
+        io::printn("FAIL: test_arena_free_adds_to_freelist - freelist should start empty");
+        return false;
+    }
+
+    pool.remove(pid);
+
+    // Free list should have one entry
+    if (pool.free_list.len() != 1) {
+        io::printn("FAIL: test_arena_free_adds_to_freelist - freelist should have 1 entry");
+        return false;
+    }
+
+    // Entry size should match
+    if (pool.free_list[0].size != LargeStruct.sizeof) {
+        io::printn("FAIL: test_arena_free_adds_to_freelist - wrong size in freelist");
+        return false;
+    }
+
+    io::printn("PASS: test_arena_free_adds_to_freelist");
+    return true;
+}
+
+/**
+ * Test: Next arena allocation reuses freed chunk from free list.
+ */
+fn bool test_freelist_reuse() {
+    Pool pool = create_test_pool();
+    defer cleanup_test_pool(&pool);
+
+    // Allocate and free a large object
+    LargeStruct v1 = { .a = 1, .b = 2, .c = 3, .d = 4 };
+    PoolId pid1 = pool.allocate(&v1, LargeStruct.sizeof, LargeStruct.typeid);
+    void* first_ptr = pool.get_slot(pid1).heap_ptr;
+
+    pool.remove(pid1);
+
+    // Free list should have entry
+    if (pool.free_list.len() != 1) {
+        io::printn("FAIL: test_freelist_reuse - freelist should have 1 entry");
+        return false;
+    }
+
+    // Allocate same size again
+    LargeStruct v2 = { .a = 5, .b = 6, .c = 7, .d = 8 };
+    PoolId pid2 = pool.allocate(&v2, LargeStruct.sizeof, LargeStruct.typeid);
+    void* second_ptr = pool.get_slot(pid2).heap_ptr;
+
+    // Should reuse the same memory location
+    if (first_ptr != second_ptr) {
+        io::printn("FAIL: test_freelist_reuse - should reuse freed memory");
+        return false;
+    }
+
+    // Free list should be empty (exact fit removes entry)
+    if (pool.free_list.len() != 0) {
+        io::printn("FAIL: test_freelist_reuse - freelist should be empty after reuse");
+        return false;
+    }
+
+    io::printn("PASS: test_freelist_reuse");
+    return true;
+}
+
+/**
+ * Test: Exact fit allocation removes entry from free list.
+ */
+fn bool test_freelist_exact_fit() {
+    Pool pool = create_test_pool();
+    defer cleanup_test_pool(&pool);
+
+    // Allocate and free
+    LargeStruct v1 = { .a = 1, .b = 2, .c = 3, .d = 4 };
+    PoolId pid1 = pool.allocate(&v1, LargeStruct.sizeof, LargeStruct.typeid);
+    pool.remove(pid1);
+
+    usz freelist_size_before = pool.free_list.len();
+
+    // Allocate exact same size
+    LargeStruct v2 = { .a = 5, .b = 6, .c = 7, .d = 8 };
+    pool.allocate(&v2, LargeStruct.sizeof, LargeStruct.typeid);
+
+    // Free list entry should be removed
+    if (pool.free_list.len() != freelist_size_before - 1) {
+        io::printn("FAIL: test_freelist_exact_fit - entry not removed");
+        return false;
+    }
+
+    io::printn("PASS: test_freelist_exact_fit");
+    return true;
+}
+
+/**
+ * Test: Partial fit allocation shrinks the free list entry.
+ */
+fn bool test_freelist_partial_fit() {
+    Pool pool = create_test_pool();
+    defer cleanup_test_pool(&pool);
+
+    // Allocate a large object (32 bytes)
+    LargeStruct v1 = { .a = 1, .b = 2, .c = 3, .d = 4 };
+    PoolId pid1 = pool.allocate(&v1, LargeStruct.sizeof, LargeStruct.typeid);
+    pool.remove(pid1);
+
+    // Should have entry for 32 bytes
+    if (pool.free_list[0].size != LargeStruct.sizeof) {
+        io::printn("FAIL: test_freelist_partial_fit - wrong initial size");
+        return false;
+    }
+
+    usz original_size = pool.free_list[0].size;
+    usz original_offset = pool.free_list[0].offset;
+
+    // Allocate smaller object (17 bytes - just over threshold)
+    ThresholdPlusOne v2 = { .x = 1, .y = 2, .z = 3 };
+    pool.allocate(&v2, ThresholdPlusOne.sizeof, ThresholdPlusOne.typeid);
+
+    // Free list should still have 1 entry (shrunk, not removed)
+    if (pool.free_list.len() != 1) {
+        io::printn("FAIL: test_freelist_partial_fit - entry should be shrunk, not removed");
+        return false;
+    }
+
+    // Entry should be shrunk
+    FreeListEntry* entry = &pool.free_list[0];
+    if (entry.size != original_size - ThresholdPlusOne.sizeof) {
+        io::printn("FAIL: test_freelist_partial_fit - size not shrunk correctly");
+        return false;
+    }
+    if (entry.offset != original_offset + ThresholdPlusOne.sizeof) {
+        io::printn("FAIL: test_freelist_partial_fit - offset not updated correctly");
+        return false;
+    }
+
+    io::printn("PASS: test_freelist_partial_fit");
+    return true;
+}
+
+// =============================================================================
+// SECTION 5: EDGE CASE TESTS
+// =============================================================================
+
+/**
+ * Test: Allocate zero-size object.
+ * Note: Zero-size is technically valid and goes inline.
+ */
+fn bool test_allocate_zero_size() {
+    Pool pool = create_test_pool();
+    defer cleanup_test_pool(&pool);
+
+    // Allocate zero bytes
+    PoolId pid = pool.allocate(null, 0, void.typeid);
+
+    // Should succeed and be inline
+    PoolSlot* slot = pool.get_slot(pid);
+    if (!slot.is_inline) {
+        io::printn("FAIL: test_allocate_zero_size - zero size should be inline");
+        return false;
+    }
+    if (slot.size != 0) {
+        io::printn("FAIL: test_allocate_zero_size - size should be 0");
+        return false;
+    }
+
+    io::printn("PASS: test_allocate_zero_size");
+    return true;
+}
+
+/**
+ * Test: Allocate exactly 16 bytes (threshold) goes inline.
+ */
+fn bool test_allocate_exactly_threshold() {
+    Pool pool = create_test_pool();
+    defer cleanup_test_pool(&pool);
+
+    ExactThreshold value = { .x = 123, .y = 456 };
+    PoolId pid = pool.allocate(&value, ExactThreshold.sizeof, ExactThreshold.typeid);
+
+    // 16 bytes should be inline (<=16)
+    PoolSlot* slot = pool.get_slot(pid);
+    if (!slot.is_inline) {
+        io::printn("FAIL: test_allocate_exactly_threshold - 16 bytes should be inline");
+        return false;
+    }
+
+    // Verify data
+    ExactThreshold* data = (ExactThreshold*)pool.get_data(pid);
+    if (data.x != 123 || data.y != 456) {
+        io::printn("FAIL: test_allocate_exactly_threshold - data corrupted");
+        return false;
+    }
+
+    io::printn("PASS: test_allocate_exactly_threshold");
+    return true;
+}
+
+/**
+ * Test: Allocate 17 bytes (threshold + 1) goes to arena.
+ */
+fn bool test_allocate_threshold_plus_one() {
+    Pool pool = create_test_pool();
+    defer cleanup_test_pool(&pool);
+
+    ThresholdPlusOne value = { .x = 111, .y = 222, .z = 33 };
+    PoolId pid = pool.allocate(&value, ThresholdPlusOne.sizeof, ThresholdPlusOne.typeid);
+
+    // 17 bytes should go to arena (>16)
+    PoolSlot* slot = pool.get_slot(pid);
+    if (slot.is_inline) {
+        io::printn("FAIL: test_allocate_threshold_plus_one - 17 bytes should NOT be inline");
+        return false;
+    }
+
+    // Verify data
+    ThresholdPlusOne* data = (ThresholdPlusOne*)pool.get_data(pid);
+    if (data.x != 111 || data.y != 222 || data.z != 33) {
+        io::printn("FAIL: test_allocate_threshold_plus_one - data corrupted");
+        return false;
+    }
+
+    io::printn("PASS: test_allocate_threshold_plus_one");
+    return true;
+}
+
+// =============================================================================
+// SECTION 6: get_data CORRECTNESS TESTS
+// =============================================================================
+
+/**
+ * Test: get_data returns pointer to inline data.
+ */
+fn bool test_get_data_inline() {
+    Pool pool = create_test_pool();
+    defer cleanup_test_pool(&pool);
+
+    int value = 999;
+    PoolId pid = pool.allocate(&value, int.sizeof, int.typeid);
+
+    PoolSlot* slot = pool.get_slot(pid);
+    void* data_ptr = pool.get_data(pid);
+
+    // Should point to inline_data
+    if (data_ptr != (void*)&slot.inline_data[0]) {
+        io::printn("FAIL: test_get_data_inline - should point to inline_data");
+        return false;
+    }
+
+    // Value should be correct
+    if (*(int*)data_ptr != 999) {
+        io::printn("FAIL: test_get_data_inline - wrong value");
+        return false;
+    }
+
+    io::printn("PASS: test_get_data_inline");
+    return true;
+}
+
+/**
+ * Test: get_data returns arena pointer for large objects.
+ */
+fn bool test_get_data_arena() {
+    Pool pool = create_test_pool();
+    defer cleanup_test_pool(&pool);
+
+    LargeStruct value = { .a = 1000, .b = 2000, .c = 3000, .d = 4000 };
+    PoolId pid = pool.allocate(&value, LargeStruct.sizeof, LargeStruct.typeid);
+
+    PoolSlot* slot = pool.get_slot(pid);
+    void* data_ptr = pool.get_data(pid);
+
+    // Should point to heap_ptr
+    if (data_ptr != slot.heap_ptr) {
+        io::printn("FAIL: test_get_data_arena - should point to heap_ptr");
+        return false;
+    }
+
+    // Value should be correct
+    LargeStruct* data = (LargeStruct*)data_ptr;
+    if (data.a != 1000 || data.d != 4000) {
+        io::printn("FAIL: test_get_data_arena - wrong value");
+        return false;
+    }
+
+    io::printn("PASS: test_get_data_arena");
+    return true;
+}
+
+// =============================================================================
+// TEST RUNNER
+// =============================================================================
+
+/**
+ * Run all Pool unit tests.
+ * Returns the number of failed tests.
+ */
+fn uint run_pool_tests() {
+    io::printn("\n========================================");
+    io::printn("POOL UNIT TESTS");
+    io::printn("========================================\n");
+
+    uint passed = 0;
+    uint failed = 0;
+
+    // Section 1: Inline Allocation
+    io::printn("--- Inline Allocation Tests ---");
+    if (test_allocate_int()) { passed++; } else { failed++; }
+    if (test_allocate_small_struct()) { passed++; } else { failed++; }
+    if (test_inline_data_preserved()) { passed++; } else { failed++; }
+
+    // Section 2: Arena Allocation
+    io::printn("\n--- Arena Allocation Tests ---");
+    if (test_allocate_large_struct()) { passed++; } else { failed++; }
+    if (test_arena_created_on_demand()) { passed++; } else { failed++; }
+    if (test_multiple_arena_allocations()) { passed++; } else { failed++; }
+
+    // Section 3: Removal & Compaction
+    io::printn("\n--- Removal & Compaction Tests ---");
+    if (test_remove_single()) { passed++; } else { failed++; }
+    if (test_remove_middle_compacts()) { passed++; } else { failed++; }
+    if (test_pool_id_stable_after_removal()) { passed++; } else { failed++; }
+    if (test_pool_id_recycled()) { passed++; } else { failed++; }
+
+    // Section 4: Free List
+    io::printn("\n--- Free List Tests ---");
+    if (test_arena_free_adds_to_freelist()) { passed++; } else { failed++; }
+    if (test_freelist_reuse()) { passed++; } else { failed++; }
+    if (test_freelist_exact_fit()) { passed++; } else { failed++; }
+    if (test_freelist_partial_fit()) { passed++; } else { failed++; }
+
+    // Section 5: Edge Cases
+    io::printn("\n--- Edge Case Tests ---");
+    if (test_allocate_zero_size()) { passed++; } else { failed++; }
+    if (test_allocate_exactly_threshold()) { passed++; } else { failed++; }
+    if (test_allocate_threshold_plus_one()) { passed++; } else { failed++; }
+
+    // Section 6: get_data Correctness
+    io::printn("\n--- get_data Correctness Tests ---");
+    if (test_get_data_inline()) { passed++; } else { failed++; }
+    if (test_get_data_arena()) { passed++; } else { failed++; }
+
+    // Summary
+    io::printn("\n========================================");
+    io::printfn("RESULTS: %d passed, %d failed", passed, failed);
+    io::printn("========================================\n");
+
+    return failed;
+}
