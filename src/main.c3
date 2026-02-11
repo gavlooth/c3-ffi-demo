@@ -2394,11 +2394,55 @@ macro store_handle(storing_region, $location, handle) {
 // =============================================================================
 
 /**
- * Test entry point demonstrating basic usage.
- *
- * Creates the registry, initializes root region, and creates a child region.
+ * Check if a C-string matches a target string.
  */
-fn void main() {
+fn bool str_eq(char* s, char[] target) {
+    for (usz i = 0; i < target.len; i++) {
+        if (s[i] != target[i]) return false;
+    }
+    return s[target.len] == 0;
+}
+
+/**
+ * Main entry point.
+ *
+ * Usage:
+ *   ./main         - Run all tests
+ *   ./main -repl   - Start interactive REPL
+ *   ./main --repl  - Start interactive REPL
+ */
+fn int main(int argc, char** argv) {
+    // Check for REPL flag
+    bool run_repl = false;
+    for (int i = 1; i < argc; i++) {
+        if (str_eq(argv[i], "-repl") || str_eq(argv[i], "--repl")) {
+            run_repl = true;
+            break;
+        }
+    }
+
+    if (run_repl) {
+        // Start REPL mode
+        io::printn("Starting Lisp REPL...");
+
+        // Initialize thread-local registry first
+        thread_registry_init();
+
+        // Initialize interpreter
+        lisp::Interp* interp = (lisp::Interp*)mem::malloc(lisp::Interp.sizeof);
+        interp.init();
+        lisp::register_primitives(interp);
+
+        // Run REPL
+        lisp::repl(interp);
+
+        // Clean up
+        mem::free(interp);
+        thread_registry_shutdown();
+        return 0;
+    }
+
+    // Run tests mode
     io::printfn("Region Memory System v3 initialized");
 
     // Run destructor registry tests (O(1) lookup implementation)
@@ -2436,4 +2480,5 @@ fn void main() {
     thread_registry_shutdown();
 
     io::printfn("System ready.");
+    return 0;
 }

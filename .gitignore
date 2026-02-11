@@ -1,1 +1,32 @@
+# Build artifacts
 build/
+main
+main_test
+test
+test_all
+test_build
+test_runner
+testrun
+
+# LLVM IR output
+llvm/
+
+# Temporary files
+tmp_tests/
+*.o
+*.a
+
+# Backup files
+*.bak/
+pika.bak/
+types.c3.bak
+
+# Patches
+*.patch
+
+# Python scripts
+*.py
+
+# Editor files
+syntax.md
+*.new

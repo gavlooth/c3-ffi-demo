@@ -13,6 +13,7 @@ import std::io;
 enum ValueTag : char {
     NIL,
     INT,
+    STRING,         // String value
     SYMBOL,
     CONS,
     CLOSURE,
@@ -133,6 +134,14 @@ struct PartialPrim {
 }
 
 /**
+ * StringVal — String value storage.
+ */
+struct StringVal {
+    char[MAX_SYMBOL_LEN] chars;
+    usz len;
+}
+
+/**
  * Value — Tagged union for all Lisp values.
  */
 struct Value {
@@ -140,6 +149,7 @@ struct Value {
 
     union {
         long          int_val;
+        StringVal     str_val;        // String value
         SymbolId      sym_val;
         Cons          cons_val;
         Closure       closure_val;
@@ -163,6 +173,19 @@ fn Value* make_int(Interp* interp, long n) @inline {
     Value* v = interp.alloc_value();
     v.tag = INT;
     v.int_val = n;
+    return v;
+}
+
+fn Value* make_string(Interp* interp, char[] str) {
+    Value* v = interp.alloc_value();
+    v.tag = STRING;
+    usz len = str.len;
+    if (len > MAX_SYMBOL_LEN - 1) len = MAX_SYMBOL_LEN - 1;
+    for (usz i = 0; i < len; i++) {
+        v.str_val.chars[i] = str[i];
+    }
+    v.str_val.chars[len] = 0;
+    v.str_val.len = len;
     return v;
 }
 
@@ -222,6 +245,10 @@ fn bool is_nil(Value* v) @inline {
 
 fn bool is_int(Value* v) @inline {
     return v != null && v.tag == INT;
+}
+
+fn bool is_string(Value* v) @inline {
+    return v != null && v.tag == STRING;
 }
 
 fn bool is_symbol(Value* v) @inline {
@@ -354,6 +381,9 @@ fn Env* Env.extend(Env* self, Interp* interp, SymbolId name, Value* value) {
 /**
  * ExprTag — Type of expression.
  */
+// Maximum path segments (e.g., person.address.city has 3)
+const usz MAX_PATH_SEGMENTS = 8;
+
 enum ExprTag : char {
     E_LIT,        // Literal value
     E_VAR,        // Variable reference
@@ -367,6 +397,8 @@ enum ExprTag : char {
     E_SHIFT,      // (shift k body)
     E_PERFORM,    // (perform tag arg)
     E_HANDLE,     // (handle body ((tag k x) handler) ...)
+    E_INDEX,      // arr.[0], dict.['key] - OmniLisp index access
+    E_PATH,       // point.x, person.address.city - field access
 }
 
 struct ExprLit {
@@ -439,10 +471,29 @@ struct ExprHandle {
 }
 
 /**
+ * ExprIndex — Index access expression: arr.[0], dict.['key]
+ * OmniLisp uses dot-bracket notation for indexing.
+ */
+struct ExprIndex {
+    Expr* collection;  // The thing being indexed
+    Expr* index;       // The index expression
+}
+
+/**
+ * ExprPath — Field access path: point.x, person.address.city
+ */
+struct ExprPath {
+    SymbolId[MAX_PATH_SEGMENTS] segments;
+    usz segment_count;
+}
+
+/**
  * Expr — Expression AST node.
  */
 struct Expr {
     ExprTag tag;
+    usz     loc_line;     // Source line (1-indexed, 0 if unknown)
+    usz     loc_column;   // Source column (1-indexed, 0 if unknown)
 
     union {
         ExprLit     lit;
@@ -457,6 +508,8 @@ struct Expr {
         ExprShift   shift;
         ExprPerform perform;
         ExprHandle  handle;
+        ExprIndex   index;
+        ExprPath    path;
     }
 }
 
@@ -596,6 +649,8 @@ fn void print_value(Value* v, SymbolTable* syms) {
     switch (v.tag) {
         case INT:
             io::printf("%d", v.int_val);
+        case STRING:
+            io::printf("\"%s\"", (ZString)&v.str_val.chars);
         case SYMBOL:
             io::printf("%s", syms.get_name(v.sym_val));
         case CONS:
