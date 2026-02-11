@@ -11,9 +11,14 @@ enum TokenType : char {
     T_EOF,
     T_LPAREN,
     T_RPAREN,
+    T_LBRACKET,     // [ for array literals
+    T_RBRACKET,     // ] for array literals
+    T_DOT_BRACKET,  // .[ for index access (OmniLisp syntax)
     T_QUOTE,
     T_INT,
+    T_STRING,       // "..." string literal
     T_SYMBOL,
+    T_PATH,         // dot-separated path: point.x, person.address.city
     T_ERROR,
 }
 
@@ -22,12 +27,16 @@ struct Token {
     char[64]  text;
     usz       text_len;
     long      int_value;  // For T_INT
+    usz       line;       // 1-indexed line number
+    usz       column;     // 1-indexed column number
 }
 
 struct Lexer {
     char[]  source;
     usz     pos;
     usz     len;
+    usz     line;     // Current line (1-indexed)
+    usz     column;   // Current column (1-indexed)
     Token   current;
 }
 
@@ -35,6 +44,8 @@ fn void Lexer.init(Lexer* self, char[] source) {
     self.source = source;
     self.pos = 0;
     self.len = source.len;
+    self.line = 1;
+    self.column = 1;
     self.advance();  // Prime the first token
 }
 
@@ -45,18 +56,25 @@ fn char Lexer.peek(Lexer* self) {
 
 fn char Lexer.next_char(Lexer* self) {
     if (self.pos >= self.len) return 0;
-    return self.source[self.pos++];
+    char c = self.source[self.pos++];
+    if (c == '\n') {
+        self.line++;
+        self.column = 1;
+    } else {
+        self.column++;
+    }
+    return c;
 }
 
 fn void Lexer.skip_whitespace(Lexer* self) {
     while (self.pos < self.len) {
         char c = self.source[self.pos];
         if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
-            self.pos++;
+            self.next_char();  // Track line/column
         } else if (c == ';') {
             // Comment: skip to end of line
             while (self.pos < self.len && self.source[self.pos] != '\n') {
-                self.pos++;
+                self.next_char();
             }
         } else {
             break;
@@ -80,6 +98,10 @@ fn bool is_symbol_char(char c) {
 fn void Lexer.advance(Lexer* self) {
     self.skip_whitespace();
 
+    // Capture token start position
+    self.current.line = self.line;
+    self.current.column = self.column;
+
     if (self.pos >= self.len) {
         self.current.type = T_EOF;
         return;
@@ -102,6 +124,60 @@ fn void Lexer.advance(Lexer* self) {
     if (c == '\'') {
         self.current.type = T_QUOTE;
         self.pos++;
+        return;
+    }
+
+    if (c == '[') {
+        self.current.type = T_LBRACKET;
+        self.pos++;
+        return;
+    }
+
+    if (c == ']') {
+        self.current.type = T_RBRACKET;
+        self.pos++;
+        return;
+    }
+
+    // String literal: "..."
+    if (c == '"') {
+        self.pos++;  // consume opening quote
+        usz out_idx = 0;
+
+        while (self.pos < self.len && self.source[self.pos] != '"') {
+            char ch = self.source[self.pos];
+
+            if (ch == '\\' && self.pos + 1 < self.len) {
+                // Handle escape sequences
+                self.pos++;
+                char escaped = self.source[self.pos];
+                switch (escaped) {
+                    case 'n':
+                        if (out_idx < 63) self.current.text[out_idx++] = '\n';
+                    case 't':
+                        if (out_idx < 63) self.current.text[out_idx++] = '\t';
+                    case '\\':
+                        if (out_idx < 63) self.current.text[out_idx++] = '\\';
+                    case '"':
+                        if (out_idx < 63) self.current.text[out_idx++] = '"';
+                    default:
+                        // Unknown escape, just include the character
+                        if (out_idx < 63) self.current.text[out_idx++] = escaped;
+                }
+                self.pos++;
+            } else {
+                if (out_idx < 63) self.current.text[out_idx++] = ch;
+                self.pos++;
+            }
+        }
+
+        if (self.pos < self.len && self.source[self.pos] == '"') {
+            self.pos++;  // consume closing quote
+        }
+
+        self.current.text[out_idx] = 0;
+        self.current.text_len = out_idx;
+        self.current.type = T_STRING;
         return;
     }
 
@@ -129,10 +205,32 @@ fn void Lexer.advance(Lexer* self) {
         return;
     }
 
-    // Symbol
+    // Index access: .[ (OmniLisp dot-bracket notation)
+    // Must check before symbol parsing since . is a symbol char
+    if (c == '.' && self.pos + 1 < self.len && self.source[self.pos + 1] == '[') {
+        self.current.type = T_DOT_BRACKET;
+        self.current.text[0] = '.';
+        self.current.text[1] = '[';
+        self.current.text[2] = 0;
+        self.current.text_len = 2;
+        self.pos += 2;
+        return;
+    }
+
+    // Symbol or Path (dot-separated like point.x or person.address.city)
+    // Stops when seeing .[ (index access) to allow T_DOT_BRACKET to be lexed separately
     if (is_symbol_char(c)) {
         usz start = self.pos;
+        bool has_dot = false;
         while (self.pos < self.len && is_symbol_char(self.source[self.pos])) {
+            // Stop before .[ so it can be lexed as T_DOT_BRACKET
+            if (self.source[self.pos] == '.' &&
+                self.pos + 1 < self.len && self.source[self.pos + 1] == '[') {
+                break;
+            }
+            if (self.source[self.pos] == '.') {
+                has_dot = true;
+            }
             self.pos++;
         }
         usz len = self.pos - start;
@@ -143,7 +241,14 @@ fn void Lexer.advance(Lexer* self) {
         }
         self.current.text[len] = 0;
         self.current.text_len = len;
-        self.current.type = T_SYMBOL;
+
+        // Classify as T_PATH if contains dot (and not just a dot at start/end)
+        // e.g., "point.x" is a path, ".x" or "x." or "." alone are just symbols
+        if (has_dot && len > 1 && self.current.text[0] != '.' && self.current.text[len-1] != '.') {
+            self.current.type = T_PATH;
+        } else {
+            self.current.type = T_SYMBOL;
+        }
         return;
     }
 
@@ -186,11 +291,51 @@ fn void Parser.init(Parser* self, Lexer* lexer, Interp* interp) {
 }
 
 /**
+ * Allocate an expression and capture current source location.
+ */
+fn Expr* Parser.alloc_expr_here(Parser* self) {
+    Expr* e = self.interp.alloc_expr();
+    e.loc_line = self.lexer.current.line;
+    e.loc_column = self.lexer.current.column;
+    return e;
+}
+
+/**
  * Get interned symbol from current token text.
  */
 fn SymbolId Parser.get_current_symbol(Parser* self) {
     // Pass the char slice directly as String (String = char[])
     return self.interp.symbols.intern(self.lexer.current.text[:self.lexer.current.text_len]);
+}
+
+/**
+ * Check for and parse postfix index access: expr.[index]
+ * Returns the expression wrapped in E_INDEX if followed by .[, otherwise returns unchanged.
+ *
+ * OmniLisp dot-bracket syntax:
+ *   arr.[0]           - array/list access by integer index
+ *   dict.['key]       - dictionary access by quoted symbol key
+ *   matrix.[i].[j]    - chained indexing
+ */
+fn Expr* Parser.parse_postfix_index(Parser* self, Expr* base) {
+    // Keep parsing postfix .[index] as long as we see .[
+    while (self.lexer.current.type == T_DOT_BRACKET) {
+        self.lexer.advance();  // consume '.['
+
+        // Parse the index expression
+        Expr* idx = self.parse_expr();
+
+        self.lexer.expect(T_RBRACKET, "]");
+
+        // Wrap in E_INDEX
+        Expr* indexed = self.alloc_expr_here();
+        indexed.tag = E_INDEX;
+        indexed.index.collection = base;
+        indexed.index.index = idx;
+
+        base = indexed;
+    }
+    return base;
 }
 
 /**
@@ -201,35 +346,77 @@ fn Expr* Parser.parse_expr(Parser* self) {
 
     // Quote shorthand: 'x => (quote x)
     if (lex.current.type == T_QUOTE) {
+        Expr* e = self.alloc_expr_here();  // Capture quote location before consuming
         lex.advance();
-        Expr* e = self.interp.alloc_expr();
         e.tag = E_QUOTE;
         e.quote.datum = self.parse_datum();
         return e;
     }
 
-    // Integer literal
+    // Integer literal - may be followed by postfix .[index]
     if (lex.current.type == T_INT) {
+        Expr* e = self.alloc_expr_here();  // Capture location before consuming
         long val = lex.current.int_value;
         lex.advance();
 
-        Expr* e = self.interp.alloc_expr();
         e.tag = E_LIT;
         e.lit.value = self.interp.alloc_value();
         e.lit.value.tag = INT;
         e.lit.value.int_val = val;
-        return e;
+        return self.parse_postfix_index(e);
     }
 
-    // Symbol (variable reference)
+    // String literal - may be followed by postfix .[index]
+    if (lex.current.type == T_STRING) {
+        Expr* e = self.alloc_expr_here();  // Capture location before consuming
+        e.tag = E_LIT;
+        e.lit.value = self.interp.alloc_value();
+        e.lit.value.tag = STRING;
+        // Copy string content from token
+        usz len = lex.current.text_len;
+        if (len > MAX_SYMBOL_LEN - 1) len = MAX_SYMBOL_LEN - 1;
+        for (usz i = 0; i < len; i++) {
+            e.lit.value.str_val.chars[i] = lex.current.text[i];
+        }
+        e.lit.value.str_val.chars[len] = 0;
+        e.lit.value.str_val.len = len;
+        lex.advance();
+        return self.parse_postfix_index(e);
+    }
+
+    // Symbol (variable reference) - may be followed by postfix .[index]
     if (lex.current.type == T_SYMBOL) {
+        Expr* e = self.alloc_expr_here();  // Capture location before consuming
         SymbolId sym = self.get_current_symbol();
         lex.advance();
 
-        Expr* e = self.interp.alloc_expr();
         e.tag = E_VAR;
         e.var_expr.name = sym;
-        return e;
+        return self.parse_postfix_index(e);
+    }
+
+    // Path expression (e.g., point.x, person.address.city) - may be followed by .[index]
+    if (lex.current.type == T_PATH) {
+        Expr* e = self.alloc_expr_here();  // Capture location before consuming
+        e.tag = E_PATH;
+        e.path.segment_count = 0;
+
+        // Split the path text on '.' and intern each segment
+        usz text_len = lex.current.text_len;
+        usz start = 0;
+        for (usz i = 0; i <= text_len; i++) {
+            if (i == text_len || lex.current.text[i] == '.') {
+                if (i > start) {
+                    assert(e.path.segment_count < MAX_PATH_SEGMENTS, "too many path segments");
+                    usz seg_len = i - start;
+                    e.path.segments[e.path.segment_count] = self.interp.symbols.intern(lex.current.text[start:seg_len]);
+                    e.path.segment_count++;
+                }
+                start = i + 1;
+            }
+        }
+        lex.advance();
+        return self.parse_postfix_index(e);
     }
 
     // List form: (...)
@@ -238,8 +425,8 @@ fn Expr* Parser.parse_expr(Parser* self) {
 
         if (lex.current.type == T_RPAREN) {
             // Empty list () = nil literal
+            Expr* e = self.alloc_expr_here();  // Capture location before consuming
             lex.advance();
-            Expr* e = self.interp.alloc_expr();
             e.tag = E_LIT;
             e.lit.value = self.interp.alloc_value();
             e.lit.value.tag = NIL;
@@ -289,6 +476,7 @@ fn Expr* Parser.parse_expr(Parser* self) {
 }
 
 fn Expr* Parser.parse_lambda(Parser* self) {
+    Expr* e = self.alloc_expr_here();  // Capture 'lambda' location
     self.lexer.advance();  // consume 'lambda'
 
     self.lexer.expect(T_LPAREN, "(");
@@ -305,7 +493,6 @@ fn Expr* Parser.parse_lambda(Parser* self) {
 
     self.lexer.expect(T_RPAREN, ")");
 
-    Expr* e = self.interp.alloc_expr();
     e.tag = E_LAMBDA;
     e.lambda.param = param;
     e.lambda.body = body;
@@ -313,6 +500,7 @@ fn Expr* Parser.parse_lambda(Parser* self) {
 }
 
 fn Expr* Parser.parse_if(Parser* self) {
+    Expr* e = self.alloc_expr_here();  // Capture 'if' location
     self.lexer.advance();  // consume 'if'
 
     Expr* test = self.parse_expr();
@@ -321,7 +509,6 @@ fn Expr* Parser.parse_if(Parser* self) {
 
     self.lexer.expect(T_RPAREN, ")");
 
-    Expr* e = self.interp.alloc_expr();
     e.tag = E_IF;
     e.if_expr.test = test;
     e.if_expr.then_branch = then_branch;
@@ -330,6 +517,7 @@ fn Expr* Parser.parse_if(Parser* self) {
 }
 
 fn Expr* Parser.parse_let(Parser* self) {
+    Expr* e = self.alloc_expr_here();  // Capture 'let' location
     self.lexer.advance();  // consume 'let'
 
     self.lexer.expect(T_LPAREN, "(");
@@ -348,7 +536,6 @@ fn Expr* Parser.parse_let(Parser* self) {
 
     self.lexer.expect(T_RPAREN, ")");
 
-    Expr* e = self.interp.alloc_expr();
     e.tag = E_LET;
     e.let_expr.name = name;
     e.let_expr.init = init;
@@ -357,6 +544,7 @@ fn Expr* Parser.parse_let(Parser* self) {
 }
 
 fn Expr* Parser.parse_def(Parser* self) {
+    Expr* e = self.alloc_expr_here();  // Capture 'def' location
     self.lexer.advance();  // consume 'def'
 
     assert(self.lexer.current.type == T_SYMBOL, "expected name");
@@ -367,7 +555,6 @@ fn Expr* Parser.parse_def(Parser* self) {
 
     self.lexer.expect(T_RPAREN, ")");
 
-    Expr* e = self.interp.alloc_expr();
     e.tag = E_DEF;
     e.def.name = name;
     e.def.value = value;
@@ -375,32 +562,33 @@ fn Expr* Parser.parse_def(Parser* self) {
 }
 
 fn Expr* Parser.parse_quote(Parser* self) {
+    Expr* e = self.alloc_expr_here();  // Capture 'quote' location
     self.lexer.advance();  // consume 'quote'
 
     Value* datum = self.parse_datum();
 
     self.lexer.expect(T_RPAREN, ")");
 
-    Expr* e = self.interp.alloc_expr();
     e.tag = E_QUOTE;
     e.quote.datum = datum;
     return e;
 }
 
 fn Expr* Parser.parse_reset(Parser* self) {
+    Expr* e = self.alloc_expr_here();  // Capture 'reset' location
     self.lexer.advance();  // consume 'reset'
 
     Expr* body = self.parse_expr();
 
     self.lexer.expect(T_RPAREN, ")");
 
-    Expr* e = self.interp.alloc_expr();
     e.tag = E_RESET;
     e.reset.body = body;
     return e;
 }
 
 fn Expr* Parser.parse_shift(Parser* self) {
+    Expr* e = self.alloc_expr_here();  // Capture 'shift' location
     self.lexer.advance();  // consume 'shift'
 
     assert(self.lexer.current.type == T_SYMBOL, "expected continuation name");
@@ -411,7 +599,6 @@ fn Expr* Parser.parse_shift(Parser* self) {
 
     self.lexer.expect(T_RPAREN, ")");
 
-    Expr* e = self.interp.alloc_expr();
     e.tag = E_SHIFT;
     e.shift.k_name = k_name;
     e.shift.body = body;
@@ -419,29 +606,29 @@ fn Expr* Parser.parse_shift(Parser* self) {
 }
 
 fn Expr* Parser.parse_perform(Parser* self) {
+    Expr* e = self.alloc_expr_here();  // Capture 'perform' location
     self.lexer.advance();  // consume 'perform'
 
     assert(self.lexer.current.type == T_SYMBOL, "expected effect tag");
-    SymbolId tag = self.get_current_symbol();
+    SymbolId etag = self.get_current_symbol();
     self.lexer.advance();
 
     Expr* arg = self.parse_expr();
 
     self.lexer.expect(T_RPAREN, ")");
 
-    Expr* e = self.interp.alloc_expr();
     e.tag = E_PERFORM;
-    e.perform.tag = tag;
+    e.perform.tag = etag;
     e.perform.arg = arg;
     return e;
 }
 
 fn Expr* Parser.parse_handle(Parser* self) {
+    Expr* e = self.alloc_expr_here();  // Capture 'handle' location
     self.lexer.advance();  // consume 'handle'
 
     Expr* body = self.parse_expr();
 
-    Expr* e = self.interp.alloc_expr();
     e.tag = E_HANDLE;
     e.handle.body = body;
     e.handle.clause_count = 0;
@@ -486,7 +673,9 @@ fn Expr* Parser.parse_handle(Parser* self) {
 }
 
 fn Expr* Parser.parse_application(Parser* self) {
-    // Already consumed '('
+    // Already consumed '(' - capture func location for application
+    usz app_line = self.lexer.current.line;
+    usz app_col = self.lexer.current.column;
     Expr* func = self.parse_expr();
 
     // Collect arguments
@@ -503,11 +692,15 @@ fn Expr* Parser.parse_application(Parser* self) {
         app.tag = E_APP;
         app.app.func = result;
         app.app.arg = arg;
+        // Use original application location for all curried apps
+        app.loc_line = app_line;
+        app.loc_column = app_col;
         result = app;
     }
     args.free();
 
-    return result;
+    // Check for postfix indexing: (make-array 10).[0]
+    return self.parse_postfix_index(result);
 }
 
 /**
@@ -531,6 +724,20 @@ fn Value* Parser.parse_datum(Parser* self) {
         Value* v = self.interp.alloc_value();
         v.tag = SYMBOL;
         v.sym_val = sym;
+        return v;
+    }
+
+    if (lex.current.type == T_STRING) {
+        Value* v = self.interp.alloc_value();
+        v.tag = STRING;
+        usz len = lex.current.text_len;
+        if (len > MAX_SYMBOL_LEN - 1) len = MAX_SYMBOL_LEN - 1;
+        for (usz i = 0; i < len; i++) {
+            v.str_val.chars[i] = lex.current.text[i];
+        }
+        v.str_val.chars[len] = 0;
+        v.str_val.len = len;
+        lex.advance();
         return v;
     }
 
