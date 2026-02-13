@@ -8,8 +8,8 @@
     "targets": {
         "main": {
             "type": "executable",
-            "linked-libraries": ["mathutils", "m"],
-            "linker-search-paths": ["build"]
+            "linked-libraries": ["mathutils", "m", "lightning", "readline", "dl"],
+            "linker-search-paths": ["build", "/usr/local/lib"]
         }
     }
 }

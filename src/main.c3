@@ -98,6 +98,9 @@ typedef Generation = uint;
 /** Reference count for region lifetime management. */
 typedef RefCount   = uint;
 
+/** Maximum hops allowed in forwarding chain traversal before detecting a cycle. */
+const usz MAX_FORWARDING_CHAIN_HOPS = 10000;
+
 // =============================================================================
 // SECTION 2: HANDLE TYPES
 // =============================================================================
@@ -226,6 +229,9 @@ fn void SparseSet.insert(SparseSet* self, uint key) {
     // Idempotent: don't insert duplicates
     if (self.contains(key)) return;
 
+    // Reject keys above reasonable limit to prevent unbounded memory growth
+    if ((usz)key > 65536) return;
+
     // Grow sparse array if needed to accommodate this key
     while (self.key_position_index.len() <= (usz)key) {
         self.key_position_index.push(0);
@@ -352,7 +358,7 @@ struct PoolSlot {
 
     // Storage (union-like usage based on is_inline):
     void*  heap_ptr;        // Arena pointer (>16 bytes objects)
-    char[16] inline_data;   // Inline storage (≤16 bytes objects)
+    char[16] inline_data @align(16);   // Inline storage (≤16 bytes objects)
 }
 
 // -----------------------------------------------------------------------------
@@ -395,8 +401,9 @@ struct ArenaBlock {
  * coalesce adjacent free chunks or use a more sophisticated allocator.
  */
 struct FreeListEntry {
-    usz offset;  // Offset within the arena where this free chunk starts
-    usz size;    // Size of the free chunk in bytes
+    usz offset;     // Offset within the arena where this free chunk starts
+    usz size;       // Size of the free chunk in bytes
+    usz arena_idx;  // Index of the arena this chunk belongs to
 }
 
 // -----------------------------------------------------------------------------
@@ -461,6 +468,7 @@ fn ArenaBlock Pool.new_arena(Pool* self) {
         .capacity = ARENA_SIZE,
         .used     = 0
     };
+    if (arena.data == null) { io::eprintfn("FATAL: arena allocation failed"); return arena; }
     return arena;
 }
 
@@ -477,21 +485,26 @@ fn ArenaBlock Pool.new_arena(Pool* self) {
  * @param size Number of bytes to allocate
  * @return Pointer to allocated memory (never null)
  */
-fn void* Pool.arena_alloc(Pool* self, usz size) {
+fn void* Pool.arena_alloc(Pool* self, usz size, usz alignment = 8) {
     // --- Try to reuse from free-list first ---
     for (usz i = 0; i < self.free_list.len(); i++) {
-        if (self.free_list[i].size >= size) {
-            // Found a suitable free chunk
-            void* ptr = self.arenas[0].data + self.free_list[i].offset;
+        usz chunk_offset = self.free_list[i].offset;
+        usz aligned_offset = (chunk_offset + alignment - 1) & ~(alignment - 1);
+        usz padding = aligned_offset - chunk_offset;
+        usz needed = padding + size;
 
-            if (self.free_list[i].size == size) {
+        if (self.free_list[i].size >= needed) {
+            // Found a suitable free chunk
+            void* ptr = self.arenas[self.free_list[i].arena_idx].data + aligned_offset;
+
+            if (self.free_list[i].size == needed) {
                 // Exact fit: remove entry (swap with last and pop)
                 self.free_list[i] = self.free_list[self.free_list.len() - 1];
                 (void)self.free_list.pop();
             } else {
                 // Partial fit: shrink the free entry
-                self.free_list[i].offset += size;
-                self.free_list[i].size -= size;
+                self.free_list[i].offset += needed;
+                self.free_list[i].size -= needed;
             }
             return ptr;
         }
@@ -505,16 +518,22 @@ fn void* Pool.arena_alloc(Pool* self, usz size) {
     }
 
     ArenaBlock* current = &self.arenas[self.arenas.len() - 1];
+    if (current.data == null) return null;
 
-    // Need a new arena if current one can't fit this allocation
-    if (current.used + size > current.capacity) {
+    // Align the bump pointer
+    usz aligned_offset = (current.used + alignment - 1) & ~(alignment - 1);
+
+    // Need a new arena if current one can't fit this aligned allocation
+    if (aligned_offset + size > current.capacity) {
         self.arenas.push(self.new_arena());
         current = &self.arenas[self.arenas.len() - 1];
+        if (current.data == null) return null;
+        aligned_offset = (current.used + alignment - 1) & ~(alignment - 1);
     }
 
-    // Bump-allocate from current arena
-    void* ptr = current.data + current.used;
-    current.used += size;
+    // Bump-allocate from current arena at aligned offset
+    void* ptr = current.data + aligned_offset;
+    current.used = aligned_offset + size;
     return ptr;
 }
 
@@ -539,12 +558,13 @@ fn void Pool.arena_free(Pool* self, void* ptr, usz size) {
         if ((char*)ptr >= arena_start && (char*)ptr < arena_end) {
             // Found the owning arena — add to free-list
             usz offset = (usz)((char*)ptr - arena_start);
-            FreeListEntry entry = { .offset = offset, .size = size };
+            FreeListEntry entry = { .offset = offset, .size = size, .arena_idx = i };
             self.free_list.push(entry);
             return;
         }
     }
     // If we get here, ptr wasn't from any arena (bug in caller)
+    unreachable("arena_free: pointer not from any arena");
 }
 
 // -----------------------------------------------------------------------------
@@ -638,6 +658,7 @@ fn PoolId Pool.allocate(Pool* self, void* source_data, usz size, typeid type_id)
  * (typically Region.free_object or Pool.destroy_all).
  */
 fn void Pool.remove(Pool* self, PoolId pid) {
+    assert(self.slot_count > 0, "Cannot remove from empty pool");
     PoolIndex position = self.pool_id_position_index[(usz)(uint)pid];
     uint last_position = self.slot_count - 1;
 
@@ -1534,6 +1555,12 @@ fn RegionHandle RegionRegistry.retain_region(RegionRegistry* self, RegionHandle 
 fn void RegionRegistry.release_region(RegionRegistry* self, RegionHandle handle) {
     assert(self.is_valid_region(handle));
     usz idx = (usz)(uint)handle.region_id;
+
+    // Guard against refcount underflow: if already 0, double-release is a bug
+    if ((uint)self.region_storage[idx].refcount == 0) {
+        return;
+    }
+
     self.region_storage[idx].refcount =
         (RefCount)((uint)self.region_storage[idx].refcount - 1);
 
@@ -1651,6 +1678,12 @@ fn void RegionRegistry.destroy_region(RegionRegistry* self, RegionId id) {
         usz child_idx = (usz)(uint)child_id;
         if (self.region_alive_flags[child_idx]) {
             Region* child = &self.region_storage[child_idx];
+
+            // Guard against refcount underflow on child regions
+            if ((uint)child.refcount == 0) {
+                continue;
+            }
+
             child.refcount = (RefCount)((uint)child.refcount - 1);
 
             if ((uint)child.refcount == 0) {
@@ -1771,6 +1804,10 @@ fn void RegionRegistry.transfer_ghost_table(
 
     // Register in ghost index for O(1) lookup
     self.ghost_index.insert(dying_id, dying_region.generation, parent_id, ghost_idx);
+
+    // Null out the dying region's object_records so destroy_all() doesn't double-free
+    // the buffer that is now owned by the ghost table's forwarding_records
+    dying_region.slot_table.object_records = {};
 }
 
 // -----------------------------------------------------------------------------
@@ -1863,10 +1900,6 @@ fn bool RegionRegistry.is_valid_object(RegionRegistry* self, ObjectHandle handle
 
     // --- Try live region first ---
     if (idx < self.region_storage.len() && self.region_alive_flags[idx]) {
-        if ((uint)self.region_generations[idx] != (uint)handle.generation) {
-            return false;
-        }
-
         Region* region = &self.region_storage[idx];
         usz slot_idx = (usz)(uint)handle.slot_id;
         if (slot_idx >= region.slot_table.object_records.len()) {
@@ -1905,27 +1938,35 @@ fn bool RegionRegistry.is_valid_object(RegionRegistry* self, ObjectHandle handle
  * Panics if handle is invalid (generation mismatch).
  */
 fn void* RegionRegistry.dereference(RegionRegistry* self, ObjectHandle handle) {
-    usz idx = (usz)(uint)handle.region_id;
+    ObjectHandle current = handle;
+    usz max_hops = MAX_FORWARDING_CHAIN_HOPS;
 
-    // --- Live region path ---
-    if (idx < self.region_storage.len() && self.region_alive_flags[idx]) {
-        Region* region = &self.region_storage[idx];
-        ObjectRecord* record = region.slot_table.get_record(handle.slot_id);
-        assert((uint)record.generation == (uint)handle.generation, "stale handle");
+    for (usz hop = 0; hop < max_hops; hop++) {
+        usz idx = (usz)(uint)current.region_id;
 
-        if (record.forwarded) {
-            // Object was promoted — follow the chain
-            return self.dereference(record.forward_target);
-        } else {
-            // Object is here — return data pointer
-            PoolSlot* pool_slot = region.pool.get_slot(record.live_info.pool_id);
-            return pool_slot.is_inline ?
-                (void*)&pool_slot.inline_data[0] : pool_slot.heap_ptr;
+        // --- Live region path ---
+        if (idx < self.region_storage.len() && self.region_alive_flags[idx]) {
+            Region* region = &self.region_storage[idx];
+            ObjectRecord* record = region.slot_table.get_record(current.slot_id);
+            assert((uint)record.generation == (uint)current.generation, "stale handle");
+
+            if (record.forwarded) {
+                // Object was promoted — follow the chain
+                current = record.forward_target;
+                continue;
+            } else {
+                // Object is here — return data pointer
+                PoolSlot* pool_slot = region.pool.get_slot(record.live_info.pool_id);
+                return pool_slot.is_inline ?
+                    (void*)&pool_slot.inline_data[0] : pool_slot.heap_ptr;
+            }
         }
+
+        // --- Ghost table path (region is dead, but object may be forwarded) ---
+        return self.dereference_via_ghost(current);
     }
 
-    // --- Ghost table path (region is dead, but object may be forwarded) ---
-    return self.dereference_via_ghost(handle);
+    unreachable("forwarding chain cycle detected in dereference");
 }
 
 /**
@@ -1947,10 +1988,20 @@ fn void* RegionRegistry.dereference_via_ghost(RegionRegistry* self, ObjectHandle
 
     // Get the ghost table directly by index
     usz host_idx = (usz)(uint)result.host_id;
+    if (host_idx >= self.region_storage.len()) {
+        unreachable("ghost host_id out of bounds");
+    }
+    if (!self.region_alive_flags[host_idx]) {
+        unreachable("dereference_via_ghost: host region is dead");
+    }
     Region* host_region = &self.region_storage[host_idx];
     GhostTable* ghost = &host_region.inherited_ghost_tables[result.ghost_idx];
 
-    ObjectRecord* record = &ghost.forwarding_records[(usz)(uint)handle.slot_id];
+    usz slot_idx = (usz)(uint)handle.slot_id;
+    if (slot_idx >= ghost.forwarding_records.len()) {
+        unreachable("slot_id out of bounds in ghost table");
+    }
+    ObjectRecord* record = &ghost.forwarding_records[slot_idx];
     assert((uint)record.generation == (uint)handle.generation, "stale ghost handle");
 
     // Ghost tables should only contain forwarded records
@@ -1972,7 +2023,9 @@ fn bool RegionRegistry.is_valid_ghost_handle(RegionRegistry* self, ObjectHandle 
     if (!result.found) return false;
 
     usz host_idx = (usz)(uint)result.host_id;
+    if (host_idx >= self.region_storage.len() || !self.region_alive_flags[host_idx]) return false;
     Region* host_region = &self.region_storage[host_idx];
+    if (result.ghost_idx >= host_region.inherited_ghost_tables.len()) return false;
     GhostTable* ghost = &host_region.inherited_ghost_tables[result.ghost_idx];
 
     usz slot_idx = (usz)(uint)handle.slot_id;
@@ -2040,7 +2093,8 @@ fn DereferenceResult RegionRegistry.dereference_compressed(
     List{ObjectHandle} chain;  // Track intermediates for compression
     ObjectHandle current = handle;
 
-    for (;;) {
+    usz max_hops = MAX_FORWARDING_CHAIN_HOPS;
+    for (usz hop = 0; hop < max_hops; hop++) {
         ObjectRecord* record = self.resolve_object_record(current);
 
         if (!record.forwarded) {
@@ -2064,6 +2118,9 @@ fn DereferenceResult RegionRegistry.dereference_compressed(
             current = record.forward_target;
         }
     }
+
+    chain.free();
+    unreachable("forwarding chain cycle detected (exceeded max hops)");
 }
 
 /**
@@ -2088,9 +2145,19 @@ fn ObjectRecord* RegionRegistry.resolve_object_record(
     GhostLookupResult result = self.ghost_index.lookup(handle.region_id, handle.generation);
     if (result.found) {
         usz host_idx = (usz)(uint)result.host_id;
+        if (host_idx >= self.region_storage.len()) {
+            unreachable("ghost host_id out of bounds in resolve_object_record");
+        }
         Region* host = &self.region_storage[host_idx];
+        if (result.ghost_idx >= host.inherited_ghost_tables.len()) {
+            unreachable("ghost_idx out of bounds in resolve_object_record");
+        }
         GhostTable* ghost = &host.inherited_ghost_tables[result.ghost_idx];
-        return &ghost.forwarding_records[(usz)(uint)handle.slot_id];
+        usz slot_idx = (usz)(uint)handle.slot_id;
+        if (slot_idx >= ghost.forwarding_records.len()) {
+            unreachable("slot_id out of bounds in ghost table");
+        }
+        return &ghost.forwarding_records[slot_idx];
     }
 
     unreachable("object record not found in any live or ghost table");
@@ -2162,9 +2229,45 @@ fn ObjectHandle RegionRegistry.manual_promote(
 fn RegionHandle RegionRegistry.manual_extend(
     RegionRegistry* self, ObjectHandle object_handle
 ) {
+    // Follow forwarding chain to find current region
+    ObjectHandle current = object_handle;
+    usz max_hops = MAX_FORWARDING_CHAIN_HOPS;
+    usz hops = 0;
+    while (hops < max_hops) {
+        usz idx = (usz)(uint)current.region_id;
+        if (idx < self.region_storage.len() && self.region_alive_flags[idx]) {
+            Region* region = &self.region_storage[idx];
+            ObjectRecord* record = region.slot_table.get_record(current.slot_id);
+            if (record.forwarded) {
+                current = record.forward_target;
+                hops++;
+                continue;
+            }
+            // Found the live region
+            break;
+        }
+        // Check ghost tables
+        GhostLookupResult result = self.ghost_index.lookup(current.region_id, current.generation);
+        if (result.found) {
+            usz host_idx = (usz)(uint)result.host_id;
+            Region* host = &self.region_storage[host_idx];
+            GhostTable* ghost = &host.inherited_ghost_tables[result.ghost_idx];
+            usz slot_idx = (usz)(uint)current.slot_id;
+            assert(slot_idx < ghost.forwarding_records.len(), "slot_id out of bounds in ghost table during manual_extend");
+            ObjectRecord* record = &ghost.forwarding_records[slot_idx];
+            if (record.forwarded) {
+                current = record.forward_target;
+                hops++;
+                continue;
+            }
+        }
+        break;
+    }
+    usz region_idx = (usz)(uint)current.region_id;
+    assert(region_idx < self.region_generations.len(), "region_id out of bounds in manual_extend");
     RegionHandle region_handle = {
-        .region_id  = object_handle.region_id,
-        .generation = self.region_generations[(usz)(uint)object_handle.region_id]
+        .region_id  = current.region_id,
+        .generation = self.region_generations[region_idx]
     };
     return self.retain_region(region_handle);
 }
@@ -2222,8 +2325,13 @@ fn void thread_registry_shutdown() {
         prompt_stack_shutdown();
     }
 
-    // TODO: destroy all regions, free the registry
-    // For now, just free the registry struct
+    // Destroy all live regions' internals before freeing registry
+    for (usz i = 0; i < g_thread_registry.region_storage.len(); i++) {
+        if (g_thread_registry.region_alive_flags[i]) {
+            g_thread_registry.region_storage[i].destroy_internals();
+        }
+    }
+
     g_thread_registry.ghost_index.release();
     // Free region storage, etc.
     g_thread_registry.region_storage.free();
@@ -2363,10 +2471,11 @@ fn void write_barrier(RegionId storing_region, ObjectHandle handle) {
     }
 
     // Cross-region store: mark as escaped
+    RegionRegistry* reg = thread_registry();
     usz idx = (usz)(uint)handle.region_id;
-    if (idx < thread_registry().region_storage.len() &&
-        thread_registry().region_alive_flags[idx]) {
-        Region* home = &thread_registry().region_storage[idx];
+    if (idx < reg.region_storage.len() &&
+        reg.region_alive_flags[idx]) {
+        Region* home = &reg.region_storage[idx];
         ObjectRecord* rec = home.slot_table.get_record(handle.slot_id);
         if ((uint)rec.generation == (uint)handle.generation) {
             rec.escaped = true;
@@ -2407,11 +2516,78 @@ fn bool str_eq(char* s, char[] target) {
  * Main entry point.
  *
  * Usage:
- *   ./main         - Run all tests
- *   ./main -repl   - Start interactive REPL
- *   ./main --repl  - Start interactive REPL
+ *   ./main                              - Run all tests
+ *   ./main -repl                        - Start interactive REPL
+ *   ./main --repl                       - Start interactive REPL
+ *   ./main --compile input.lisp out.c3  - Compile Lisp to C3
+ *   ./main script.pik                   - Run a script file
  */
 fn int main(int argc, char** argv) {
+    // Check for compile flag
+    bool run_compile = false;
+    char* input_file = null;
+    char* output_file = null;
+    for (int i = 1; i < argc; i++) {
+        if (str_eq(argv[i], "--compile") || str_eq(argv[i], "-compile")) {
+            run_compile = true;
+            if (i + 1 < argc) {
+                input_file = argv[i + 1];
+            }
+            if (i + 2 < argc) {
+                output_file = argv[i + 2];
+            }
+            break;
+        }
+    }
+
+    if (run_compile) {
+        // Compile mode
+        if (input_file == null || output_file == null) {
+            io::printn("Usage: ./main --compile input.lisp output.c3");
+            return 1;
+        }
+
+        io::printfn("Compiling %s to %s...", (ZString)input_file, (ZString)output_file);
+
+        // Read input file
+        char[] input_path;
+        usz input_len = 0;
+        char* p = input_file;
+        while (*p != 0) { input_len++; p++; }
+        input_path = input_file[:input_len];
+
+        if (try source = io::file::load_temp((String)input_path)) {
+            // Initialize interpreter for symbol table (heap-allocated due to size)
+            lisp::Interp* interp = (lisp::Interp*)mem::malloc(lisp::Interp.sizeof);
+            interp.init();
+
+            // Compile to C3
+            char[] c3_code = lisp::compile_to_c3(source, interp);
+
+            // Write output file
+            char[] output_path;
+            usz output_len = 0;
+            p = output_file;
+            while (*p != 0) { output_len++; p++; }
+            output_path = output_file[:output_len];
+
+            if (try file = io::file::open((String)output_path, "w")) {
+                file.write(c3_code)!!;
+                file.close()!!;
+                io::printfn("Compilation successful: %s", (ZString)output_file);
+                mem::free(interp);
+                return 0;
+            } else {
+                io::printfn("Error: cannot write output file %s", (ZString)output_file);
+                mem::free(interp);
+                return 1;
+            }
+        } else {
+            io::printfn("Error: cannot read input file %s", (ZString)input_file);
+            return 1;
+        }
+    }
+
     // Check for REPL flag
     bool run_repl = false;
     for (int i = 1; i < argc; i++) {
@@ -2432,6 +2608,7 @@ fn int main(int argc, char** argv) {
         lisp::Interp* interp = (lisp::Interp*)mem::malloc(lisp::Interp.sizeof);
         interp.init();
         lisp::register_primitives(interp);
+        lisp::register_stdlib(interp);
 
         // Run REPL
         lisp::repl(interp);
@@ -2440,6 +2617,67 @@ fn int main(int argc, char** argv) {
         mem::free(interp);
         thread_registry_shutdown();
         return 0;
+    }
+
+    // Check for script file argument (any arg that isn't a known flag)
+    if (argc > 1) {
+        // argv[1] is not --compile, -repl, or --repl — treat as script file
+        char* script_file = argv[1];
+        usz script_path_len = 0;
+        char* sp = script_file;
+        while (*sp != 0) { script_path_len++; sp++; }
+        char[] script_path = script_file[:script_path_len];
+
+        // Read script file
+        if (try source = io::file::load_temp((String)script_path)) {
+            // Initialize thread-local registry
+            thread_registry_init();
+
+            // Initialize interpreter
+            lisp::Interp* interp = (lisp::Interp*)mem::malloc(lisp::Interp.sizeof);
+            interp.init();
+            lisp::register_primitives(interp);
+            lisp::register_stdlib(interp);
+
+            // Run the script (multiple expressions)
+            usz len = source.len;
+            if (len > 65535) len = 65535;
+            char[] src = source[:len];
+            lisp::EvalResult r = lisp::run_program(src, interp);
+
+            if (r.error.has_error) {
+                // Print error
+                usz msg_len = 0;
+                while (msg_len < 256 && r.error.message[msg_len] != 0) {
+                    msg_len++;
+                }
+                if (r.error.line > 0) {
+                    io::printf("Error at line %d, column %d: ", (int)r.error.line, (int)r.error.column);
+                } else {
+                    io::print("Error: ");
+                }
+                for (usz i = 0; i < msg_len; i++) {
+                    io::printf("%c", r.error.message[i]);
+                }
+                io::printn("");
+                mem::free(interp);
+                thread_registry_shutdown();
+                return 1;
+            }
+
+            // Print result if non-nil
+            if (r.value != null && !lisp::is_nil(r.value)) {
+                lisp::print_value(r.value, &interp.symbols);
+                io::printn("");
+            }
+
+            mem::free(interp);
+            thread_registry_shutdown();
+            return 0;
+        } else {
+            io::printfn("Error: cannot read script file '%s'", (ZString)script_file);
+            return 1;
+        }
     }
 
     // Run tests mode
@@ -2463,12 +2701,12 @@ fn int main(int argc, char** argv) {
     // - Effect handler patterns
     run_delimited_tests();
 
-    // Run Lisp interpreter tests
-    lisp::run_lisp_tests();
-
-    // Initialize thread-local registry (replaces manual RegionRegistry creation)
+    // Initialize thread-local registry BEFORE Lisp tests (interpreter uses regions)
     thread_registry_init();
     io::printfn("Thread-local registry initialized, root id=%d", (uint)thread_registry().root_id);
+
+    // Run Lisp interpreter tests
+    lisp::run_lisp_tests();
 
     // Create a child region using convenience function
     RegionHandle child = create_region();
