@@ -190,6 +190,7 @@ fn void context_restore(RegisterContext* ctx, int value) @naked @noreturn {
 fn void* get_stack_pointer() @naked {
     asm {
         movq $rax, $rsp;
+        addq $rax, 8;
         ret;
     }
 }
@@ -228,16 +229,27 @@ fn void* get_return_address() @naked {
 // This file provides helper functions for working with stack segments.
 //
 
+// Maximum allowed stack copy size (1 MB) — prevents buffer overflow from
+// incorrect pointer arithmetic or corrupted size values.
+const usz MAX_STACK_COPY_SIZE = 1048576;
+
 /**
  * Copy memory from source to destination.
  *
  * Simple byte-by-byte copy. Used for stack segment capture/restore.
+ * Validates size is within bounds before copying.
  *
  * @param dest Destination buffer
  * @param src  Source buffer
  * @param size Number of bytes to copy
  */
 fn void stack_copy(void* dest, void* src, usz size) @inline {
+    // Guard: skip zero-size copies and reject sizes that indicate
+    // pointer arithmetic errors or wraparound (usz is unsigned, so
+    // very large values signal a bug).
+    if (size == 0 || size > MAX_STACK_COPY_SIZE) {
+        return;
+    }
     char* d = (char*)dest;
     char* s = (char*)src;
     for (usz i = 0; i < size; i++) {
@@ -514,6 +526,13 @@ fn bool is_valid_register_context(RegisterContext* ctx) {
 
     // Instruction pointer should be non-null
     if (ctx.ip == null) return false;
+
+    // Frame pointer should be non-null and aligned
+    if (ctx.fp == null) return false;
+    if ((usz)ctx.fp & 0x7 != 0) return false;  // 8-byte aligned
+
+    // Frame pointer should be at or above stack pointer (stack grows down)
+    if ((usz)ctx.fp < (usz)ctx.sp) return false;
 
     return true;
 }

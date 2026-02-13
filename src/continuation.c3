@@ -204,7 +204,7 @@ const uint PLATFORM_UNKNOWN = 0;
  * stack/frame pointers needed to resume execution.
  *
  * Implementation notes:
- * - Uses a 64-byte buffer to accommodate most architectures' jmp_buf
+ * - Uses a 256-byte buffer to safely accommodate RegisterContext (~160 bytes)
  * - Explicit IP/SP/FP fields for clarity and direct access
  * - Platform ID enables validation when resuming across contexts
  *
@@ -214,11 +214,11 @@ const uint PLATFORM_UNKNOWN = 0;
 struct SavedContext {
     /**
      * Register state buffer.
-     * 64 bytes covers most architectures' register save requirements:
-     * - x86_64: ~48 bytes for callee-saved registers
-     * - AArch64: ~64 bytes for x19-x29 + lr
+     * 256 bytes to safely accommodate RegisterContext (~160 bytes on x86_64:
+     * ulong[16] gpr + sp/ip/fp pointers + flags + padding).
+     * Must be large enough for any platform's register save area.
      */
-    char[64] registers;
+    char[256] registers;
 
     /** Instruction pointer at capture point */
     void* instruction_ptr;
@@ -244,7 +244,7 @@ struct SavedContext {
 fn SavedContext saved_context_empty() {
     SavedContext ctx;
     // Zero the register buffer
-    for (usz i = 0; i < 64; i++) {
+    for (usz i = 0; i < 256; i++) {
         ctx.registers[i] = 0;
     }
     ctx.instruction_ptr = null;
@@ -273,10 +273,7 @@ fn bool SavedContext.is_valid(SavedContext* self) {
  * @return Platform identifier constant
  */
 fn uint get_current_platform_id() {
-    // Use pointer size as a simple runtime check
-    // In production, this would use compile-time detection
-    // For portability, we default to UNKNOWN and let callers handle it
-    return PLATFORM_UNKNOWN;
+    return PLATFORM_X86_64_LINUX;
 }
 
 // -----------------------------------------------------------------------------
@@ -593,6 +590,13 @@ fn void PromptStack.init(PromptStack* self) {
  * is freed when the region dies).
  */
 fn void PromptStack.release(PromptStack* self) {
+    // Free continuation stack data before freeing the list
+    foreach (&cont : self.continuations) {
+        if (cont.stack.data != null) {
+            mem::free(cont.stack.data);
+            cont.stack.data = null;
+        }
+    }
     self.frames.free();
     self.continuations.free();
 }
@@ -745,6 +749,7 @@ fn Continuation* PromptStack.alloc_continuation(PromptStack* self,
                                                   RegionId region_id,
                                                   Generation region_gen) {
     ContinuationId id = self.next_cont_id;
+    assert((uint)self.next_cont_id < uint.max, "continuation ID counter overflow");
     self.next_cont_id = (ContinuationId)((uint)self.next_cont_id + 1);
 
     Continuation cont = continuation_empty();
@@ -807,6 +812,11 @@ fn void PromptStack.invalidate_region_continuations(PromptStack* self,
         if ((uint)cont.home_region == (uint)region_id &&
             (uint)cont.home_generation == (uint)region_gen) {
             cont.status = INVALIDATED;
+            // Free stack data since continuation is now invalid
+            if (cont.stack.data != null) {
+                mem::free(cont.stack.data);
+                cont.stack.data = null;
+            }
         }
     }
 }
@@ -857,6 +867,11 @@ fn usz PromptStack.gc_continuations(PromptStack* self) {
         Continuation* cont = &self.continuations[read_idx];
 
         if (cont.status == COMPLETED || cont.status == INVALIDATED) {
+            // Free stack data to prevent memory leak
+            if (cont.stack.data != null) {
+                mem::free(cont.stack.data);
+                cont.stack.data = null;
+            }
             removed++;
         } else {
             // Keep this continuation - move it to write position

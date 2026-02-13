@@ -3,7 +3,7 @@
 **Version:** 0.1.0
 **Date:** 2026-02-11
 
-Pika Lisp is a minimal Lisp dialect with first-class delimited continuations, algebraic effects, and OmniLisp-inspired syntax. It runs on a region-based memory system implemented in C3.
+Pika Lisp is a minimal Lisp dialect with first-class delimited continuations and algebraic effects. It runs on a region-based memory system implemented in C3.
 
 ---
 
@@ -63,18 +63,6 @@ null?
 ()
 ```
 
-### 1.3 OmniLisp Character Calculus (Partial)
-
-Pika Lisp adopts elements from OmniLisp's Character Calculus:
-
-| Character | Domain | Meaning |
-|-----------|--------|---------|
-| `()` | Flow | Execution / function application |
-| `[]` | Slot | Data / array literals (planned) |
-| `.[` | Path+Slot | Index access |
-| `.` | Path | Field/module navigation |
-| `'` | Quote | Prevent evaluation |
-
 ---
 
 ## 2. Data Types
@@ -99,8 +87,8 @@ Pika Lisp adopts elements from OmniLisp's Character Calculus:
 
 ### 2.3 Truthiness
 
-- **Falsy values:** `nil`, `false` symbol, `0`
-- **Truthy values:** Everything else
+- **Falsy values:** `nil`, `false` symbol
+- **Truthy values:** Everything else (including `0`)
 
 ---
 
@@ -121,17 +109,17 @@ Creates a closure capturing the lexical environment.
 
 **Note:** Currently single-parameter only. Multi-parameter functions use currying.
 
-### 3.2 `def` — Global Definition
+### 3.2 `define` — Global Definition
 
 ```lisp
-(def name value)
+(define name value)
 ```
 
 Binds `name` to `value` in the global environment.
 
 ```lisp
-(def pi 3)
-(def inc (lambda (x) (+ x 1)))
+(define pi 3)
+(define inc (lambda (x) (+ x 1)))
 ```
 
 ### 3.3 `let` — Local Binding
@@ -173,13 +161,77 @@ Returns `datum` unevaluated as a value.
 '(1 2 3)      ; => list (1 2 3)
 ```
 
+### 3.6 `match` — Pattern Matching
+
+```lisp
+(match expr
+  (pattern1 result1)
+  (pattern2 result2)
+  ...)
+```
+
+Matches `expr` against patterns in order, evaluating the first matching result.
+
+#### Patterns:
+| Pattern | Description |
+|---------|-------------|
+| `_` | Wildcard — matches anything |
+| `x` | Variable — matches anything, binds to `x` |
+| `42`, `"hello"` | Literal — matches exact value |
+| `'symbol` | Quoted — matches symbol |
+| `[a b c]` | Sequence — exact length match |
+| `[head .. tail]` | Head-tail — first element + rest |
+| `[x y ..]` | Prefix — first N elements, ignore rest |
+| `[.. last]` | Suffix — skip to last elements |
+
+```lisp
+(match x
+  (0 "zero")
+  (1 "one")
+  (n (string-append "other: " n)))
+
+; Destructuring lists
+(match '(1 2 3)
+  ([a b c] (+ a (+ b c))))  ; => 6
+
+; Head-tail decomposition
+(match '(10 20 30)
+  ([head .. tail] head))    ; => 10
+```
+
+### 3.7 `and` — Short-circuit And
+
+```lisp
+(and expr1 expr2)
+```
+
+Returns `expr1` if falsy (without evaluating `expr2`), otherwise returns `expr2`.
+
+```lisp
+(and true 42)    ; => 42
+(and nil 42)     ; => nil
+```
+
+### 3.8 `or` — Short-circuit Or
+
+```lisp
+(or expr1 expr2)
+```
+
+Returns `expr1` if truthy (without evaluating `expr2`), otherwise returns `expr2`.
+
+```lisp
+(or 42 99)     ; => 42
+(or nil 99)    ; => 99
+```
+
 ---
 
 ## 4. Path and Index Notation
 
 ### 4.1 Dot-Bracket Index Access
 
-Pika Lisp uses OmniLisp's dot-bracket notation for collection indexing:
+Pika Lisp uses dot-bracket notation for collection indexing:
 
 ```lisp
 collection.[index]
@@ -190,19 +242,19 @@ The `.` (dot) indicates path/navigation, and `[...]` contains the index expressi
 #### List Indexing
 
 ```lisp
-(def mylist '(10 20 30 40 50))
+(define mylist '(10 20 30 40 50))
 
 mylist.[0]      ; => 10
 mylist.[2]      ; => 30
 
-(def idx 3)
+(define idx 3)
 mylist.[idx]    ; => 40 (variable index)
 ```
 
 #### String Indexing
 
 ```lisp
-(def s "hello")
+(define s "hello")
 
 s.[0]           ; => 104 (ASCII code for 'h')
 s.[1]           ; => 101 (ASCII code for 'e')
@@ -214,7 +266,7 @@ s.[1]           ; => 101 (ASCII code for 'e')
 matrix.[i].[j]  ; access element at row i, column j
 ```
 
-### 4.2 Path Notation (Planned)
+### 4.2 Path Notation
 
 Field access using dot notation:
 
@@ -271,6 +323,7 @@ person.address.city ; nested field access
 | `list` | variadic | Create list from args |
 | `null?` | 1 | Check if nil |
 | `pair?` | 1 | Check if cons cell |
+| `length` | 1 | List length |
 
 ```lisp
 (cons 1 2)           ; => (1 . 2)
@@ -292,7 +345,7 @@ person.address.city ; nested field access
 ```lisp
 (not nil)     ; => true
 (not true)    ; => nil
-(not 0)       ; => true (0 is falsy)
+(not 0)       ; => nil (0 is truthy)
 ```
 
 ### 5.5 I/O
@@ -357,6 +410,22 @@ person.address.city ; nested field access
 (read-file "test.txt")                  ; => "Hello\nWorld"
 (file-exists? "test.txt")               ; => true
 (read-lines "test.txt")                 ; => ("Hello" "World")
+```
+
+### 5.8 Type Predicates
+
+| Primitive | Description |
+|-----------|-------------|
+| `int?` | Check if integer |
+| `string?` | Check if string |
+| `symbol?` | Check if symbol |
+| `closure?` | Check if closure |
+| `continuation?` | Check if continuation |
+
+```lisp
+(int? 42)        ; => true
+(string? "hi")   ; => true
+(closure? +)     ; => nil (+ is a primitive)
 ```
 
 ---
@@ -458,11 +527,11 @@ Launch the interactive REPL with:
 ```
 Lisp REPL (type 'quit' or 'exit' to leave)
 ---
-> (def x 10)
+> (define x 10)
 10
 > (+ x 5)
 15
-> (def inc (lambda (n) (+ n 1)))
+> (define inc (lambda (n) (+ n 1)))
 #<closure>
 > (inc x)
 11
@@ -477,7 +546,7 @@ Goodbye!
 ### 9.1 Factorial
 
 ```lisp
-(def fact
+(define fact
   (lambda (n)
     (if (= n 0)
         1
@@ -489,7 +558,7 @@ Goodbye!
 ### 9.2 Map Function
 
 ```lisp
-(def map
+(define map
   (lambda (f)
     (lambda (lst)
       (if (null? lst)
@@ -503,18 +572,18 @@ Goodbye!
 ### 9.3 List Indexing with Dot-Bracket
 
 ```lisp
-(def data '(10 20 30 40 50))
+(define data '(10 20 30 40 50))
 
 ; Access by literal index
 data.[0]    ; => 10
 data.[2]    ; => 30
 
 ; Access by variable
-(def i 4)
+(define i 4)
 data.[i]    ; => 50
 
 ; Nested lists
-(def matrix '((1 2 3) (4 5 6) (7 8 9)))
+(define matrix '((1 2 3) (4 5 6) (7 8 9)))
 matrix.[0].[0]   ; => 1
 matrix.[1].[2]   ; => 6
 ```
@@ -523,13 +592,13 @@ matrix.[1].[2]   ; => 6
 
 ```lisp
 ; Read a file and count lines
-(def count-lines
+(define count-lines
   (lambda (path)
     (let ((lines (read-lines path)))
       (length lines))))
 
 ; Write uppercase version of file
-(def upcase-file
+(define upcase-file
   (lambda (in-path)
     (lambda (out-path)
       (let ((content (read-file in-path)))
@@ -602,21 +671,6 @@ Binary primitives like `+` return a partial application when given one argument.
 - Maximum values: 4096
 - Single-threaded evaluation
 - No garbage collection (region-based cleanup)
-
----
-
-## Appendix C: Comparison with OmniLisp
-
-| Feature | OmniLisp | Pika Lisp |
-|---------|----------|-----------|
-| Index notation | `arr.[0]` | `arr.[0]` ✓ |
-| Dict access | `dict.[:key]` | `dict.['key]` (quoted symbol) |
-| Keywords | `:key` (reader sugar for `'key`) | No keywords, use `'key` |
-| Flow domain | `()` | `()` ✓ |
-| Slot domain | `[]` | Planned |
-| Kind domain | `{}` | Not implemented |
-| Tag domain | `^` | Not implemented |
-| Path domain | `.` | Partial (indexing works) |
 
 ---
 

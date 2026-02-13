@@ -21,6 +21,9 @@ import std::collections::list;
 /** Sentinel value for empty slots in the ghost index. */
 const ulong GHOST_INDEX_EMPTY = ulong.max;
 
+/** Sentinel value for tombstoned (deleted) slots in the ghost index. */
+const ulong GHOST_INDEX_TOMBSTONE = ulong.max - (ulong)1;
+
 /**
  * GhostIndexEntry — A single entry in the ghost index hash map.
  *
@@ -123,9 +126,9 @@ fn void GhostIndex.resize(GhostIndex* self) {
     self.capacity = new_capacity;
     self.count = 0;
 
-    // Re-insert all existing entries
+    // Re-insert all existing entries (skip empty and tombstone slots)
     foreach (&entry : old_entries) {
-        if (entry.key != GHOST_INDEX_EMPTY) {
+        if (entry.key != GHOST_INDEX_EMPTY && entry.key != GHOST_INDEX_TOMBSTONE) {
             self.insert_entry(entry.key, entry.host_id, entry.ghost_idx);
         }
     }
@@ -135,7 +138,8 @@ fn void GhostIndex.resize(GhostIndex* self) {
 
 /**
  * Insert an entry into the ghost index by raw key.
- * Does not check for duplicates - caller must ensure uniqueness.
+ * Checks for duplicates and updates in-place if the key already exists.
+ * Also reuses tombstone slots during probing.
  *
  * @param key       The 64-bit composite key
  * @param host_id   Region holding the ghost table
@@ -150,14 +154,26 @@ fn void GhostIndex.insert_entry(GhostIndex* self, ulong key, RegionId host_id, u
     usz mask = self.capacity - 1;
     usz idx = ghost_index_hash(key) & mask;
 
-    // Linear probing to find empty slot
+    // Linear probing: check for duplicates, reuse tombstones
+    usz first_tombstone = usz.max;  // Track first tombstone for reuse
     while (self.entries[idx].key != GHOST_INDEX_EMPTY) {
+        if (self.entries[idx].key == key) {
+            // Duplicate key found — update in-place
+            self.entries[idx].host_id = host_id;
+            self.entries[idx].ghost_idx = ghost_idx;
+            return;
+        }
+        if (self.entries[idx].key == GHOST_INDEX_TOMBSTONE && first_tombstone == usz.max) {
+            first_tombstone = idx;
+        }
         idx = (idx + 1) & mask;
     }
 
-    self.entries[idx].key = key;
-    self.entries[idx].host_id = host_id;
-    self.entries[idx].ghost_idx = ghost_idx;
+    // Use tombstone slot if available, otherwise use the empty slot
+    usz target = (first_tombstone != usz.max) ? first_tombstone : idx;
+    self.entries[target].key = key;
+    self.entries[target].host_id = host_id;
+    self.entries[target].ghost_idx = ghost_idx;
     self.count++;
 }
 
@@ -192,7 +208,7 @@ fn GhostLookupResult GhostIndex.lookup(GhostIndex* self, RegionId source_id, Gen
     usz idx = ghost_index_hash(key) & mask;
     usz start = idx;
 
-    // Linear probing
+    // Linear probing (skip tombstones, stop at empty)
     do {
         if (self.entries[idx].key == key) {
             return {
@@ -205,6 +221,7 @@ fn GhostLookupResult GhostIndex.lookup(GhostIndex* self, RegionId source_id, Gen
             // Empty slot means key not in table
             return { .found = false, .host_id = 0, .ghost_idx = 0 };
         }
+        // Tombstone slots are skipped — continue probing
         idx = (idx + 1) & mask;
     } while (idx != start);
 
@@ -235,7 +252,7 @@ fn bool GhostIndex.update(GhostIndex* self, RegionId source_id, Generation gen,
     usz idx = ghost_index_hash(key) & mask;
     usz start = idx;
 
-    // Linear probing to find the entry
+    // Linear probing to find the entry (skip tombstones, stop at empty)
     do {
         if (self.entries[idx].key == key) {
             // Found it — update the values
@@ -247,6 +264,46 @@ fn bool GhostIndex.update(GhostIndex* self, RegionId source_id, Generation gen,
             // Empty slot means key not in table
             return false;
         }
+        // Tombstone slots are skipped — continue probing
+        idx = (idx + 1) & mask;
+    } while (idx != start);
+
+    return false;
+}
+
+/**
+ * Remove an entry from the ghost index by source region ID and generation.
+ *
+ * Uses tombstone-based deletion: the entry's key is replaced with
+ * GHOST_INDEX_TOMBSTONE so that linear probing continues past it.
+ *
+ * @param source_id  The dead region's ID
+ * @param gen        The dead region's generation
+ * @return true if entry was found and removed, false if not found
+ */
+fn bool GhostIndex.remove(GhostIndex* self, RegionId source_id, Generation gen) {
+    if (self.capacity == 0) {
+        return false;
+    }
+
+    ulong key = ghost_index_make_key(source_id, gen);
+    usz mask = self.capacity - 1;
+    usz idx = ghost_index_hash(key) & mask;
+    usz start = idx;
+
+    // Linear probing to find the entry (skip tombstones, stop at empty)
+    do {
+        if (self.entries[idx].key == key) {
+            // Found it — mark as tombstone
+            self.entries[idx].key = GHOST_INDEX_TOMBSTONE;
+            self.count--;
+            return true;
+        }
+        if (self.entries[idx].key == GHOST_INDEX_EMPTY) {
+            // Empty slot means key not in table
+            return false;
+        }
+        // Tombstone slots are skipped — continue probing
         idx = (idx + 1) & mask;
     } while (idx != start);
 

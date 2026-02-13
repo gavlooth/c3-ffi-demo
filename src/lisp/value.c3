@@ -2,6 +2,7 @@ module lisp;
 
 import std::collections::list;
 import std::io;
+import main;
 
 // =============================================================================
 // SECTION 1: VALUE TYPES
@@ -20,6 +21,9 @@ enum ValueTag : char {
     CONTINUATION,
     PRIMITIVE,
     PARTIAL_PRIM,   // Partially applied primitive (curried)
+    ERROR,          // Error value (carries error message in str_val)
+    HASHMAP,        // Hash map (mutable dictionary)
+    FFI_HANDLE,     // FFI library handle (dlopen result)
 }
 
 /**
@@ -29,8 +33,21 @@ typedef SymbolId = uint;
 
 // Maximum symbol name length
 const usz MAX_SYMBOL_LEN = 64;
+// Maximum string value length (for StringVal, file reads, string ops)
+const usz MAX_STRING_LEN = 4096;
 // Maximum number of symbols
-const usz MAX_SYMBOLS = 256;
+const usz MAX_SYMBOLS = 512;
+// Maximum number of macros in the macro table
+const usz MAX_MACROS = 64;
+// Maximum number of modules in the module table
+const usz MAX_MODULES = 32;
+// Hash table sizes for macro/module lookup (2x max entries for good load factor)
+const usz MACRO_HASH_SIZE = 128;   // 2 * MAX_MACROS
+const usz MODULE_HASH_SIZE = 64;   // 2 * MAX_MODULES
+// Hash table size for symbol intern (must be power of 2, >= 2*MAX_SYMBOLS)
+const usz HASH_TABLE_SIZE = 1024;
+// Invalid symbol ID sentinel (returned on exhaustion; must not alias any valid index)
+const SymbolId INVALID_SYMBOL_ID = (SymbolId)0xFFFFFFFF;
 
 /**
  * SymbolEntry — Storage for a single interned symbol name.
@@ -46,39 +63,84 @@ struct SymbolEntry {
 struct SymbolTable {
     SymbolEntry[MAX_SYMBOLS] entries;
     usz count;
+    SymbolId[HASH_TABLE_SIZE] hash_index;  // Maps hash slot → symbol index (INVALID_SYMBOL_ID = empty)
 }
 
 fn void SymbolTable.init(SymbolTable* self) {
     self.count = 0;
+    // Initialize hash table slots to empty
+    for (usz i = 0; i < HASH_TABLE_SIZE; i++) {
+        self.hash_index[i] = INVALID_SYMBOL_ID;
+    }
+}
+
+/**
+ * hash_symbol — FNV-1a hash for symbol names.
+ */
+fn usz hash_symbol(char[] name) {
+    usz h = 2166136261;  // FNV offset basis (32-bit)
+    for (usz i = 0; i < name.len; i++) {
+        h ^= (usz)name[i];
+        h *= 16777619;   // FNV prime (32-bit)
+    }
+    return h;
 }
 
 fn SymbolId SymbolTable.intern(SymbolTable* self, char[] name) {
-    // Check if already interned
-    for (usz i = 0; i < self.count; i++) {
-        if (self.entries[i].len == name.len) {
+    usz h = hash_symbol(name);
+    usz mask = HASH_TABLE_SIZE - 1;
+
+    // Hash table lookup with linear probing
+    for (usz probe = 0; probe < HASH_TABLE_SIZE; probe++) {
+        usz slot = (h + probe) & mask;
+        SymbolId sid = self.hash_index[slot];
+        if (sid == INVALID_SYMBOL_ID) {
+            // Empty slot: symbol not in hash table, stop probing
+            break;
+        }
+        // Check if this slot's entry matches
+        usz idx = (usz)sid;
+        if (self.entries[idx].len == name.len) {
             bool match = true;
             for (usz j = 0; j < name.len; j++) {
-                if (self.entries[i].name[j] != name[j]) {
+                if (self.entries[idx].name[j] != name[j]) {
                     match = false;
                     break;
                 }
             }
             if (match) {
-                return (SymbolId)i;
+                return sid;
             }
         }
     }
-    // New symbol
-    assert(self.count < MAX_SYMBOLS, "symbol table exhausted");
+
+    // Not found — insert new symbol
+    if (self.count >= MAX_SYMBOLS) {
+        io::eprintfn("error: symbol table exhausted (max %d symbols)", MAX_SYMBOLS);
+        return INVALID_SYMBOL_ID;
+    }
     SymbolId id = (SymbolId)self.count;
     usz len = name.len;
-    if (len > MAX_SYMBOL_LEN - 1) len = MAX_SYMBOL_LEN - 1;
+    if (len > MAX_SYMBOL_LEN - 1) {
+        io::eprintfn("WARNING: symbol name truncated to %d bytes", MAX_SYMBOL_LEN - 1);
+        len = MAX_SYMBOL_LEN - 1;
+    }
     for (usz i = 0; i < len; i++) {
         self.entries[self.count].name[i] = name[i];
     }
     self.entries[self.count].name[len] = 0;
     self.entries[self.count].len = len;
     self.count++;
+
+    // Insert into hash table
+    for (usz probe = 0; probe < HASH_TABLE_SIZE; probe++) {
+        usz slot = (h + probe) & mask;
+        if (self.hash_index[slot] == INVALID_SYMBOL_ID) {
+            self.hash_index[slot] = id;
+            break;
+        }
+    }
+
     return id;
 }
 
@@ -98,11 +160,17 @@ struct Cons {
 
 /**
  * Closure — Lambda with captured environment.
+ * Supports variadic lambdas: (lambda (x y .. rest) body)
  */
 struct Closure {
-    SymbolId  param;      // Parameter name (single arg for simplicity)
-    Expr*     body;       // Body expression
-    Env*      env;        // Captured environment
+    SymbolId  param;          // Parameter name (first/only param, or unused if param_count==0)
+    SymbolId[64] params;      // All fixed params (including first)
+    usz       param_count;    // Number of fixed params
+    bool      has_rest;       // True if variadic (.. rest)
+    SymbolId  rest_param;     // Rest parameter name (if has_rest)
+    Expr*     body;           // Body expression
+    Env*      env;            // Captured environment
+    bool      has_param;      // false for zero-arg lambdas: (lambda () body)
 }
 
 /**
@@ -137,8 +205,67 @@ struct PartialPrim {
  * StringVal — String value storage.
  */
 struct StringVal {
-    char[MAX_SYMBOL_LEN] chars;
+    char[MAX_STRING_LEN] chars;
     usz len;
+}
+
+/**
+ * HashEntry — Single key-value pair in a hash map.
+ */
+struct HashEntry {
+    Value* key;     // null = empty slot
+    Value* value;
+}
+
+/**
+ * HashMap — Open-addressing hash map with linear probing.
+ */
+struct HashMap {
+    HashEntry* entries;  // contiguous array (region-allocated)
+    uint capacity;       // power of 2
+    uint count;
+    uint mask;           // capacity - 1
+}
+
+/**
+ * MacroClause — Single clause in a pattern-based macro definition.
+ * Pattern matches against args, template is a Value* datum for substitution.
+ */
+struct MacroClause {
+    Pattern* pattern;    // Pattern to match macro args against
+    Value*   tmpl;       // Template datum (Value*) for expansion
+}
+
+/**
+ * CapturedBinding — A definition-time binding captured for macro hygiene.
+ * Stores a snapshot of a symbol's value at macro definition time.
+ */
+struct CapturedBinding {
+    SymbolId sym;
+    Value*   value;
+}
+
+/**
+ * MacroDef — Stored macro definition (pattern-based).
+ * (define [macro] name (pattern1 template1) (pattern2 template2) ...)
+ * captured_bindings stores a SNAPSHOT of template literal values at definition time,
+ * preventing expansion-site shadowing from capturing them.
+ */
+struct MacroDef {
+    SymbolId name;
+    MacroClause[8] clauses;
+    usz clause_count;
+    CapturedBinding[32] captured_bindings;  // Snapshot of def-time bindings for hygiene
+    usz captured_count;
+}
+
+/**
+ * FfiHandle — Foreign library handle from dlopen().
+ */
+struct FfiHandle {
+    void*    lib_handle;     // dlopen() result
+    char[256] lib_name;      // for display/debugging
+    usz      name_len;
 }
 
 /**
@@ -156,6 +283,8 @@ struct Value {
         Continuation* cont_val;      // From our continuation system
         Primitive     prim_val;
         PartialPrim   partial_val;   // Curried primitive
+        HashMap*      hashmap_val;   // Hash map
+        FfiHandle     ffi_val;       // FFI library handle
     }
 }
 
@@ -180,7 +309,10 @@ fn Value* make_string(Interp* interp, char[] str) {
     Value* v = interp.alloc_value();
     v.tag = STRING;
     usz len = str.len;
-    if (len > MAX_SYMBOL_LEN - 1) len = MAX_SYMBOL_LEN - 1;
+    if (len > MAX_STRING_LEN - 1) {
+        io::eprintfn("WARNING: string truncated from %d to %d bytes", str.len, MAX_STRING_LEN - 1);
+        len = MAX_STRING_LEN - 1;
+    }
     for (usz i = 0; i < len; i++) {
         v.str_val.chars[i] = str[i];
     }
@@ -208,8 +340,26 @@ fn Value* make_closure(Interp* interp, SymbolId param, Expr* body, Env* env) @in
     Value* v = interp.alloc_value();
     v.tag = CLOSURE;
     v.closure_val.param = param;
+    v.closure_val.params[0] = param;
+    v.closure_val.param_count = 1;
+    v.closure_val.has_rest = false;
+    v.closure_val.rest_param = 0;
     v.closure_val.body = body;
     v.closure_val.env = env;
+    v.closure_val.has_param = true;
+    return v;
+}
+
+fn Value* make_closure_no_param(Interp* interp, Expr* body, Env* env) @inline {
+    Value* v = interp.alloc_value();
+    v.tag = CLOSURE;
+    v.closure_val.param = 0;
+    v.closure_val.param_count = 0;
+    v.closure_val.has_rest = false;
+    v.closure_val.rest_param = 0;
+    v.closure_val.body = body;
+    v.closure_val.env = env;
+    v.closure_val.has_param = false;
     return v;
 }
 
@@ -225,13 +375,50 @@ fn Value* make_primitive(Interp* interp, char[] name, PrimitiveFn func, int arit
     v.tag = PRIMITIVE;
     // Copy name into fixed buffer
     usz len = name.len;
-    if (len > 31) len = 31;
+    if (len > 31) {
+        io::eprintfn("WARNING: primitive name truncated to 31 bytes");
+        len = 31;
+    }
     for (usz i = 0; i < len; i++) {
         v.prim_val.name[i] = name[i];
     }
     v.prim_val.name[len] = 0;
     v.prim_val.func = func;
     v.prim_val.arity = arity;
+    return v;
+}
+
+fn Value* make_ffi_handle(Interp* interp, void* handle, char[] name) {
+    // Allocate in root_region so handle survives REPL line reclamation
+    main::RegionHandle saved = interp.current_frame;
+    interp.current_frame = interp.root_region;
+    Value* v = interp.alloc_value();
+    v.tag = FFI_HANDLE;
+    v.ffi_val.lib_handle = handle;
+    usz len = name.len;
+    if (len > 255) {
+        io::eprintfn("WARNING: FFI handle name truncated from %d to 255 bytes", name.len);
+        len = 255;
+    }
+    for (usz i = 0; i < len; i++) {
+        v.ffi_val.lib_name[i] = name[i];
+    }
+    v.ffi_val.lib_name[len] = 0;
+    v.ffi_val.name_len = len;
+    interp.current_frame = saved;
+    return v;
+}
+
+fn Value* make_error(Interp* interp, char[] msg) {
+    Value* v = interp.alloc_value();
+    v.tag = ERROR;
+    usz len = msg.len;
+    if (len > MAX_STRING_LEN - 1) len = MAX_STRING_LEN - 1;
+    for (usz i = 0; i < len; i++) {
+        v.str_val.chars[i] = msg[i];
+    }
+    v.str_val.chars[len] = 0;
+    v.str_val.len = len;
     return v;
 }
 
@@ -269,6 +456,14 @@ fn bool is_continuation(Value* v) @inline {
 
 fn bool is_primitive(Value* v) @inline {
     return v != null && v.tag == PRIMITIVE;
+}
+
+fn bool is_error(Value* v) @inline {
+    return v != null && v.tag == ERROR;
+}
+
+fn bool is_ffi_handle(Value* v) @inline {
+    return v != null && v.tag == FFI_HANDLE;
 }
 
 fn bool is_list(Value* v) {
@@ -321,7 +516,7 @@ fn usz list_length(Value* v) {
 // =============================================================================
 
 // Maximum bindings per environment frame
-const usz MAX_BINDINGS = 64;
+const usz MAX_BINDINGS = 256;
 
 /**
  * Binding — Single name-value binding.
@@ -348,7 +543,18 @@ fn Env* make_env(Interp* interp, Env* parent) {
 }
 
 fn void Env.define(Env* self, SymbolId name, Value* value) {
-    assert(self.binding_count < MAX_BINDINGS, "environment frame exhausted");
+    // Check if binding already exists and update it
+    for (usz i = 0; i < self.binding_count; i++) {
+        if (self.bindings[i].name == name) {
+            self.bindings[i].value = value;
+            return;
+        }
+    }
+    // Add new binding
+    if (self.binding_count >= MAX_BINDINGS) {
+        io::eprintfn("ERROR: environment binding limit exceeded (%d)", MAX_BINDINGS);
+        return;
+    }
     self.bindings[self.binding_count].name = name;
     self.bindings[self.binding_count].value = value;
     self.binding_count++;
@@ -366,6 +572,17 @@ fn Value* Env.lookup(Env* self, SymbolId name) {
         return self.parent.lookup(name);
     }
     return null;  // Not found
+}
+
+fn bool Env.set(Env* self, SymbolId name, Value* value) {
+    for (usz i = 0; i < self.binding_count; i++) {
+        if (self.bindings[i].name == name) {
+            self.bindings[i].value = value;
+            return true;
+        }
+    }
+    if (self.parent != null) return self.parent.set(name, value);
+    return false;
 }
 
 fn Env* Env.extend(Env* self, Interp* interp, SymbolId name, Value* value) {
@@ -391,14 +608,26 @@ enum ExprTag : char {
     E_APP,        // (f arg)
     E_IF,         // (if test then else)
     E_LET,        // (let ((x val)) body)
-    E_DEF,        // (def name val)
+    E_DEFINE,     // (define name val)
     E_QUOTE,      // (quote datum)
     E_RESET,      // (reset body)
     E_SHIFT,      // (shift k body)
     E_PERFORM,    // (perform tag arg)
     E_HANDLE,     // (handle body ((tag k x) handler) ...)
-    E_INDEX,      // arr.[0], dict.['key] - OmniLisp index access
+    E_INDEX,      // arr.[0] - path index access
     E_PATH,       // point.x, person.address.city - field access
+    E_MATCH,      // (match expr (pattern result) ...)
+    E_AND,        // (and left right) - short-circuit boolean and
+    E_OR,         // (or left right) - short-circuit boolean or
+    E_CALL,       // (f a b c) - multi-arg call (not curried)
+    E_BEGIN,      // (begin e1 e2 ... en) - sequence, returns last
+    E_SET,        // (set! name value) - variable mutation
+    E_QUASIQUOTE, // `template - quasiquote
+    E_UNQUOTE,    // ,expr - unquote (inside quasiquote)
+    E_UNQUOTE_SPLICING, // ,@expr - unquote-splicing (inside quasiquote)
+    E_DEFMACRO,   // (defmacro name transformer) - macro definition
+    E_MODULE,     // (module name (export ...) body...) - module definition
+    E_IMPORT,     // (import name) - module import
 }
 
 struct ExprLit {
@@ -410,7 +639,11 @@ struct ExprVar {
 }
 
 struct ExprLambda {
-    SymbolId param;
+    SymbolId param;           // First/only param (or unused if param_count==0)
+    SymbolId[64] params;      // All fixed params
+    usz      param_count;     // Number of fixed params
+    bool     has_rest;        // True if variadic (.. rest)
+    SymbolId rest_param;      // Rest parameter name
     Expr*    body;
 }
 
@@ -429,9 +662,10 @@ struct ExprLet {
     SymbolId name;
     Expr*    init;
     Expr*    body;
+    bool     is_recursive;  // true for (let ^rec ...) recursive bindings
 }
 
-struct ExprDef {
+struct ExprDefine {
     SymbolId name;
     Expr*    value;
 }
@@ -487,6 +721,193 @@ struct ExprPath {
     usz segment_count;
 }
 
+// =============================================================================
+// SECTION 6.5: PATTERN MATCHING
+// =============================================================================
+
+// Maximum elements in a sequence pattern
+const usz MAX_PATTERN_ELEMS = 16;
+// Maximum match clauses
+const usz MAX_MATCH_CLAUSES = 16;
+
+/**
+ * PatternTag — Type of pattern.
+ */
+enum PatternTag : char {
+    PAT_WILDCARD,   // _ - matches anything, binds nothing
+    PAT_VAR,        // x - matches anything, binds to x
+    PAT_LIT,        // 42, "hello", 'sym - matches literal value
+    PAT_CONS,       // (head . tail) - matches cons cell
+    PAT_SEQ,        // [a b c], [head .. tail], [x y ..] - sequence pattern
+    PAT_QUOTE,      // 'symbol or 'literal - matches quoted datum
+}
+
+/**
+ * RestPosition — Where the rest pattern (..) appears in a sequence.
+ */
+enum RestPosition : char {
+    REST_NONE,      // No rest: [a b c] - exact match
+    REST_START,     // [.. last] - skip all but last
+    REST_MIDDLE,    // [head .. tail] - first + rest
+    REST_END,       // [x y ..] - first N, ignore rest
+}
+
+/**
+ * Pattern — Pattern AST node.
+ * Note: PatternSeq and PatternCons are embedded inside to avoid forward declaration issues.
+ */
+struct Pattern {
+    PatternTag tag;
+
+    union {
+        SymbolId var_name;        // PAT_VAR
+        Value* lit_value;         // PAT_LIT
+        Value* quote_datum;       // PAT_QUOTE
+
+        // PAT_CONS: cons pattern (head . tail)
+        struct {
+            Pattern* car_pat;
+            Pattern* cdr_pat;
+        }
+
+        // PAT_SEQ: sequence pattern [a b c], [head .. tail], etc.
+        struct {
+            Pattern*[MAX_PATTERN_ELEMS] elements;
+            usz elem_count;
+            RestPosition rest_pos;
+            SymbolId rest_binding;  // Name to bind rest to (if REST_MIDDLE)
+        }
+    }
+}
+
+/**
+ * MatchClause — Single clause in a match expression.
+ */
+struct MatchClause {
+    Pattern* pattern;
+    Expr* result;
+}
+
+/**
+ * ExprMatch — Pattern matching expression.
+ * (match expr (pattern1 result1) (pattern2 result2) ...)
+ */
+struct ExprMatch {
+    Expr* scrutinee;
+    MatchClause[MAX_MATCH_CLAUSES] clauses;
+    usz clause_count;
+}
+
+/**
+ * ExprAnd — Short-circuit boolean and.
+ * (and left right) - returns left if falsy, otherwise right
+ */
+struct ExprAnd {
+    Expr* left;
+    Expr* right;
+}
+
+/**
+ * ExprOr — Short-circuit boolean or.
+ * (or left right) - returns left if truthy, otherwise right
+ */
+struct ExprOr {
+    Expr* left;
+    Expr* right;
+}
+
+/**
+ * ExprCall — Multi-argument function call (not curried).
+ * (f a b c) - calls f with all arguments at once.
+ */
+struct ExprCall {
+    Expr* func;
+    Expr*[64] args;
+    usz arg_count;
+}
+
+/**
+ * ExprBegin — Sequence expression (begin e1 e2 ... en).
+ * Evaluates all expressions, returns the last.
+ */
+struct ExprBegin {
+    Expr*[64] exprs;
+    usz expr_count;
+}
+
+/**
+ * ExprSet — Variable mutation: (set! name value)
+ */
+struct ExprSet {
+    SymbolId name;
+    Expr*    value;
+}
+
+/**
+ * ExprQuasiquote — Quasiquote template: `expr
+ */
+struct ExprQuasiquote {
+    Expr* body;
+}
+
+/**
+ * ExprUnquote — Unquote inside quasiquote: ,expr
+ */
+struct ExprUnquote {
+    Expr* body;
+}
+
+/**
+ * ExprUnquoteSplicing — Splice inside quasiquote: ,@expr
+ */
+struct ExprUnquoteSplicing {
+    Expr* body;
+}
+
+/**
+ * ExprDefineMacro — Pattern-based macro definition:
+ * (define [macro] name (pattern template) ...)
+ */
+struct ExprDefineMacro {
+    SymbolId name;
+    MacroClause[8] clauses;
+    usz clause_count;
+}
+
+/**
+ * ExprModule — Module definition: (module name (export sym...) body...)
+ */
+struct ExprModule {
+    SymbolId     name;
+    SymbolId[64] exports;
+    usz          export_count;
+    Expr*[64]    body;
+    usz          body_count;
+}
+
+/**
+ * ExprImport — Module import: (import name) or (import "path")
+ */
+struct ExprImport {
+    SymbolId name;        // module name (symbol)
+    bool     has_path;    // true if importing by file path
+    char[256] path;       // file path (if has_path)
+    usz      path_len;
+}
+
+/**
+ * Module — Loaded module record.
+ */
+struct Module {
+    SymbolId     name;
+    Env*         env;              // Module's internal environment
+    SymbolId[128] exports;         // Exported symbol names
+    usz          export_count;
+    bool         loaded;           // false during loading (circular import detection)
+    char[256]    path;             // Source file path
+    usz          path_len;
+}
+
 /**
  * Expr — Expression AST node.
  */
@@ -502,7 +923,7 @@ struct Expr {
         ExprApp     app;
         ExprIf      if_expr;
         ExprLet     let_expr;
-        ExprDef     def;
+        ExprDefine  define;
         ExprQuote   quote;
         ExprReset   reset;
         ExprShift   shift;
@@ -510,6 +931,18 @@ struct Expr {
         ExprHandle  handle;
         ExprIndex   index;
         ExprPath    path;
+        ExprMatch   match;
+        ExprAnd     and_expr;
+        ExprOr      or_expr;
+        ExprCall    call;
+        ExprBegin   begin;
+        ExprSet     set_expr;
+        ExprQuasiquote   quasiquote;
+        ExprUnquote      unquote;
+        ExprUnquoteSplicing unquote_splicing;
+        ExprDefineMacro  define_macro;
+        ExprModule       module_expr;
+        ExprImport       import_expr;
     }
 }
 
@@ -525,6 +958,31 @@ struct EffectHandler {
     EffectClause[MAX_EFFECT_CLAUSES] clauses;
     usz clause_count;
     Env* handler_env;
+    Expr* body_expr;    // The handle body for continuation capture
+    Env*  body_env;     // Environment at handle time
+}
+
+/**
+ * CapturedCont - Captured continuation state for replay-based continuations.
+ * Stores the reset/handle body and environment so that calling (k value)
+ * re-evaluates the body with the shift/perform replaced by value.
+ */
+struct CapturedCont {
+    Expr*  reset_body;    // The reset or handle body to re-evaluate
+    Env*   reset_env;     // Environment at reset/handle time
+    bool   is_effect;     // true for effect handler continuations
+    SymbolId effect_tag;  // For effect continuations: which effect tag
+    // Copy of handler to reinstall during effect replay
+    EffectHandler handler_copy;
+    bool has_handler;     // whether handler_copy is valid
+    // Multi-perform tracking
+    usz perform_index;
+    Value*[16] prior_results;
+    usz prior_count;
+    // Multi-shift tracking
+    usz shift_index;
+    Value*[16] shift_prior_results;
+    usz shift_prior_count;
 }
 
 // =============================================================================
@@ -538,31 +996,51 @@ struct Interp {
     SymbolTable  symbols;
     Env*         global_env;
 
-    // Simple bump allocator for values (for now)
-    Value[4096]  value_pool;
-    usz          value_count;
-
-    Env[256]     env_pool;
-    usz          env_count;
-
-    Expr[1024]   expr_pool;
-    usz          expr_count;
-
-    Continuation[64] cont_pool;
-    usz              cont_count;
+    // Region-based allocation
+    main::RegionHandle root_region;      // For Expr, Pattern, Continuation, CapturedCont, closure envs
+    main::RegionHandle current_frame;    // For Values, Envs during eval
 
     // Pre-interned common symbols
     SymbolId sym_lambda;
     SymbolId sym_if;
     SymbolId sym_let;
-    SymbolId sym_def;
+    SymbolId sym_define;
     SymbolId sym_quote;
     SymbolId sym_reset;
     SymbolId sym_shift;
     SymbolId sym_perform;
     SymbolId sym_handle;
+    SymbolId sym_match;
+    SymbolId sym_and;
+    SymbolId sym_or;
     SymbolId sym_true;
     SymbolId sym_false;
+    SymbolId sym_begin;
+    SymbolId sym_set;
+    SymbolId sym_quasiquote;
+    SymbolId sym_unquote;
+    SymbolId sym_unquote_splicing;
+    SymbolId sym_defmacro;
+    SymbolId sym_dotdot;    // ".." symbol for template splice detection
+    SymbolId sym_macro;     // "macro" symbol for [macro] annotation
+
+    // Stack overflow protection
+    usz eval_depth;
+    usz max_eval_depth;
+
+    // Macro table
+    MacroDef[MAX_MACROS] macro_table;
+    usz macro_count;
+    usz gensym_counter;
+    usz[MACRO_HASH_SIZE] macro_hash_index;    // Hash slot -> macro_table index (usz.max = empty)
+
+    // Module system
+    Module[MAX_MODULES] modules;
+    usz module_count;
+    usz[MODULE_HASH_SIZE] module_hash_index;  // Hash slot -> modules index (usz.max = empty)
+    SymbolId sym_module;
+    SymbolId sym_import;
+    SymbolId sym_export;
 
     // Continuation/shift state
     usz      reset_depth;
@@ -573,15 +1051,38 @@ struct Interp {
     // Effect handler stack
     EffectHandler[16] handler_stack;
     usz               handler_count;
+
+    // Effect handler result propagation (like shift_occurred for effects)
+    bool     effect_occurred;       // Handler body was evaluated, result should bypass to handle
+    Value*   effect_result;         // Result of the handler body
+
+    // Continuation replay state
+    Value*   cont_substitution;     // Value to substitute during replay
+    bool     cont_substituting;     // Are we in replay mode?
+    bool     cont_is_effect;        // Is this an effect continuation replay?
+    SymbolId cont_effect_tag;       // Effect tag for effect replay
+    // Multi-perform replay tracking
+    usz    effect_perform_counter;
+    Value*[16] effect_prior_results;
+    usz    cont_target_perform_index;
+    // Multi-shift replay tracking
+    usz    shift_counter;
+    Value*[16] shift_prior_results;
+    usz    cont_target_shift_index;
+
+    // Reset body/env stack (for continuation capture)
+    Expr*[16] reset_body_stack;
+    Env*[16]  reset_env_stack;
+
 }
 
 fn void Interp.init(Interp* self) {
     self.symbols.init();
     self.global_env = null;
-    self.value_count = 0;
-    self.env_count = 0;
-    self.expr_count = 0;
-    self.cont_count = 0;
+
+    // Region setup (thread_registry_init must be called before this)
+    self.root_region = main::thread_root_region();
+    self.current_frame = self.root_region;
 
     // Continuation/shift state
     self.reset_depth = 0;
@@ -589,51 +1090,95 @@ fn void Interp.init(Interp* self) {
     self.shift_target_depth = 0;
     self.shift_result = null;
     self.handler_count = 0;
+    self.effect_occurred = false;
+    self.effect_result = null;
+
+    // Continuation replay state
+    self.cont_substitution = null;
+    self.cont_substituting = false;
+    self.cont_is_effect = false;
+    // Multi-perform replay tracking
+    self.effect_perform_counter = 0;
+    self.cont_target_perform_index = 0;
+    // Multi-shift replay tracking
+    self.shift_counter = 0;
+    self.cont_target_shift_index = 0;
 
     // Pre-intern keywords
     self.sym_lambda  = self.symbols.intern("lambda");
     self.sym_if      = self.symbols.intern("if");
     self.sym_let     = self.symbols.intern("let");
-    self.sym_def     = self.symbols.intern("def");
+    self.sym_define  = self.symbols.intern("define");
     self.sym_quote   = self.symbols.intern("quote");
     self.sym_reset   = self.symbols.intern("reset");
     self.sym_shift   = self.symbols.intern("shift");
     self.sym_perform = self.symbols.intern("perform");
     self.sym_handle  = self.symbols.intern("handle");
+    self.sym_match   = self.symbols.intern("match");
+    self.sym_and     = self.symbols.intern("and");
+    self.sym_or      = self.symbols.intern("or");
     self.sym_true    = self.symbols.intern("true");
     self.sym_false   = self.symbols.intern("false");
+    self.sym_begin   = self.symbols.intern("begin");
+    self.sym_set     = self.symbols.intern("set!");
+    self.sym_quasiquote = self.symbols.intern("quasiquote");
+    self.sym_unquote = self.symbols.intern("unquote");
+    self.sym_unquote_splicing = self.symbols.intern("unquote-splicing");
+    self.sym_defmacro = self.symbols.intern("defmacro");
+    self.sym_dotdot = self.symbols.intern("..");
+    self.sym_macro = self.symbols.intern("macro");
+
+    // Module system
+    self.sym_module = self.symbols.intern("module");
+    self.sym_import = self.symbols.intern("import");
+    self.sym_export = self.symbols.intern("export");
+    self.module_count = 0;
+
+    // Stack overflow protection
+    self.eval_depth = 0;
+    self.max_eval_depth = 200;
+
+    // Macro table
+    self.macro_count = 0;
+    self.gensym_counter = 0;
+    for (usz i = 0; i < MACRO_HASH_SIZE; i++) self.macro_hash_index[i] = usz.max;
+    for (usz i = 0; i < MODULE_HASH_SIZE; i++) self.module_hash_index[i] = usz.max;
 
     // Create global environment
     self.global_env = make_env(self, null);
 }
 
 fn Continuation* Interp.alloc_lisp_continuation(Interp* self) {
-    assert(self.cont_count < 64, "continuation pool exhausted");
-    Continuation* k = &self.cont_pool[self.cont_count];
-    self.cont_count++;
+    Continuation k;
     k.data = null;
-    return k;
+    main::ObjectHandle h = main::allocate_in(self.root_region, Continuation, k);
+    return main::dereference_as(Continuation, h);
 }
 
 fn Value* Interp.alloc_value(Interp* self) {
-    assert(self.value_count < 4096, "value pool exhausted");
-    Value* v = &self.value_pool[self.value_count];
-    self.value_count++;
-    return v;
+    Value v;
+    main::ObjectHandle h = main::allocate_in(self.current_frame, Value, v);
+    return main::dereference_as(Value, h);
 }
 
 fn Env* Interp.alloc_env(Interp* self) {
-    assert(self.env_count < 256, "env pool exhausted");
-    Env* e = &self.env_pool[self.env_count];
-    self.env_count++;
-    return e;
+    Env e;
+    e.binding_count = 0;
+    e.parent = null;
+    main::ObjectHandle h = main::allocate_in(self.current_frame, Env, e);
+    return main::dereference_as(Env, h);
 }
 
 fn Expr* Interp.alloc_expr(Interp* self) {
-    assert(self.expr_count < 1024, "expr pool exhausted");
-    Expr* e = &self.expr_pool[self.expr_count];
-    self.expr_count++;
-    return e;
+    Expr e;
+    main::ObjectHandle h = main::allocate_in(self.root_region, Expr, e);
+    return main::dereference_as(Expr, h);
+}
+
+fn Pattern* Interp.alloc_pattern(Interp* self) {
+    Pattern p;
+    main::ObjectHandle h = main::allocate_in(self.root_region, Pattern, p);
+    return main::dereference_as(Pattern, h);
 }
 
 // =============================================================================
@@ -673,6 +1218,14 @@ fn void print_value(Value* v, SymbolTable* syms) {
             io::print("#<continuation>");
         case PRIMITIVE:
             io::printf("#<primitive %s>", (ZString)&v.prim_val.name);
+        case PARTIAL_PRIM:
+            io::print("#<partial>");
+        case ERROR:
+            io::printf("#<error: %s>", (ZString)&v.str_val.chars);
+        case HASHMAP:
+            io::printf("#<hashmap:%d>", v.hashmap_val.count);
+        case FFI_HANDLE:
+            io::printf("#<ffi-handle:%s>", (ZString)&v.ffi_val.lib_name);
         default:
             io::print("#<unknown>");
     }

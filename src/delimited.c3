@@ -37,6 +37,10 @@ module main;
 
 import std::io;
 
+// Maximum allowed continuation stack capture size (4 MB).
+// Prevents runaway malloc from deep recursion + continuation capture.
+const usz MAX_CONTINUATION_SIZE = 4194304;
+
 // =============================================================================
 // SECTION 1: RESET (Delimiter)
 // =============================================================================
@@ -202,7 +206,6 @@ alias ShiftHandlerFn = fn void*(Continuation* k, void* user_data);
  */
 fn void* shift(PromptTag tag, ShiftHandlerFn handler, void* user_data) {
     PromptStack* ps = prompt_stack();
-    RegionRegistry* reg = thread_registry();
 
     // Find the target prompt
     PromptFrame* prompt = ps.find_prompt(tag);
@@ -219,15 +222,22 @@ fn void* shift(PromptTag tag, ShiftHandlerFn handler, void* user_data) {
     // Calculate stack segment size
     usz stack_size = stack_segment_size(prompt_sp, current_sp);
 
-    // Allocate stack storage in the region
-    Region* region_ptr = &reg.region_storage[(usz)(uint)prompt.region_id];
-
     if (stack_size > 0) {
+        // Guard: reject oversized captures that indicate deep recursion or corruption
+        if (stack_size > MAX_CONTINUATION_SIZE) {
+            k.status = ContinuationStatus.INVALIDATED;
+            return null;
+        }
+
         // Allocate for the stack data
         k.stack.size = stack_size;
         k.stack.base_sp = prompt_sp;
         k.stack.top_sp = current_sp;
-        k.stack.data = mem::malloc(stack_size);  // TODO: use region allocator
+        k.stack.data = mem::malloc(stack_size);  // malloc is correct: raw byte buffers need individual free
+        if (k.stack.data == null) {
+            k.status = ContinuationStatus.INVALIDATED;
+            return null;
+        }
 
         // Copy stack segment
         stack_copy(k.stack.data, current_sp, stack_size);
@@ -292,10 +302,20 @@ fn Continuation* shift_capture(PromptTag tag) {
     usz stack_size = stack_segment_size(prompt_sp, current_sp);
 
     if (stack_size > 0) {
+        // Guard: reject oversized captures that indicate deep recursion or corruption
+        if (stack_size > MAX_CONTINUATION_SIZE) {
+            k.status = ContinuationStatus.INVALIDATED;
+            return null;
+        }
+
         k.stack.size = stack_size;
         k.stack.base_sp = prompt_sp;
         k.stack.top_sp = current_sp;
         k.stack.data = mem::malloc(stack_size);
+        if (k.stack.data == null) {
+            k.status = ContinuationStatus.INVALIDATED;
+            return null;
+        }
         stack_copy(k.stack.data, current_sp, stack_size);
     }
 
@@ -338,9 +358,27 @@ fn Continuation* shift_capture(PromptTag tag) {
 fn void resume(Continuation* k, void* value) {
     assert(k != null, "resume: null continuation");
     assert(k.status == ContinuationStatus.SUSPENDED, "resume: continuation not suspended");
+    assert(is_continuation_valid(k), "resume: continuation is invalid (region dead?)");
 
     if (k.is_one_shot && k.has_been_resumed) {
         unreachable("resume: one-shot continuation already resumed");
+    }
+
+    // For multi-shot continuations, clone before resuming to keep original SUSPENDED
+    if (!k.is_one_shot) {
+        Continuation* clone = clone_continuation(k);
+        // Resume the clone instead, leaving original SUSPENDED
+        clone.resume_value = value;
+        clone.has_been_resumed = true;
+        clone.status = ContinuationStatus.RUNNING;
+
+        if (clone.stack.data != null && clone.stack.size > 0) {
+            stack_copy(clone.stack.top_sp, clone.stack.data, clone.stack.size);
+        }
+
+        RegisterContext* ctx_ptr = (RegisterContext*)&clone.context.registers[0];
+        context_restore(ctx_ptr, 1);
+        // Does not return
     }
 
     k.resume_value = value;
@@ -371,6 +409,7 @@ fn void resume(Continuation* k, void* value) {
 fn void resume_final(Continuation* k, void* value) {
     assert(k != null, "resume_final: null continuation");
     assert(k.status == ContinuationStatus.SUSPENDED, "resume_final: not suspended");
+    assert(is_continuation_valid(k), "resume_final: continuation is invalid (region dead?)");
 
     k.resume_value = value;
     k.status = ContinuationStatus.RUNNING;
@@ -401,7 +440,7 @@ fn void resume_final(Continuation* k, void* value) {
  * @param k The continuation to abort
  */
 fn void abort_continuation(Continuation* k) {
-    if (k == null) return;
+    assert(k != null, "abort_continuation: null continuation pointer");
 
     if (k.stack.data != null) {
         mem::free(k.stack.data);
@@ -440,6 +479,8 @@ fn Continuation* clone_continuation(Continuation* k) {
     clone.parent_continuation = k.parent_continuation;
     clone.is_one_shot = false;  // Clones are never one-shot
     clone.has_been_resumed = false;
+    clone.resume_value = null;
+    clone.return_value = null;
 
     // Copy debug name
     for (usz i = 0; i < 64; i++) {
@@ -452,6 +493,10 @@ fn Continuation* clone_continuation(Continuation* k) {
         clone.stack.base_sp = k.stack.base_sp;
         clone.stack.top_sp = k.stack.top_sp;
         clone.stack.data = mem::malloc(k.stack.size);
+        if (clone.stack.data == null) {
+            clone.status = ContinuationStatus.INVALIDATED;
+            return clone;
+        }
         mem::copy(clone.stack.data, k.stack.data, k.stack.size);
     }
 
@@ -586,6 +631,10 @@ fn void* perform_effect(PromptTag tag, uint effect_id, void* arg) {
     PromptFrame* prompt = ps.find_prompt(tag);
     assert(prompt != null, "perform_effect: prompt not found");
 
+    // Save handler info BEFORE shift_capture (which may invalidate the prompt pointer)
+    void* saved_handler_fn = prompt.handler_fn;
+    void* saved_handler_data = prompt.handler_data;
+
     // Capture continuation
     Continuation* k = shift_capture(tag);
 
@@ -593,18 +642,17 @@ fn void* perform_effect(PromptTag tag, uint effect_id, void* arg) {
         // Initial capture - we have the continuation
         k.status = ContinuationStatus.SUSPENDED;
 
-        if (prompt.handler_fn != null) {
-            EffectHandler handler = (EffectHandler)prompt.handler_fn;
-            return handler(effect_id, arg, k, prompt.handler_data);
+        if (saved_handler_fn != null) {
+            EffectHandler handler = (EffectHandler)saved_handler_fn;
+            return handler(effect_id, arg, k, saved_handler_data);
         } else {
             // No handler - just return the continuation wrapped somehow
             // This shouldn't normally happen in well-formed code
             return (void*)k;
         }
     } else {
-        // Resumed - k is null, resume_value is in the actual continuation
-        // The value will be returned via the normal shift path
-        return null;  // Placeholder - actual value comes from resume
+        // Resumed path
+        return null;
     }
 }
 
@@ -1048,9 +1096,12 @@ fn void test_continuation_cloning() {
     // Verify original is now multi-shot too
     delim_assert_true(!original.is_one_shot, "original is now multi-shot");
 
-    // Clean up
+    // Clean up - null out after free so invalidate_region_continuations
+    // doesn't double-free during release_region
     mem::free(original.stack.data);
+    original.stack.data = null;
     mem::free(clone.stack.data);
+    clone.stack.data = null;
     release_region(r);
 
     io::printfn("[PASS] test_continuation_cloning");
@@ -1202,8 +1253,7 @@ fn void test_abort_continuation() {
     delim_assert_true(k.stack.data == null, "stack.data freed");
     delim_assert_true(!is_continuation_valid(k), "invalid after abort");
 
-    // Abort null should be safe
-    abort_continuation(null);
+    // Note: abort_continuation(null) now asserts — not tested here
 
     release_region(r);
 
