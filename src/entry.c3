@@ -3,6 +3,131 @@ module main;
 import std::io;
 import lisp;
 
+extern fn int system(char* command) @extern("system");
+
+/**
+ * AOT build: compile Lisp source to standalone binary.
+ * Usage: ./main --build input.lisp -o output_binary
+ */
+fn int run_build(int argc, char** argv, int build_idx) {
+    char* input_file = null;
+    char* output_binary = null;
+
+    // Parse: --build input.lisp [-o output]
+    if (build_idx + 1 < argc) {
+        input_file = argv[build_idx + 1];
+    }
+    for (int i = build_idx + 2; i < argc; i++) {
+        if (str_eq(argv[i], "-o") && i + 1 < argc) {
+            output_binary = argv[i + 1];
+            break;
+        }
+    }
+
+    if (input_file == null) {
+        io::printn("Usage: ./main --build input.lisp [-o output]");
+        return 1;
+    }
+
+    // Default output name: strip extension, or append .out
+    char[512] default_out;
+    usz default_out_len = 0;
+    if (output_binary == null) {
+        char* p = input_file;
+        usz input_len = 0;
+        while (*p != 0) { input_len++; p++; }
+        // Find last dot
+        isz last_dot = -1;
+        for (usz i = 0; i < input_len; i++) {
+            if (input_file[i] == '.') last_dot = (isz)i;
+        }
+        if (last_dot > 0) {
+            default_out_len = (usz)last_dot;
+        } else {
+            default_out_len = input_len;
+        }
+        for (usz i = 0; i < default_out_len && i < 511; i++) {
+            default_out[i] = input_file[i];
+        }
+        default_out[default_out_len] = 0;
+        output_binary = &default_out[0];
+    }
+
+    // Read input file
+    usz input_path_len = 0;
+    char* ip = input_file;
+    while (*ip != 0) { input_path_len++; ip++; }
+    char[] input_path = input_file[:input_path_len];
+
+    char[] source;
+    if (try s = io::file::load_temp((String)input_path)) {
+        source = s;
+    } else {
+        io::printfn("Error: cannot read input file '%s'", (ZString)input_file);
+        return 1;
+    }
+
+    // Step 1: Compile Lisp → C3
+    io::printfn("Compiling %s...", (ZString)input_file);
+    thread_registry_init();
+    lisp::Interp* interp = (lisp::Interp*)mem::malloc(lisp::Interp.sizeof);
+    interp.init();
+
+    char[] c3_code = lisp::compile_to_c3(source, interp);
+
+    // Step 2: Write temp C3 file
+    char[] temp_path = "build/_aot_temp.c3";
+    if (try file = io::file::open((String)temp_path, "w")) {
+        file.write(c3_code)!!;
+        file.close()!!;
+    } else {
+        io::printn("Error: cannot write temp file build/_aot_temp.c3");
+        mem::free(interp);
+        thread_registry_shutdown();
+        return 1;
+    }
+
+    // Step 3: Invoke c3c to compile
+    io::printfn("Building %s...", (ZString)output_binary);
+
+    // Build the c3c command
+    usz out_len = 0;
+    char* op = output_binary;
+    while (*op != 0) { out_len++; op++; }
+
+    char[1024] cmd_buf;
+    usz cmd_len = 0;
+    // Include all source files needed by runtime (will be slimmed after Phase 6)
+    char[] prefix = "env -u LD_LIBRARY_PATH c3c compile src/main.c3 src/context.c3 src/continuation.c3 src/delimited.c3 src/ghost_index.c3 src/ffi_bindings.c3 src/test_ghost_lookup.c3 src/test_arena_bug.c3 src/test_alignment.c3 src/test_sparse_set.c3 src/test_typeid.c3 src/test_destructor_registry.c3 src/test_slot_table.c3 src/test_region.c3 src/lisp/eval.c3 src/lisp/parser.c3 src/lisp/value.c3 src/lisp/jit.c3 src/lisp/compiler.c3 src/lisp/runtime.c3 build/_aot_temp.c3 -l lightning -l readline -l dl -l m -L /usr/local/lib -o ";
+    for (usz i = 0; i < prefix.len && cmd_len < 1023; i++) {
+        cmd_buf[cmd_len] = prefix[i];
+        cmd_len++;
+    }
+    for (usz i = 0; i < out_len && cmd_len < 1023; i++) {
+        cmd_buf[cmd_len] = output_binary[i];
+        cmd_len++;
+    }
+    char[] flags = " -l m";
+    for (usz i = 0; i < flags.len && cmd_len < 1023; i++) {
+        cmd_buf[cmd_len] = flags[i];
+        cmd_len++;
+    }
+    cmd_buf[cmd_len] = 0;
+
+    int exit_code = system(&cmd_buf[0]);
+
+    mem::free(interp);
+    thread_registry_shutdown();
+
+    if (exit_code != 0) {
+        io::printn("Error: c3c compilation failed");
+        return 1;
+    }
+
+    io::printfn("Built: %s", (ZString)output_binary);
+    return 0;
+}
+
 /**
  * Main entry point.
  *
@@ -11,10 +136,18 @@ import lisp;
  *   ./main -repl                        - Start interactive REPL
  *   ./main --repl                       - Start interactive REPL
  *   ./main --compile input.lisp out.c3  - Compile Lisp to C3
+ *   ./main --build input.lisp -o prog   - AOT compile Lisp to standalone binary
  *   ./main --gen-e2e                    - Generate e2e compiler test files
  *   ./main script.pik                   - Run a script file
  */
 fn int main(int argc, char** argv) {
+    // Check for --build flag (AOT compile to standalone binary)
+    for (int i = 1; i < argc; i++) {
+        if (str_eq(argv[i], "--build")) {
+            return run_build(argc, argv, i);
+        }
+    }
+
     // Check for compile flag
     bool run_compile = false;
     char* input_file = null;
@@ -94,6 +227,7 @@ fn int main(int argc, char** argv) {
             lisp::register_primitives(interp);
             lisp::register_destructors();
             lisp::register_stdlib(interp);
+            interp.jit_enabled = true;
 
             lisp::generate_e2e_tests(interp);
 
@@ -125,6 +259,7 @@ fn int main(int argc, char** argv) {
         lisp::register_primitives(interp);
         lisp::register_destructors();
         lisp::register_stdlib(interp);
+        interp.jit_enabled = true;
 
         // Run REPL
         lisp::repl(interp);
@@ -155,6 +290,7 @@ fn int main(int argc, char** argv) {
             lisp::register_primitives(interp);
             lisp::register_destructors();
             lisp::register_stdlib(interp);
+            interp.jit_enabled = true;
 
             // Run the script (multiple expressions)
             usz len = source.len;

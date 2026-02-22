@@ -1348,6 +1348,9 @@ fn Expr* Parser.parse_define(Parser* self) {
         if (annotation == self.interp.sym_alias) {
             return self.parse_defalias(e);
         }
+        if (annotation == self.interp.sym_effect) {
+            return self.parse_defeffect(e);
+        }
         self.set_error("unknown define attribute");
         return null;
     }
@@ -1664,6 +1667,44 @@ fn Expr* Parser.parse_defalias(Parser* self, Expr* e) {
     }
 
     self.expect(T_RPAREN, ")");
+    return e;
+}
+
+fn Expr* Parser.parse_defeffect(Parser* self, Expr* e) {
+    e.tag = E_DEFEFFECT;
+    e.defeffect.has_arg_type = false;
+
+    // Expect ( for parenthesized form: (define [effect] (tag-name (^Type arg)))
+    if (self.lexer.current.type != T_LPAREN) {
+        self.set_error("expected ( after [effect]");
+        return null;
+    }
+    self.lexer.advance();  // consume '('
+
+    // Read tag name symbol
+    if (self.lexer.current.type != T_SYMBOL) {
+        self.set_error("expected effect tag name");
+        return null;
+    }
+    e.defeffect.name = self.get_current_symbol();
+    self.lexer.advance();
+
+    // Check for typed param: (^Type argname)
+    if (self.lexer.current.type == T_LPAREN) {
+        self.lexer.advance();  // consume '('
+        if (self.lexer.current.type == T_SYMBOL && self.lexer.current.text[0] == '^') {
+            e.defeffect.arg_type = self.parse_type_annotation();
+            e.defeffect.has_arg_type = true;
+            // Consume arg name if present
+            if (self.lexer.current.type == T_SYMBOL) {
+                self.lexer.advance();
+            }
+        }
+        self.expect(T_RPAREN, ")");  // close param
+    }
+
+    self.expect(T_RPAREN, ")");  // close effect form
+    self.expect(T_RPAREN, ")");  // close define
     return e;
 }
 

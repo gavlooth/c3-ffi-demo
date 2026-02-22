@@ -9,7 +9,7 @@ This document describes the complete syntax of OmniLisp, from lexical tokens to 
 
 > **Implementation Status Note (2026-01-17):** This document describes the *design* syntax.
 > See the [Implementation Status](#implementation-status) section at the end for what is
-> currently implemented in the Pika parser (`csrc/parser/parser.c`).
+> currently implemented in the Omni parser (`csrc/parser/parser.c`).
 
 ## Table of Contents
 
@@ -673,7 +673,7 @@ Comments start with `;` and continue to end of line.
 
 ## Implementation Status
 
-This section documents which syntax features are implemented in the Pika parser
+This section documents which syntax features are implemented in the Omni parser
 (`csrc/parser/parser.c`) vs the analyzer (`csrc/analysis/analysis.c`).
 
 ### Fully Implemented (Parser)

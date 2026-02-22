@@ -1,9 +1,9 @@
-# Pika Lisp Language Specification
+# Omni Lisp Language Specification
 
 **Version:** 0.4.0
 **Date:** 2026-02-20
 
-Pika Lisp is a Lisp dialect with first-class delimited continuations, algebraic effects, auto-curried lambdas, multiple dispatch, and a structural type system. It runs on a region-based memory system implemented in C3 with three backends: interpreter, GNU Lightning JIT, and Lisp-to-C3 transpiler.
+Omni Lisp is a Lisp dialect with first-class delimited continuations, algebraic effects, auto-curried lambdas, multiple dispatch, and a structural type system. It runs on a region-based memory system implemented in C3 with three backends: interpreter, GNU Lightning JIT, and Lisp-to-C3 transpiler.
 
 ---
 
@@ -517,7 +517,7 @@ I/O primitives go through algebraic effects (`io/print`, `io/println`, etc.). Wh
 | `write-file` | 2 | Write string to file |
 | `file-exists?` | 1 | Check file existence |
 | `read-lines` | 1 | Read file as list of lines |
-| `load` | 1 | Load and evaluate a .pika file |
+| `load` | 1 | Load and evaluate a .omni file |
 
 ### 7.10 Dict Operations (2)
 
@@ -651,7 +651,7 @@ FFI type symbols: `'int`, `'size`, `'string`, `'void`, `'ptr`, `'double`
 
 ## 8. Standard Library
 
-Higher-order functions and utilities defined in Pika:
+Higher-order functions and utilities defined in Omni:
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
@@ -829,7 +829,7 @@ Effect tags: `io/print`, `io/println`, `io/display`, `io/newline`, `io/read-file
 
 - Modules define namespaces with explicit exports
 - `import` brings exported symbols into scope
-- File-based import: `(import "path/to/file.pika")`
+- File-based import: `(import "path/to/file.omni")`
 - Cached: modules loaded only once
 - Circular import detection
 
@@ -1021,4 +1021,4 @@ symbol_char = letter | digit | "_" | "-" | "+" | "*" | "/"
 
 ---
 
-*Pika Lisp -- A Lisp with delimited continuations, algebraic effects, auto-curried lambdas, multiple dispatch, and structural types*
+*Omni Lisp -- A Lisp with delimited continuations, algebraic effects, auto-curried lambdas, multiple dispatch, and structural types*

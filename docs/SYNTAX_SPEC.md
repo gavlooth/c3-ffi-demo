@@ -1,4 +1,4 @@
-# Pika Lisp Syntax Specification
+# Omni Lisp Syntax Specification
 
 **Updated:** 2026-02-20
 
@@ -339,4 +339,4 @@ symbol_char = letter | digit | "_" | "-" | "+" | "*" | "/"
 
 ---
 
-*Pika Lisp — A Lisp with delimited continuations, algebraic effects, auto-curried lambdas, and multiple dispatch*
+*Omni Lisp — A Lisp with delimited continuations, algebraic effects, auto-curried lambdas, and multiple dispatch*

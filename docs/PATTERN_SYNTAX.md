@@ -1,6 +1,6 @@
 # OmniLisp Pattern Matching and Parsing
 
-OmniLisp uses **Pika Parser** for all string pattern matching and parsing operations. Pika is more powerful than both traditional regular expressions and standard PEG parsers.
+OmniLisp uses **Omni Parser** for all string pattern matching and parsing operations. Omni is more powerful than both traditional regular expressions and standard PEG parsers.
 
 ## Parsing Power Hierarchy
 
@@ -34,23 +34,23 @@ OmniLisp uses **Pika Parser** for all string pattern matching and parsing operat
 │                              ▼                                           │
 │                                                                          │
 │  ╔═══════════════════════════════════════════════════════════════════╗   │
-│  ║  Level 3: PIKA PARSER  ◄── OmniLisp uses this                     ║   │
+│  ║  Level 3: OMNI PARSER  ◄── OmniLisp uses this                     ║   │
 │  ║  ════════════════════════════════════════════                     ║   │
 │  ║                                                                   ║   │
 │  ║  UNIQUE CAPABILITIES:                                             ║   │
 │  ║                                                                   ║   │
 │  ║  1. LEFT RECURSION SUPPORT                                        ║   │
 │  ║     Standard PEG fails on: expr <- expr '+' term                  ║   │
-│  ║     Pika handles it natively - essential for expression parsing   ║   │
+│  ║     Omni handles it natively - essential for expression parsing   ║   │
 │  ║                                                                   ║   │
 │  ║  2. SUBSTRING MATCHING                                            ║   │
 │  ║     Standard PEG: Must match from position 0                      ║   │
-│  ║     Pika: Finds matches ANYWHERE in input                         ║   │
+│  ║     Omni: Finds matches ANYWHERE in input                         ║   │
 │  ║     Example: match("[0-9]+", "abc123def") → "123"                 ║   │
 │  ║                                                                   ║   │
 │  ║  3. ALL NON-OVERLAPPING MATCHES                                   ║   │
 │  ║     Standard PEG: Returns first match only                        ║   │
-│  ║     Pika: Returns ALL matches via find_all                        ║   │
+│  ║     Omni: Returns ALL matches via find_all                        ║   │
 │  ║     Example: find_all("[0-9]+", "a1b22c333") → ("1" "22" "333")   ║   │
 │  ║                                                                   ║   │
 │  ║  4. INDIRECT/MUTUAL RECURSION                                     ║   │
@@ -71,16 +71,16 @@ OmniLisp uses **Pika Parser** for all string pattern matching and parsing operat
 │  Level 4: PCRE (Practical Regular Expressions)                           │
 │  ─────────────────────────────────────────────                           │
 │      • Has backreferences: (\w+)\s+\1 matches "the the"                  │
-│      • Pika CANNOT do backreferences                                     │
+│      • Omni CANNOT do backreferences                                     │
 │      • BUT: Backreferences cause exponential worst-case complexity       │
-│      • Trade-off: Pika is more predictable, PCRE more expressive         │
+│      • Trade-off: Omni is more predictable, PCRE more expressive         │
 │                                                                          │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Feature Comparison Table
 
-| Feature | Formal Regex | Standard PEG | Pika | PCRE |
+| Feature | Formal Regex | Standard PEG | Omni | PCRE |
 |---------|--------------|--------------|------|------|
 | Simple patterns `a+`, `[0-9]*` | Yes | Yes | Yes | Yes |
 | Alternation `a\|b` | Yes | Yes (`/`) | Yes | Yes |
@@ -103,21 +103,21 @@ For common string operations, use the simple pattern syntax:
 
 ```lisp
 ;; Match first occurrence
-(pika-match "[a-z]+" "Hello World")     ; → "ello"
+(omni-match "[a-z]+" "Hello World")     ; → "ello"
 
 ;; Find all matches
-(pika-find-all "[0-9]+" "a1b22c333")    ; → ("1" "22" "333")
+(omni-find-all "[0-9]+" "a1b22c333")    ; → ("1" "22" "333")
 
 ;; Split by pattern
-(pika-split "," "a,b,c,d")              ; → ("a" "b" "c" "d")
+(omni-split "," "a,b,c,d")              ; → ("a" "b" "c" "d")
 
 ;; Replace pattern
-(pika-replace "[0-9]+" "X" "a1b2c3" #t) ; → "aXbXcX"
+(omni-replace "[0-9]+" "X" "a1b2c3" #t) ; → "aXbXcX"
 ```
 
 #### Supported Pattern Syntax
 
-The `omni_compile_pattern()` function now supports an extended regex-like syntax through a token → AST → PikaClause pipeline:
+The `omni_compile_pattern()` function now supports an extended regex-like syntax through a token → AST → OmniClause pipeline:
 
 | Pattern | Meaning | Example |
 |---------|---------|---------|
@@ -142,10 +142,10 @@ The `omni_compile_pattern()` function now supports an extended regex-like syntax
 **Implementation Notes:**
 - Patterns are tokenized into a stream of tokens (literals, charsets, operators, escapes)
 - Tokens are parsed into an AST following regex precedence (alternation < sequence < quantifier < atom)
-- AST nodes are converted directly to PikaClause structures (no PEG text intermediate)
+- AST nodes are converted directly to OmniClause structures (no PEG text intermediate)
 - Anchors (`^`, `$`) are currently simplified - start anchors are implicit in PEG matching
 
-### Tier 2: Full Pika Grammars (Advanced)
+### Tier 2: Full Omni Grammars (Advanced)
 
 For complex parsing that requires left recursion or grammar composition:
 
@@ -159,11 +159,11 @@ For complex parsing that requires left recursion or grammar composition:
 ")
 
 ;; Parse with the grammar
-(pika-grammar-match arith-grammar "expr" "1+2*3")
+(omni-grammar-match arith-grammar "expr" "1+2*3")
 ; → Parses as: 1 + (2 * 3) due to left recursion handling
 
 ;; This would FAIL in standard PEG parsers!
-;; But Pika handles left recursion natively.
+;; But Omni handles left recursion natively.
 ```
 
 #### Grammar Syntax (PEG)
@@ -187,16 +187,16 @@ e?               ;; Optional
 (e)              ;; Grouping
 ```
 
-## Why Pika Over Regex?
+## Why Omni Over Regex?
 
 ### 1. Parse Nested Structures
 
 ```lisp
-;; Regex CANNOT do this - Pika can:
+;; Regex CANNOT do this - Omni can:
 (define nested-parens "
   balanced <- '(' balanced* ')' / [^()]+
 ")
-(pika-grammar-match nested-parens "balanced" "((a)(b(c)))")  ; Works!
+(omni-grammar-match nested-parens "balanced" "((a)(b(c)))")  ; Works!
 ```
 
 ### 2. Parse Programming Languages
@@ -208,48 +208,48 @@ e?               ;; Optional
   term   <- term ('*' / '/') factor / factor
   factor <- '(' expr ')' / [0-9]+
 ")
-;; Pika handles this; packrat parsers would infinite loop
+;; Omni handles this; packrat parsers would infinite loop
 ```
 
 ### 3. Find All Matches Anywhere
 
 ```lisp
 ;; Standard PEG only matches from start
-;; Pika finds matches anywhere in the string
-(pika-find-all "[A-Z][a-z]+" "Hello World Test")
+;; Omni finds matches anywhere in the string
+(omni-find-all "[A-Z][a-z]+" "Hello World Test")
 ; → ("Hello" "World" "Test")
 ```
 
 ### 4. Predictable Performance
 
-Unlike PCRE with backreferences (which can have exponential blowup), Pika has polynomial worst-case complexity. No regex denial-of-service attacks.
+Unlike PCRE with backreferences (which can have exponential blowup), Omni has polynomial worst-case complexity. No regex denial-of-service attacks.
 
-## What Pika Cannot Do
+## What Omni Cannot Do
 
 **Backreferences** - matching the same text twice:
 
 ```lisp
-;; PCRE can do this, Pika cannot:
+;; PCRE can do this, Omni cannot:
 ;; (\w+)\s+\1 matches "the the" but not "the a"
 
 ;; Workaround: Use a custom matcher or post-process results
 ```
 
-This is the only significant feature PCRE has that Pika lacks. For most use cases, Pika's other advantages (left recursion, grammar composition, predictable performance) outweigh this limitation.
+This is the only significant feature PCRE has that Omni lacks. For most use cases, Omni's other advantages (left recursion, grammar composition, predictable performance) outweigh this limitation.
 
 ## Implementation Details
 
 The pattern matching system is implemented in:
-- `src/runtime/pika/omni_grammar.c` - Grammar definition, pattern compiler, regex-to-AST converter
-- `src/runtime/pika/omni_grammar.h` - Public API
-- `src/runtime/pika_c/pika.c` - Core Pika parser implementation
+- `src/runtime/omni/omni_grammar.c` - Grammar definition, pattern compiler, regex-to-AST converter
+- `src/runtime/omni/omni_grammar.h` - Public API
+- `src/runtime/omni_c/omni.c` - Core Omni parser implementation
 
 ### Architecture
 
 The upgraded `omni_compile_pattern()` function follows a three-stage pipeline:
 
 ```
-Regex Pattern → Tokens → AST → PikaClauses → Grammar
+Regex Pattern → Tokens → AST → OmniClauses → Grammar
                 [Lexer]   [Parser]   [Codegen]  [Builder]
 ```
 
@@ -263,21 +263,21 @@ Regex Pattern → Tokens → AST → PikaClauses → Grammar
    - Sequence: implicit concatenation (e.g., `abc` is `(ab)c`)
    - Alternation: `|` has lowest precedence
 
-3. **Codegen (`ast_to_clause`)**: Converts AST to PikaClause structures
+3. **Codegen (`ast_to_clause`)**: Converts AST to OmniClause structures
    - Direct clause construction (no PEG text intermediate)
-   - Bypasses the broken `pika_meta_parse()` function
+   - Bypasses the broken `omni_meta_parse()` function
 
 Key functions:
-- `omni_pika_match()` - Match pattern against string
-- `omni_pika_find_all()` - Find all matches
-- `omni_pika_split()` - Split by pattern
-- `omni_pika_replace()` - Search and replace
-- `omni_pika_match_rule()` - Match using a specific rule from a grammar
+- `omni_omni_match()` - Match pattern against string
+- `omni_omni_find_all()` - Find all matches
+- `omni_omni_split()` - Split by pattern
+- `omni_omni_replace()` - Search and replace
+- `omni_omni_match_rule()` - Match using a specific rule from a grammar
 - `omni_compile_pattern()` - Compile regex-like pattern (NEW: uses token → AST → clause pipeline)
-- `omni_compile_peg()` - Compile full PEG grammar (currently relies on broken `pika_meta_parse`)
+- `omni_compile_peg()` - Compile full PEG grammar (currently relies on broken `omni_meta_parse`)
 
 ## References
 
-- Luke Hutchison, "Pika parsing: reformulating packrat parsing as a dynamic programming algorithm solves the left recursion and error recovery problems" (2020)
+- Luke Hutchison, "Omni parsing: reformulating packrat parsing as a dynamic programming algorithm solves the left recursion and error recovery problems" (2020)
 - Bryan Ford, "Parsing Expression Grammars: A Recognition-Based Syntactic Foundation" (2004)
 - Aho, Sethi, Ullman, "Compilers: Principles, Techniques, and Tools" - for formal language hierarchy

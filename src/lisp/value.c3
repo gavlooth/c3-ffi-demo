@@ -336,7 +336,7 @@ struct TypeAnnotation {
 /**
  * TypeKind — Kind of user-defined type.
  */
-enum TypeKind : char { TK_CONCRETE, TK_ABSTRACT, TK_UNION, TK_ALIAS, TK_BUILTIN }
+enum TypeKind : char { TK_CONCRETE, TK_ABSTRACT, TK_UNION, TK_ALIAS, TK_BUILTIN, TK_EFFECT }
 
 /**
  * TypeFieldInfo — Field descriptor in a concrete type.
@@ -1035,6 +1035,7 @@ enum ExprTag : char {
     E_DEFABSTRACT, // (define [abstract] Name [Parent])
     E_DEFUNION,   // (define [union] Name variants...)
     E_DEFALIAS,   // (define [alias] Name Target)
+    E_DEFEFFECT,  // (define [effect] (tag (^Type arg)))
 }
 
 struct ExprLit {
@@ -1369,6 +1370,15 @@ struct ExprDefAlias {
 }
 
 /**
+ * ExprDefEffect — (define [effect] (tag (^Type arg)))
+ */
+struct ExprDefEffect {
+    SymbolId name;           // Effect tag name (e.g., io/print)
+    TypeAnnotation arg_type; // Declared argument type (^Any, ^String, etc.)
+    bool has_arg_type;       // true if argument type annotation present
+}
+
+/**
  * Module — Loaded module record.
  */
 struct Module {
@@ -1420,6 +1430,7 @@ struct Expr {
         ExprDefAbstract  defabstract;
         ExprDefUnion*    defunion;     // Pointer-indirect (large struct)
         ExprDefAlias     defalias;
+        ExprDefEffect    defeffect;
     }
 }
 
@@ -1506,6 +1517,7 @@ struct Interp {
     SymbolId sym_abstract;  // "abstract" for [abstract] annotation
     SymbolId sym_union;     // "union" for [union] annotation
     SymbolId sym_alias;     // "alias" for [alias] annotation
+    SymbolId sym_effect;    // "effect" for [effect] annotation
 
     // Built-in type name symbols
     SymbolId sym_Int;
@@ -1520,6 +1532,8 @@ struct Interp {
     SymbolId sym_Dict;
     SymbolId sym_Any;
     SymbolId sym_Val;
+    SymbolId sym_Number;
+    SymbolId sym_Collection;
 
     // I/O effect tags
     SymbolId sym_io_print;
@@ -1557,11 +1571,22 @@ struct Interp {
     TypeId tid_Array;
     TypeId tid_Dict;
     TypeId tid_Any;
+    TypeId tid_Number;
+    TypeId tid_Collection;
 
     // Type registry
     TypeRegistry types;
     int constructor_type_id;  // Set before calling type constructor primitive
     void* prim_user_data;     // Set before calling primitive with user_data
+
+    // JIT execution mode
+    bool jit_enabled;  // true after init, enables JIT-first execution in run()
+    Env* jit_env;      // Current local env for JIT sub-expression evaluation
+
+    // JIT trampoline TCO state
+    Expr* jit_tco_expr;   // Next expression to evaluate (set by tail-call helpers)
+    Env*  jit_tco_env;    // Environment for next expression
+    bool  jit_tco_bounce; // True = return sentinel, jit_eval loop continues
 
     // Stack overflow protection
     usz eval_depth;
@@ -1672,6 +1697,7 @@ fn void Interp.init(Interp* self) {
     self.sym_abstract = self.symbols.intern("abstract");
     self.sym_union = self.symbols.intern("union");
     self.sym_alias = self.symbols.intern("alias");
+    self.sym_effect = self.symbols.intern("effect");
 
     // Built-in type name symbols
     self.sym_Int = self.symbols.intern("Int");
@@ -1686,6 +1712,8 @@ fn void Interp.init(Interp* self) {
     self.sym_Dict = self.symbols.intern("Dict");
     self.sym_Any = self.symbols.intern("Any");
     self.sym_Val = self.symbols.intern("Val");
+    self.sym_Number = self.symbols.intern("Number");
+    self.sym_Collection = self.symbols.intern("Collection");
 
     // I/O effect tags
     self.sym_io_print = self.symbols.intern("io/print");
@@ -1710,9 +1738,16 @@ fn void Interp.init(Interp* self) {
     self.sym_export = self.symbols.intern("export");
     self.module_count = 0;
 
+    // JIT disabled until after stdlib registration
+    self.jit_enabled = false;
+    self.jit_env = null;
+    self.jit_tco_expr = null;
+    self.jit_tco_env = null;
+    self.jit_tco_bounce = false;
+
     // Stack overflow protection
     self.eval_depth = 0;
-    self.max_eval_depth = 200;
+    self.max_eval_depth = 5000;
 
     // Macro table
     self.macro_count = 0;

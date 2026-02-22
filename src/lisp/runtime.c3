@@ -589,6 +589,34 @@ fn Value rt_cons_in_region(Value car, Value cdr, main::RegionHandle region) {
 }
 
 /**
+ * Append two lists: (append '(a b) '(c d)) => '(a b c d).
+ * Copies spine of first list, shares tail with second.
+ */
+fn Value rt_list_append(Value a, Value b) {
+    if (a.tag == V_NIL) return b;
+    if (a.tag != V_CONS) return b;
+
+    // Collect elements of first list
+    Value[64] items;
+    usz count = 0;
+    Value cur = a;
+    while (cur.tag == V_CONS && count < 64) {
+        Value* car = main::dereference_as(Value, cur.cons_val.car);
+        items[count] = *car;
+        count++;
+        Value* cdr = main::dereference_as(Value, cur.cons_val.cdr);
+        cur = *cdr;
+    }
+
+    // Build result from right: b, then prepend items in reverse
+    Value result = b;
+    for (usz i = count; i > 0; i--) {
+        result = rt_cons(items[i - 1], result);
+    }
+    return result;
+}
+
+/**
  * Check if value is a list (nil or cons chain ending in nil).
  */
 fn bool rt_is_list(Value v) {
@@ -943,22 +971,33 @@ fn Value rt_string_join(Value sep, Value lst) {
     return v;
 }
 
-fn Value rt_substring(Value str, Value start_v, Value end_v) {
-    // Note: this is a ternary primitive but called via currying in compiled code
-    // The compiler chains: rt_invoke(rt_invoke(rt_invoke(make_prim(&rt_substring), str), start), end)
-    // Since rt_substring has PrimFn signature (binary), we need it as binary for the runtime
-    // But this function is called as rt_substring(str, start_v) with end_v unused
-    // For proper ternary support, we'd need a different approach
-    // For now, just handle the binary case (substring str start) returning from start to end
-    if (str.tag != V_STRING || start_v.tag != V_INT) return make_nil();
-    StringData* s = main::dereference_as(StringData, str.str_handle);
-    long start = start_v.int_val;
-    long end = (long)s.len;
+/**
+ * Substring — 3-arg curried primitive: (substring str start end)
+ * The compiler curries as (((substring str) start) end).
+ * Step 1: (substring str) → partial(rt_substring_step1, str)
+ * Step 2: (partial start) → rt_substring_step1(str, start) → closure expecting end
+ * Step 3: (closure end) → performs the actual substring extraction
+ */
+struct SubstringCapture {
+    Value str;
+    Value start;
+}
 
-    // Handle negative indices
+fn Value rt_substring_end_fn(void* data, Value end_val) {
+    SubstringCapture* cap = (SubstringCapture*)data;
+    if (cap.str.tag != V_STRING || cap.start.tag != V_INT) return make_nil();
+    if (end_val.tag != V_INT) return make_nil();
+
+    StringData* s = main::dereference_as(StringData, cap.str.str_handle);
+    long start = cap.start.int_val;
+    long end = end_val.int_val;
+
+    // Bounds checking
     if (start < 0) start = (long)s.len + start;
     if (start < 0) start = 0;
     if (start > (long)s.len) start = (long)s.len;
+    if (end < 0) end = (long)s.len + end;
+    if (end < 0) end = 0;
     if (end > (long)s.len) end = (long)s.len;
     if (end < start) end = start;
 
@@ -975,6 +1014,14 @@ fn Value rt_substring(Value str, Value start_v, Value end_v) {
     v.tag = V_STRING;
     v.str_handle = main::allocate_in(g_current_region, StringData, result);
     return v;
+}
+
+fn Value rt_substring_step1(Value str, Value start_v) {
+    // Create a closure capturing str and start, expecting end
+    SubstringCapture* cap = (SubstringCapture*)mem::malloc(SubstringCapture.sizeof);
+    cap.str = str;
+    cap.start = start_v;
+    return make_closure(cap, &rt_substring_end_fn);
 }
 
 fn Value rt_string_split(Value str, Value sep) {
@@ -1434,53 +1481,389 @@ fn Value rt_field_access(Value obj, Value field_name) {
 }
 
 // =============================================================================
-// SECTION 15: CONTINUATION RUNTIME (LEGACY STUBS)
+// SECTION 15: NATIVE COMPILED EFFECTS (reset/shift/handle/perform)
 // =============================================================================
+// Self-contained effect mechanism for AOT-compiled code.
+// Uses replay-based continuations: body closures are re-invoked with substitution.
 
-// NOTE: The old stubs have been replaced by the interpreter bridge in Section 17.
-// The compiler now serializes continuation forms (reset/shift/handle/perform) to
-// Pika source text and delegates to the interpreter via rt_eval_source().
-//
-// These legacy stubs are kept for backward compatibility with any generated code
-// that may still reference them. They are not used by the current compiler.
+const usz RT_MAX_HANDLERS = 16;
+const usz RT_MAX_CLAUSES = 8;
+const usz RT_MAX_PRIOR = 16;
 
-struct ContinuationHandle {
-    void* data;
+struct RtEffectClause {
+    Value tag;                    // V_SYMBOL tag
+    Value handler_closure;        // V_CLOSURE receiving (cons k arg)
 }
 
-fn void rt_cont_reset_begin() {
-    // Legacy stub — no longer used by compiler
+struct RtEffectHandler {
+    RtEffectClause[RT_MAX_CLAUSES] clauses;
+    usz clause_count;
+    Value body_closure;           // Handle body closure (for continuation capture)
 }
 
-fn Value rt_cont_reset_end(Value result) {
-    // Legacy stub — no longer used by compiler
+struct RtCapturedCont {
+    Value body_closure;           // Body closure to replay
+    bool is_effect;
+    Value effect_tag;             // V_SYMBOL for effect replay
+    RtEffectHandler handler_copy; // Handler to reinstall during effect replay
+    bool has_handler;
+    usz perform_index;
+    Value[RT_MAX_PRIOR] prior_results;
+    usz prior_count;
+    usz shift_index;
+    Value[RT_MAX_PRIOR] shift_prior_results;
+    usz shift_prior_count;
+}
+
+// Thread-local effect state
+tlocal usz rt_reset_depth = 0;
+tlocal bool rt_shift_occurred = false;
+tlocal usz rt_shift_target_depth = 0;
+tlocal Value rt_shift_result_val;
+
+tlocal bool rt_cont_sub = false;           // In replay mode?
+tlocal Value rt_cont_sub_val;              // Substitution value
+tlocal bool rt_cont_is_eff = false;        // Effect replay?
+tlocal Value rt_cont_eff_tag;              // Effect tag for replay
+
+tlocal RtEffectHandler[RT_MAX_HANDLERS] rt_handler_stack;
+tlocal usz rt_handler_count = 0;
+tlocal bool rt_effect_occurred = false;
+tlocal Value rt_effect_result_val;
+
+tlocal Value[RT_MAX_HANDLERS] rt_reset_body_stack;  // Body closures
+
+// Multi-perform/shift replay tracking
+tlocal usz rt_eff_perform_ctr = 0;
+tlocal Value[RT_MAX_PRIOR] rt_eff_prior;
+tlocal usz rt_cont_target_perform = 0;
+tlocal usz rt_eff_shift_ctr = 0;
+tlocal Value[RT_MAX_PRIOR] rt_shift_prior;
+tlocal usz rt_cont_target_shift = 0;
+
+/**
+ * rt_compiled_reset — Evaluate body closure within a reset delimiter.
+ * Body is a V_CLOSURE called with make_nil() arg.
+ */
+fn Value rt_compiled_reset(Value body_closure) {
+    usz saved_shift_ctr = rt_eff_shift_ctr;
+    rt_eff_shift_ctr = 0;
+
+    if (rt_reset_depth >= RT_MAX_HANDLERS) {
+        io::printfn("Error: reset stack overflow");
+        return make_nil();
+    }
+    rt_reset_depth++;
+    rt_reset_body_stack[rt_reset_depth - 1] = body_closure;
+
+    Value result = body_closure.closure_val.invoke(body_closure.closure_val.data, make_nil());
+    // Trampoline
+    while (result.tag == V_THUNK) {
+        Value* ta = main::dereference_as(Value, result.thunk_val.arg);
+        result = result.thunk_val.invoke(result.thunk_val.data, *ta);
+    }
+
+    rt_eff_shift_ctr = saved_shift_ctr;
+    rt_reset_depth--;
+
+    if (rt_shift_occurred && rt_reset_depth == rt_shift_target_depth) {
+        rt_shift_occurred = false;
+        return rt_shift_result_val;
+    }
+
     return result;
 }
 
-fn ContinuationHandle rt_cont_shift() {
-    // Legacy stub — no longer used by compiler
-    ContinuationHandle h;
-    h.data = null;
-    return h;
+/**
+ * rt_compiled_shift — Capture continuation and evaluate k-body.
+ * k_body_closure is a V_CLOSURE called with continuation as arg.
+ */
+fn Value rt_compiled_shift(Value k_body_closure) {
+    // REPLAY CHECK
+    if (rt_cont_sub && !rt_cont_is_eff) {
+        usz current = rt_eff_shift_ctr;
+        rt_eff_shift_ctr++;
+        if (current < rt_cont_target_shift) {
+            return rt_shift_prior[current];
+        }
+        if (current == rt_cont_target_shift) {
+            rt_cont_sub = false;
+            if (current < RT_MAX_PRIOR) {
+                rt_shift_prior[current] = rt_cont_sub_val;
+            }
+            return rt_cont_sub_val;
+        }
+    }
+
+    if (rt_reset_depth == 0) {
+        io::printfn("Error: shift outside of reset");
+        return make_nil();
+    }
+
+    // Capture continuation
+    RtCapturedCont* cc = (RtCapturedCont*)mem::malloc(RtCapturedCont.sizeof);
+    cc.body_closure = rt_reset_body_stack[rt_reset_depth - 1];
+    cc.is_effect = false;
+    cc.has_handler = false;
+    cc.shift_index = rt_eff_shift_ctr;
+    cc.shift_prior_count = rt_eff_shift_ctr;
+    for (usz i = 0; i < cc.shift_prior_count && i < RT_MAX_PRIOR; i++) {
+        cc.shift_prior_results[i] = rt_shift_prior[i];
+    }
+    rt_eff_shift_ctr++;
+
+    // Create continuation closure
+    Value k_val = make_closure((void*)cc, &invoke_compiled_continuation);
+
+    // Call k-body with continuation
+    Value body_result = k_body_closure.closure_val.invoke(k_body_closure.closure_val.data, k_val);
+    while (body_result.tag == V_THUNK) {
+        Value* ta = main::dereference_as(Value, body_result.thunk_val.arg);
+        body_result = body_result.thunk_val.invoke(body_result.thunk_val.data, *ta);
+    }
+
+    rt_shift_occurred = true;
+    rt_shift_target_depth = rt_reset_depth - 1;
+    rt_shift_result_val = body_result;
+
+    return body_result;
 }
 
-fn void rt_push_handler() {
-    // Legacy stub — no longer used by compiler
+/**
+ * rt_compiled_handle — Evaluate body with effect handlers installed.
+ * tags[i] is V_SYMBOL, handlers[i] is V_CLOSURE receiving (cons k arg).
+ */
+fn Value rt_compiled_handle(Value* tags, Value* handlers, usz clause_count, Value body_closure) {
+    if (rt_handler_count >= RT_MAX_HANDLERS) {
+        io::printfn("Error: handler stack overflow");
+        return make_nil();
+    }
+
+    RtEffectHandler* h = &rt_handler_stack[rt_handler_count];
+    h.clause_count = clause_count;
+    h.body_closure = body_closure;
+    for (usz i = 0; i < clause_count && i < RT_MAX_CLAUSES; i++) {
+        h.clauses[i].tag = tags[i];
+        h.clauses[i].handler_closure = handlers[i];
+    }
+
+    usz saved_perform_ctr = rt_eff_perform_ctr;
+    rt_eff_perform_ctr = 0;
+    rt_handler_count++;
+
+    Value result = body_closure.closure_val.invoke(body_closure.closure_val.data, make_nil());
+    while (result.tag == V_THUNK) {
+        Value* ta = main::dereference_as(Value, result.thunk_val.arg);
+        result = result.thunk_val.invoke(result.thunk_val.data, *ta);
+    }
+
+    rt_eff_perform_ctr = saved_perform_ctr;
+
+    if (rt_effect_occurred) {
+        rt_effect_occurred = false;
+        return rt_effect_result_val;
+    }
+
+    rt_handler_count--;
+    return result;
 }
 
-fn void rt_pop_handler() {
-    // Legacy stub — no longer used by compiler
-}
+/**
+ * rt_compiled_perform — Dispatch an effect.
+ * Searches handler stack, captures continuation, calls handler.
+ * I/O fast path when no handler installed.
+ */
+fn Value rt_compiled_perform(Value tag, Value arg) {
+    // REPLAY CHECK
+    if (rt_cont_sub && rt_cont_is_eff) {
+        // Check if tags match
+        if (tag.tag == V_SYMBOL && rt_cont_eff_tag.tag == V_SYMBOL) {
+            SymbolData* t1 = main::dereference_as(SymbolData, tag.sym_handle);
+            SymbolData* t2 = main::dereference_as(SymbolData, rt_cont_eff_tag.sym_handle);
+            bool match = (t1.len == t2.len);
+            if (match) {
+                for (usz c = 0; c < t1.len; c++) {
+                    if (t1.chars[c] != t2.chars[c]) { match = false; break; }
+                }
+            }
+            if (match) {
+                usz current = rt_eff_perform_ctr;
+                rt_eff_perform_ctr++;
+                if (current < rt_cont_target_perform) {
+                    return rt_eff_prior[current];
+                }
+                if (current == rt_cont_target_perform) {
+                    rt_cont_sub = false;
+                    if (current < RT_MAX_PRIOR) {
+                        rt_eff_prior[current] = rt_cont_sub_val;
+                    }
+                    return rt_cont_sub_val;
+                }
+            }
+        }
+    }
 
-fn void rt_register_effect(char[] tag_name) {
-    // Legacy stub — no longer used by compiler
-}
+    // Search handler stack for matching handler
+    for (isz i = (isz)rt_handler_count - 1; i >= 0; i--) {
+        RtEffectHandler* h = &rt_handler_stack[(usz)i];
+        for (usz j = 0; j < h.clause_count; j++) {
+            // Compare tag symbols
+            if (tag.tag != V_SYMBOL || h.clauses[j].tag.tag != V_SYMBOL) continue;
+            SymbolData* t1 = main::dereference_as(SymbolData, tag.sym_handle);
+            SymbolData* t2 = main::dereference_as(SymbolData, h.clauses[j].tag.sym_handle);
+            bool match = (t1.len == t2.len);
+            if (match) {
+                for (usz c = 0; c < t1.len; c++) {
+                    if (t1.chars[c] != t2.chars[c]) { match = false; break; }
+                }
+            }
+            if (!match) continue;
 
-fn Value rt_perform_stub(char[] tag_name, Value arg) {
-    // Legacy stub — renamed to avoid collision with rt_perform that was never
-    // actually generated by the old compiler (it used inline stubs).
-    io::printfn("Error: unhandled effect '%s' in compiled code", tag_name);
+            // Found matching handler — capture continuation
+            RtCapturedCont* cc = (RtCapturedCont*)mem::malloc(RtCapturedCont.sizeof);
+            cc.body_closure = h.body_closure;
+            cc.is_effect = true;
+            cc.effect_tag = tag;
+            cc.handler_copy = *h;
+            cc.has_handler = true;
+            cc.perform_index = rt_eff_perform_ctr;
+            cc.prior_count = rt_eff_perform_ctr;
+            for (usz pi = 0; pi < cc.prior_count && pi < RT_MAX_PRIOR; pi++) {
+                cc.prior_results[pi] = rt_eff_prior[pi];
+            }
+            rt_eff_perform_ctr++;
+
+            Value k_val = make_closure((void*)cc, &invoke_compiled_continuation);
+
+            rt_handler_count--;
+
+            // Call handler with (cons k arg)
+            Value pair = rt_cons(k_val, arg);
+            Value handler_result = h.clauses[j].handler_closure.closure_val.invoke(
+                h.clauses[j].handler_closure.closure_val.data, pair);
+            while (handler_result.tag == V_THUNK) {
+                Value* ta = main::dereference_as(Value, handler_result.thunk_val.arg);
+                handler_result = handler_result.thunk_val.invoke(handler_result.thunk_val.data, *ta);
+            }
+
+            rt_effect_occurred = true;
+            rt_effect_result_val = handler_result;
+            return handler_result;
+        }
+    }
+
+    // I/O fast path: no handler found → direct I/O
+    if (tag.tag == V_SYMBOL) {
+        SymbolData* ts = main::dereference_as(SymbolData, tag.sym_handle);
+        char[] tn = ts.chars[:ts.len];
+        if (rt_sym_eq(tn, "io/print")) {
+            rt_print_value(arg);
+            return make_nil();
+        } else if (rt_sym_eq(tn, "io/println")) {
+            rt_print_value(arg);
+            io::printn("");
+            return make_nil();
+        } else if (rt_sym_eq(tn, "io/display")) {
+            rt_print_value(arg);
+            return make_nil();
+        } else if (rt_sym_eq(tn, "io/newline")) {
+            io::printn("");
+            return make_nil();
+        } else if (rt_sym_eq(tn, "io/read-file")) {
+            return rt_read_file(arg, make_nil());
+        } else if (rt_sym_eq(tn, "io/write-file")) {
+            // arg should be (cons filename content)
+            if (arg.tag == V_CONS) {
+                Value* fname = main::dereference_as(Value, arg.cons_val.car);
+                Value* content = main::dereference_as(Value, arg.cons_val.cdr);
+                return rt_write_file(*fname, *content);
+            }
+            return make_nil();
+        } else if (rt_sym_eq(tn, "io/file-exists?")) {
+            return rt_file_exists(arg, make_nil());
+        } else if (rt_sym_eq(tn, "io/read-lines")) {
+            return rt_read_lines(arg, make_nil());
+        }
+    }
+
+    io::printfn("Error: unhandled effect in compiled code");
     return make_nil();
+}
+
+fn bool rt_sym_eq(char[] a, char[] b) @inline {
+    if (a.len != b.len) return false;
+    for (usz i = 0; i < a.len; i++) {
+        if (a[i] != b[i]) return false;
+    }
+    return true;
+}
+
+/**
+ * invoke_compiled_continuation — Resume a captured continuation with a value.
+ * Wraps the replay mechanism as a ClosureFn for use as V_CLOSURE.
+ */
+fn Value invoke_compiled_continuation(void* data, Value arg) {
+    RtCapturedCont* cc = (RtCapturedCont*)data;
+    if (cc == null) {
+        io::printfn("Error: null continuation");
+        return make_nil();
+    }
+
+    rt_cont_sub_val = arg;
+    rt_cont_sub = true;
+    rt_cont_is_eff = cc.is_effect;
+    if (cc.is_effect) {
+        rt_cont_eff_tag = cc.effect_tag;
+    }
+
+    Value result;
+
+    if (cc.is_effect && cc.has_handler) {
+        // Reinstall handler for replay
+        if (rt_handler_count >= RT_MAX_HANDLERS) {
+            io::printfn("Error: handler stack overflow during continuation resume");
+            return make_nil();
+        }
+        rt_handler_stack[rt_handler_count] = cc.handler_copy;
+        rt_handler_stack[rt_handler_count].body_closure = cc.body_closure;
+        rt_handler_count++;
+
+        rt_cont_target_perform = cc.perform_index;
+        rt_eff_perform_ctr = 0;
+        for (usz i = 0; i < cc.prior_count && i < RT_MAX_PRIOR; i++) {
+            rt_eff_prior[i] = cc.prior_results[i];
+        }
+
+        // Replay body
+        result = cc.body_closure.closure_val.invoke(cc.body_closure.closure_val.data, make_nil());
+        while (result.tag == V_THUNK) {
+            Value* ta = main::dereference_as(Value, result.thunk_val.arg);
+            result = result.thunk_val.invoke(result.thunk_val.data, *ta);
+        }
+
+        if (rt_effect_occurred) {
+            rt_effect_occurred = false;
+            result = rt_effect_result_val;
+        } else {
+            rt_handler_count--;
+        }
+    } else {
+        // Shift continuation replay
+        rt_cont_target_shift = cc.shift_index;
+        rt_eff_shift_ctr = 0;
+        for (usz i = 0; i < cc.shift_prior_count && i < RT_MAX_PRIOR; i++) {
+            rt_shift_prior[i] = cc.shift_prior_results[i];
+        }
+
+        result = cc.body_closure.closure_val.invoke(cc.body_closure.closure_val.data, make_nil());
+        while (result.tag == V_THUNK) {
+            Value* ta = main::dereference_as(Value, result.thunk_val.arg);
+            result = result.thunk_val.invoke(result.thunk_val.data, *ta);
+        }
+    }
+
+    rt_cont_sub = false;
+    return result;
 }
 
 // =============================================================================
@@ -1589,6 +1972,7 @@ fn void rt_ensure_interp() {
     g_interp.init();
     lisp::register_primitives(g_interp);
     lisp::register_stdlib(g_interp);
+    g_interp.jit_enabled = true;
 }
 
 /**
@@ -1743,14 +2127,14 @@ fn Value invoke_interp_closure(void* data, Value arg) {
     rt_ensure_interp();
 
     lisp::Value* interp_arg = runtime_to_interp(arg);
-    lisp::EvalResult result = lisp::apply(wrapper.interp_value, interp_arg, g_interp);
+    lisp::Value* result = lisp::jit_apply_value(wrapper.interp_value, interp_arg, g_interp);
 
-    if (result.error.has_error) {
-        io::printfn("Error in interpreter closure: %s", (ZString)&result.error.message);
+    if (result != null && lisp::is_error(result)) {
+        io::printfn("Error in interpreter closure: %s", (ZString)result.str_val.chars[:result.str_val.len]);
         return make_nil();
     }
 
-    return interp_to_runtime(result.value);
+    return interp_to_runtime(result);
 }
 
 /**
@@ -1773,59 +2157,100 @@ fn Value make_interp_continuation_wrapper(lisp::Value* interp_val) {
     return make_closure((void*)wrapper, &invoke_interp_closure);
 }
 
+// =============================================================================
+// SECTION 17b: STANDALONE VARIABLE TABLE (mutable-captured variables)
+// =============================================================================
+
+const usz RT_VAR_TABLE_SIZE = 256;
+
+struct RtVarEntry {
+    char[64] name;
+    usz      name_len;
+    Value    val;
+    bool     used;
+}
+
+RtVarEntry[RT_VAR_TABLE_SIZE] g_rt_vars;
+
+fn usz rt_var_hash(char[] name) {
+    usz h = 5381;
+    for (usz i = 0; i < name.len; i++) {
+        h = ((h << 5) + h) + (usz)name[i];
+    }
+    return h & (RT_VAR_TABLE_SIZE - 1);
+}
+
 /**
- * Define a variable in the interpreter's global environment.
- * Used to inject compiled-scope variables before evaluating continuation expressions.
- *
- * @param name Variable name
- * @param val Runtime value to inject
+ * Define/update a variable in the standalone var table.
+ * Used for mutable-captured variables.
  */
 fn void rt_define_var(char[] name, Value val) {
-    rt_ensure_interp();
-
-    lisp::SymbolId sym = g_interp.symbols.intern(name);
-    lisp::Value* interp_val = runtime_to_interp(val);
-    g_interp.global_env.define(sym, interp_val);
+    usz idx = rt_var_hash(name);
+    for (usz i = 0; i < RT_VAR_TABLE_SIZE; i++) {
+        usz slot = (idx + i) & (RT_VAR_TABLE_SIZE - 1);
+        if (g_rt_vars[slot].used && g_rt_vars[slot].name_len == name.len) {
+            bool match = true;
+            for (usz j = 0; j < name.len; j++) {
+                if (g_rt_vars[slot].name[j] != name[j]) { match = false; break; }
+            }
+            if (match) {
+                g_rt_vars[slot].val = val;
+                return;
+            }
+        }
+        if (!g_rt_vars[slot].used) {
+            usz len = name.len;
+            if (len > 63) len = 63;
+            for (usz j = 0; j < len; j++) {
+                g_rt_vars[slot].name[j] = name[j];
+            }
+            g_rt_vars[slot].name[len] = 0;
+            g_rt_vars[slot].name_len = len;
+            g_rt_vars[slot].val = val;
+            g_rt_vars[slot].used = true;
+            return;
+        }
+    }
 }
 
 /**
- * Look up a variable in the interpreter's global environment.
- * Used for mutable-captured variables that are stored in the interpreter env.
+ * Look up a variable in the standalone var table.
+ * Used for mutable-captured variables.
  */
 fn Value rt_lookup_var(char[] name) {
-    rt_ensure_interp();
-    lisp::SymbolId sym = g_interp.symbols.intern(name);
-    lisp::Value* val = g_interp.global_env.lookup(sym);
-    if (val == null) return make_nil();
-    return interp_to_runtime(val);
+    usz idx = rt_var_hash(name);
+    for (usz i = 0; i < RT_VAR_TABLE_SIZE; i++) {
+        usz slot = (idx + i) & (RT_VAR_TABLE_SIZE - 1);
+        if (!g_rt_vars[slot].used) return make_nil();
+        if (g_rt_vars[slot].name_len == name.len) {
+            bool match = true;
+            for (usz j = 0; j < name.len; j++) {
+                if (g_rt_vars[slot].name[j] != name[j]) { match = false; break; }
+            }
+            if (match) return g_rt_vars[slot].val;
+        }
+    }
+    return make_nil();
 }
 
 /**
- * Set a variable in the interpreter's global environment.
+ * Set a variable in the standalone var table.
  * Returns the new value. Used for mutable-captured variable mutation.
  */
 fn Value rt_set_var(char[] name, Value val) {
-    rt_ensure_interp();
-    lisp::SymbolId sym = g_interp.symbols.intern(name);
-    lisp::Value* interp_val = runtime_to_interp(val);
-    g_interp.global_env.define(sym, interp_val);
+    rt_define_var(name, val);
     return val;
 }
 
 /**
- * Evaluate Pika source code using the interpreter and return the result
- * as a runtime Value.
- *
- * This is the main entry point for compiled code to delegate continuation
- * forms (reset/shift/handle/perform) to the interpreter.
- *
- * @param source Pika source code to evaluate
- * @return The result as a runtime Value
+ * rt_eval_source — DEPRECATED: No longer needed.
+ * All expression types are now compiled natively.
+ * Kept as a stub for backwards compatibility during transition.
  */
 fn Value rt_eval_source(char[] source) {
     rt_ensure_interp();
 
-    lisp::EvalResult result = lisp::run(source, g_interp);
+    lisp::EvalResult result = lisp::run(source, &*g_interp);
 
     if (result.error.has_error) {
         io::printfn("Error in rt_eval_source: %s", (ZString)&result.error.message);

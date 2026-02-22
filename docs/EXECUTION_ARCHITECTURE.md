@@ -9,11 +9,11 @@ OmniLisp uses a high-performance, GC-less execution model based on **CTRR (Compi
 The OmniLisp toolchain targets **C99 + POSIX + extensions**, ensuring portability while allowing practical low-level optimizations (e.g., TLS).
 
 ```text
-Source.omni ──► Pika Parser ──► AST (Value*) ──► Region Inference ──► Codegen ──► Binary
+Source.omni ──► Omni Parser ──► AST (Value*) ──► Region Inference ──► Codegen ──► Binary
 ```
 
 ### Key Stages:
-1.  **Pika Parser**: A bottom-up dynamic programming parser that handles left recursion natively and provides optimal error recovery.
+1.  **Omni Parser**: A bottom-up dynamic programming parser that handles left recursion natively and provides optimal error recovery.
 2.  **Region Inference**: A static analysis pass that identifies object lifetimes and groups them into Regions.
 3.  **CTRR Scheduling**: Determines region lifetimes and escape points, injecting `region_exit` and escape repair (e.g., `transmigrate`) at the right boundaries.
 4.  **Codegen**: Translates the annotated AST into optimized C code linked against the OmniLisp Runtime.

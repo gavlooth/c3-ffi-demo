@@ -1,15 +1,15 @@
-# Pika Lisp — Claude Code Instructions
+# Omni Lisp — Claude Code Instructions
 
 ## Onboarding — Read Before Any Work
 
 Before writing or modifying code, understand the project's intent and paradigms:
 
 1. **Read `memory/MEMORY.md`** — project overview, key files, naming conventions, architecture, what's implemented
-2. **Read `docs/LANGUAGE_SPEC.md`** — the language Pika Lisp aims to be: syntax, data types, special forms, type system, dispatch, effects
+2. **Read `docs/LANGUAGE_SPEC.md`** — the language Omni Lisp aims to be: syntax, data types, special forms, type system, dispatch, effects
 3. **For type/dispatch/effects work**, also read `memory/type-system-design.md`
 
 ### Design Intent
-Pika is a **Lisp with modern semantics** — not Scheme, not Clojure, not Common Lisp. Key paradigm choices:
+Omni is a **Lisp with modern semantics** — not Scheme, not Clojure, not Common Lisp. Key paradigm choices:
 - **Three collection types**: list (linked, `'(1 2 3)`), array (contiguous, `[1 2 3]`), dict (hash, `{'a 1}`)
 - **No "vector"** — arrays are arrays. No Scheme/C++ naming.
 - **Generic operations over type-prefixed names**: `(ref coll key)` not `(array-ref arr idx)` / `(dict-ref d k)`
@@ -30,7 +30,7 @@ When proposing new features or changes, check whether they align with these para
 - Single-param lambdas with currying (multi-param desugars to nested lambdas)
 - `_` is a wildcard token (T_UNDERSCORE), NOT a symbol — never use as lambda param name
 - C3 slices are INCLUSIVE: `buffer[0..n]` = n+1 elements, use `buffer[:n]` for n elements
-- Stdlib functions defined in `register_stdlib()` as Pika code via `run()`
+- Stdlib functions defined in `register_stdlib()` as Omni code via `run()`
 - Tests go in `run_advanced_tests()` or appropriate test function in eval.c3
 
 ## Audit Mode

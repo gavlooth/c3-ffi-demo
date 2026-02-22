@@ -134,9 +134,9 @@ Types are defined using the unified `define` form with Kind `{}` syntax, followi
 (define {IntOrString} (union [{Int} {String}]))
 ```
 
-### `define [grammar ...]` (Pika Parser)
+### `define [grammar ...]` (Omni Parser)
 
-Defines a PEG grammar for the Pika parser.
+Defines a PEG grammar for the Omni parser.
 
 ```lisp
 (define [grammar arithmetic]

@@ -443,7 +443,7 @@ Sending a value through a channel performs an **Ownership Transfer**. The sendin
 
 ---
 
-## 7. Pika Grammar DSL
+## 7. Omni Grammar DSL
 
 Define high-performance PEG grammars directly in the Flow domain.
 
@@ -456,9 +456,9 @@ Define high-performance PEG grammars directly in the Flow domain.
 
 ---
 
-## 8. Regular Expressions (Pika Regex)
+## 8. Regular Expressions (Omni Regex)
 
-OmniLisp includes a **Pika-style regex engine** - a self-contained PEG-based matcher that compiles regex patterns to an AST and matches directly.
+OmniLisp includes a **Omni-style regex engine** - a self-contained PEG-based matcher that compiles regex patterns to an AST and matches directly.
 
 ### 8.1 Regex Functions
 

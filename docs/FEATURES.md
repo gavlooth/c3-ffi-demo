@@ -1,4 +1,4 @@
-# Pika Lisp — Complete Feature Inventory
+# Omni Lisp — Complete Feature Inventory
 
 **Last updated:** 2026-02-20
 
@@ -213,7 +213,7 @@
 ```lisp
 (module name (export sym1 sym2 ...) body...)
 (import name)
-(import "path/to/file.pika")
+(import "path/to/file.omni")
 ```
 - Modules define a namespace with explicit exports
 - `import` brings exported symbols into the current environment
@@ -397,7 +397,7 @@ When no handler is installed, a fast path calls raw primitives directly (zero ov
 | `write-file` | 2 | Write string to file |
 | `file-exists?` | 1 | Test if file exists |
 | `read-lines` | 1 | Read file as list of lines |
-| `load` | 1 | Load and evaluate a Pika file |
+| `load` | 1 | Load and evaluate an Omni file |
 
 ### 5.9 Constants (2)
 | Name | Value |
@@ -451,13 +451,13 @@ When no handler is installed, a fast path calls raw primitives directly (zero ov
 - Handler receives continuation `k`, can resume or abort
 - Handler result bypasses intermediate computation back to `handle`
 
-### 6.3 What Pika Does NOT Have
+### 6.3 What Omni Does NOT Have
 - **No call/cc** — uses delimited continuations instead
 - **No garbage collection** — uses region-based memory with per-REPL-line reclamation
 - **No continuations across threads** — continuations are thread-local
 
 ### 6.4 Tail-Call Optimization
-Pika implements TCO via an eval loop with `continue` for tail positions:
+Omni implements TCO via an eval loop with `continue` for tail positions:
 - `if` — both branches are tail positions
 - `let` — body is tail position
 - `begin` — last expression is tail position
@@ -470,7 +470,7 @@ Pika implements TCO via an eval loop with `continue` for tail positions:
 
 ## 7. Compiler Support
 
-The Pika compiler (`src/lisp/compiler.c3`) translates Lisp AST to C3 source code using a runtime library (`src/lisp/runtime.c3`).
+The Omni compiler (`src/lisp/compiler.c3`) translates Lisp AST to C3 source code using a runtime library (`src/lisp/runtime.c3`).
 
 | Feature | Interpreter | Compiler |
 |---------|:-----------:|:--------:|

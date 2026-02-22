@@ -7,9 +7,9 @@ This document tracks identified inconsistencies in the language syntax, document
 ## 1. Parser Implementation Divergence
 
 *   **Status:** ✅ **RESOLVED** (2026-01-14)
-*   **Compiler Parser:** Located in `csrc/parser/parser.c`. Uses a Pika packrat parser.
-*   **Runtime Parser:** The file `src/runtime/pika/omni_grammar.c` **does not exist**.
-*   **Resolution:** There is only ONE parser - the Pika-based parser in `csrc/parser/`.
+*   **Compiler Parser:** Located in `csrc/parser/parser.c`. Uses a Omni packrat parser.
+*   **Runtime Parser:** The file `src/runtime/omni/omni_grammar.c` **does not exist**.
+*   **Resolution:** There is only ONE parser - the Omni-based parser in `csrc/parser/`.
     The runtime does not have a separate parser; it executes compiled output.
 *   **Single Source of Truth:** `csrc/parser/parser.c` is the authoritative grammar.
 
