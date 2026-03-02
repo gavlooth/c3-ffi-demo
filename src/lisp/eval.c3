@@ -365,7 +365,7 @@ fn SymbolId value_type_name(Value* v, Interp* interp) {
         case STRING:    return interp.sym_String;
         case SYMBOL:
             // true/false are symbols but semantically Bool
-            if ((uint)v.sym_val == (uint)interp.sym_true || (uint)v.sym_val == (uint)interp.sym_false) { return interp.sym_Bool; }
+            if (v.sym_val == interp.sym_true || v.sym_val == interp.sym_false) { return interp.sym_Bool; }
             return interp.sym_Symbol;
         case CONS:      return interp.sym_List;
         case CLOSURE:   return interp.sym_Closure;
@@ -1359,7 +1359,7 @@ fn Value* alist_lookup(Value* alist, SymbolId key, Interp* interp) {
             Value* pair_key = car(pair);
 
             // Check if the key matches (compare as symbols)
-            if (is_symbol(pair_key) && (uint)pair_key.sym_val == (uint)key) {
+            if (is_symbol(pair_key) && pair_key.sym_val == key) {
                 return cdr(pair);
             }
         }
@@ -1579,7 +1579,7 @@ fn bool values_equal(Value* a, Value* b, usz depth = 0) {
             }
             return true;
         case SYMBOL:
-            return (uint)a.sym_val == (uint)b.sym_val;
+            return a.sym_val == b.sym_val;
         case CONS:
             return values_equal(a.cons_val.car, b.cons_val.car, depth + 1) &&
                    values_equal(a.cons_val.cdr, b.cons_val.cdr, depth + 1);
@@ -1904,7 +1904,7 @@ fn EvalResult apply_partial(Value* partial, Value* arg, Interp* interp) {
 fn bool is_falsy(Value* v, Interp* interp) {
     if (v == null) return true;
     if (v.tag == NIL) return true;
-    if (v.tag == SYMBOL && (uint)v.sym_val == (uint)interp.sym_false) return true;
+    if (v.tag == SYMBOL && v.sym_val == interp.sym_false) return true;
     return false;
 }
 

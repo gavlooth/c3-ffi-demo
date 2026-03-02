@@ -1608,7 +1608,7 @@ fn Value* jit_signal_impl(Expr* expr, Env* env, Interp* interp) {
 
             for (usz j = 0; j < h.clause_count; j++) {
                 SymbolId ctag = h.clauses != null ? h.clauses[j].effect_tag : h.tags[j];
-                if ((uint)ctag == (uint)tag) {
+                if (ctag == tag) {
                     // Found matching handler
                     if (h.effect_state != null) {
                         // StackCtx path: suspend context, inform handle loop
@@ -1673,7 +1673,7 @@ fn Value* jit_signal_impl(Expr* expr, Env* env, Interp* interp) {
 
     // I/O fast path: no handler found → look up dispatch table
     for (usz fp_i = 0; fp_i < interp.fast_path_count; fp_i++) {
-        if ((uint)interp.fast_path_table[fp_i].tag == (uint)tag) {
+        if (interp.fast_path_table[fp_i].tag == tag) {
             Value* fp_prim = interp.fast_path_table[fp_i].prim;
             int fp_arity = fp_prim.prim_val.arity;
 

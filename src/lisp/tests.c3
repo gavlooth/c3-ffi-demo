@@ -64,7 +64,7 @@ fn void test_eq_double(Interp* interp, char[] name, char[] expr, double expected
 
 fn void test_truthy(Interp* interp, char[] name, char[] expr, int* pass, int* fail) {
     EvalResult ri = run(expr, interp);
-    bool interp_ok = !ri.error.has_error && !is_nil(ri.value) && !(is_symbol(ri.value) && (uint)ri.value.sym_val == (uint)interp.sym_false);
+    bool interp_ok = !ri.error.has_error && !is_nil(ri.value) && !(is_symbol(ri.value) && ri.value.sym_val == interp.sym_false);
 
     Expr* ast = parse_for_jit(expr, interp);
     bool jit_ok = false;
@@ -72,7 +72,7 @@ fn void test_truthy(Interp* interp, char[] name, char[] expr, int* pass, int* fa
         JitFn f = jit_compile(ast, interp);
         if (f != null) {
             Value* jv = jit_exec(f, interp);
-            jit_ok = jv != null && !is_nil(jv) && !(is_symbol(jv) && (uint)jv.sym_val == (uint)interp.sym_false);
+            jit_ok = jv != null && !is_nil(jv) && !(is_symbol(jv) && jv.sym_val == interp.sym_false);
         }
     }
 
@@ -276,7 +276,7 @@ fn void test_eq_interp(Interp* interp, char[] name, char[] expr, long expected, 
 
 fn void test_truthy_interp(Interp* interp, char[] name, char[] expr, int* pass, int* fail) {
     EvalResult ri = run(expr, interp);
-    if (!ri.error.has_error && !is_nil(ri.value) && !(is_symbol(ri.value) && (uint)ri.value.sym_val == (uint)interp.sym_false)) {
+    if (!ri.error.has_error && !is_nil(ri.value) && !(is_symbol(ri.value) && ri.value.sym_val == interp.sym_false)) {
         io::printfn("[PASS] %s", (ZString)name);
         (*pass)++;
     } else {

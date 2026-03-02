@@ -40,12 +40,12 @@ fn bool schema_check(Value* schema, Value* val, Interp* interp) {
         SymbolId s_bool = interp.symbols.intern("bool");
         SymbolId s_any = interp.symbols.intern("any");
         SymbolId s_nil = interp.symbols.intern("nil");
-        if ((uint)schema.sym_val == (uint)s_string) return val != null && val.tag == STRING;
-        if ((uint)schema.sym_val == (uint)s_int) return val != null && val.tag == INT;
-        if ((uint)schema.sym_val == (uint)s_double) return val != null && val.tag == DOUBLE;
-        if ((uint)schema.sym_val == (uint)s_any) return true;
-        if ((uint)schema.sym_val == (uint)s_nil) return val == null || val.tag == NIL;
-        if ((uint)schema.sym_val == (uint)s_bool) return val != null && val.tag == SYMBOL;
+        if (schema.sym_val == s_string) return val != null && val.tag == STRING;
+        if (schema.sym_val == s_int) return val != null && val.tag == INT;
+        if (schema.sym_val == s_double) return val != null && val.tag == DOUBLE;
+        if (schema.sym_val == s_any) return true;
+        if (schema.sym_val == s_nil) return val == null || val.tag == NIL;
+        if (schema.sym_val == s_bool) return val != null && val.tag == SYMBOL;
         return false;
     }
 
@@ -71,7 +71,7 @@ fn bool schema_check(Value* schema, Value* val, Interp* interp) {
         SymbolId s_enum = interp.symbols.intern("enum");
 
         // (and s1 s2 ...)
-        if ((uint)tag_sym == (uint)s_and) {
+        if (tag_sym == s_and) {
             Value* rest = cdr(schema);
             while (is_cons(rest)) {
                 if (!schema_check(car(rest), val, interp)) return false;
@@ -81,7 +81,7 @@ fn bool schema_check(Value* schema, Value* val, Interp* interp) {
         }
 
         // (or s1 s2 ...)
-        if ((uint)tag_sym == (uint)s_or) {
+        if (tag_sym == s_or) {
             Value* rest = cdr(schema);
             while (is_cons(rest)) {
                 if (schema_check(car(rest), val, interp)) return true;
@@ -91,33 +91,33 @@ fn bool schema_check(Value* schema, Value* val, Interp* interp) {
         }
 
         // (not s)
-        if ((uint)tag_sym == (uint)s_not) {
+        if (tag_sym == s_not) {
             Value* inner = car(cdr(schema));
             return !schema_check(inner, val, interp);
         }
 
         // (maybe s) — nil or matches s
-        if ((uint)tag_sym == (uint)s_maybe) {
+        if (tag_sym == s_maybe) {
             if (val == null || val.tag == NIL) return true;
             return schema_check(car(cdr(schema)), val, interp);
         }
 
         // (> n), (< n), (>= n), (<= n)
-        if ((uint)tag_sym == (uint)s_gt || (uint)tag_sym == (uint)s_lt ||
-            (uint)tag_sym == (uint)s_ge || (uint)tag_sym == (uint)s_le) {
+        if (tag_sym == s_gt || tag_sym == s_lt ||
+            tag_sym == s_ge || tag_sym == s_le) {
             if (val == null || (val.tag != INT && val.tag != DOUBLE)) return false;
             Value* bound = car(cdr(schema));
             if (bound == null || (bound.tag != INT && bound.tag != DOUBLE)) return false;
             double v = val.tag == INT ? (double)val.int_val : val.double_val;
             double b = bound.tag == INT ? (double)bound.int_val : bound.double_val;
-            if ((uint)tag_sym == (uint)s_gt) return v > b;
-            if ((uint)tag_sym == (uint)s_lt) return v < b;
-            if ((uint)tag_sym == (uint)s_ge) return v >= b;
+            if (tag_sym == s_gt) return v > b;
+            if (tag_sym == s_lt) return v < b;
+            if (tag_sym == s_ge) return v >= b;
             return v <= b;
         }
 
         // (= v) — exact value match
-        if ((uint)tag_sym == (uint)s_eq) {
+        if (tag_sym == s_eq) {
             Value* expected = car(cdr(schema));
             if (expected == null || val == null) return expected == val;
             if (expected.tag == INT && val.tag == INT) return expected.int_val == val.int_val;
@@ -132,7 +132,7 @@ fn bool schema_check(Value* schema, Value* val, Interp* interp) {
         }
 
         // (re pattern) — Pika regex match
-        if ((uint)tag_sym == (uint)s_re) {
+        if (tag_sym == s_re) {
             if (val == null || val.tag != STRING) return false;
             Value* pat = car(cdr(schema));
             if (pat == null || pat.tag != STRING) return false;
@@ -145,7 +145,7 @@ fn bool schema_check(Value* schema, Value* val, Interp* interp) {
         }
 
         // (map (name schema) ...) — dict with required keys
-        if ((uint)tag_sym == (uint)s_map) {
+        if (tag_sym == s_map) {
             if (val == null || val.tag != HASHMAP) return false;
             Value* entries = cdr(schema);
             while (is_cons(entries)) {
@@ -164,7 +164,7 @@ fn bool schema_check(Value* schema, Value* val, Interp* interp) {
         }
 
         // (vector-of schema) — array where all elements match
-        if ((uint)tag_sym == (uint)s_vector_of) {
+        if (tag_sym == s_vector_of) {
             if (val == null || val.tag != ARRAY) return false;
             Value* elem_schema = car(cdr(schema));
             for (usz i = 0; i < val.array_val.length; i++) {
@@ -174,7 +174,7 @@ fn bool schema_check(Value* schema, Value* val, Interp* interp) {
         }
 
         // (tuple s1 s2 ...) — fixed-length array with per-position schemas
-        if ((uint)tag_sym == (uint)s_tuple) {
+        if (tag_sym == s_tuple) {
             if (val == null || val.tag != ARRAY) return false;
             Value* schemas = cdr(schema);
             usz idx = 0;
@@ -188,7 +188,7 @@ fn bool schema_check(Value* schema, Value* val, Interp* interp) {
         }
 
         // (enum v1 v2 ...) — value must be one of the listed values
-        if ((uint)tag_sym == (uint)s_enum) {
+        if (tag_sym == s_enum) {
             Value* options = cdr(schema);
             while (is_cons(options)) {
                 Value* opt = car(options);
@@ -203,7 +203,7 @@ fn bool schema_check(Value* schema, Value* val, Interp* interp) {
                         if (eq) return true;
                     }
                 }
-                if (opt.tag == SYMBOL && val != null && val.tag == SYMBOL && (uint)opt.sym_val == (uint)val.sym_val) return true;
+                if (opt.tag == SYMBOL && val != null && val.tag == SYMBOL && opt.sym_val == val.sym_val) return true;
                 options = cdr(options);
             }
             return false;

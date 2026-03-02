@@ -57,7 +57,7 @@ fn bool deduce_val_eq(Value* a, Value* b) {
             }
             return true;
         }
-        case SYMBOL: return (uint)a.sym_val == (uint)b.sym_val;
+        case SYMBOL: return a.sym_val == b.sym_val;
         case NIL: return true;
         default: return a == b;  // pointer equality for other types
     }

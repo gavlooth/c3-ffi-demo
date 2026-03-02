@@ -1540,7 +1540,7 @@ fn Value* prim_string_repeat(Value*[] args, Env* env, Interp* interp) {
 fn Value* prim_is_boolean(Value*[] args, Env* env, Interp* interp) {
     if (args.len < 1) return raise_error(interp, "boolean?: expected 1 argument");
     if (is_nil(args[0])) return make_symbol(interp, interp.sym_true); // false is nil
-    if (is_symbol(args[0]) && (uint)args[0].sym_val == (uint)interp.sym_true) return make_symbol(interp, interp.sym_true);
+    if (is_symbol(args[0]) && args[0].sym_val == interp.sym_true) return make_symbol(interp, interp.sym_true);
     return make_nil(interp);
 }
 

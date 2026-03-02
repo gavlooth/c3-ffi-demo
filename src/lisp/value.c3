@@ -40,7 +40,7 @@ enum ValueTag : char {
 /**
  * Symbol — Interned string identifier.
  */
-typedef SymbolId = uint;
+typedef SymbolId = uint;  // Already distinct (non-inline typedef = no implicit conversion)
 
 // Initial capacities for dynamic tables
 const usz MACRO_INITIAL_CAPACITY = 32;
@@ -959,7 +959,7 @@ fn Value* raise_error(Interp* interp, char[] msg) {
 
         for (usz j = 0; j < h.clause_count; j++) {
             SymbolId ctag = h.clauses != null ? h.clauses[j].effect_tag : h.tags[j];
-            if ((uint)ctag == (uint)raise_sym) {
+            if (ctag == raise_sym) {
                 // Found a raise handler — set pending flag for jit_handle_impl to dispatch.
                 // We can't safely call jit_eval from within a primitive call chain,
                 // so we store the message and let the handle block dispatch.

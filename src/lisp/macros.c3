@@ -896,7 +896,7 @@ fn Value* expand_template_list(Value* list, MatchResult* bindings, Interp* inter
     Value* head = list.cons_val.car;
 
     // Check for splice: (.. var ...)
-    if (head != null && head.tag == SYMBOL && (uint)head.sym_val == (uint)interp.sym_dotdot) {
+    if (head != null && head.tag == SYMBOL && head.sym_val == interp.sym_dotdot) {
         // Next element is the variable to splice
         Value* rest_after_dotdot = list.cons_val.cdr;
         if (is_cons(rest_after_dotdot)) {
