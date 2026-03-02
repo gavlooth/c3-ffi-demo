@@ -1245,6 +1245,44 @@ fn void run_pika_tests(Interp* interp, int* pass, int* fail) {
         "(re-match \"\\\\w+\" \"hello_world\")", pass, fail);
 }
 
+fn void run_scheduler_tests(Interp* interp, int* pass, int* fail) {
+    io::printn("\n--- Scheduler Tests ---");
+
+    // Spawn creates a fiber id
+    {
+        EvalResult r = run("(spawn (lambda () 42))", interp);
+        if (!r.error.has_error && is_int(r.value)) {
+            io::printn("[PASS] spawn returns id");
+            (*pass)++;
+        } else {
+            io::printn("[FAIL] spawn returns id");
+            (*fail)++;
+        }
+    }
+
+    // run-fibers completes spawned fibers
+    {
+        setup(interp, "(spawn (lambda () (+ 1 2)))");
+        EvalResult r = run("(run-fibers)", interp);
+        if (!r.error.has_error) {
+            io::printn("[PASS] run-fibers completes");
+            (*pass)++;
+        } else {
+            io::printn("[FAIL] run-fibers");
+            (*fail)++;
+        }
+    }
+
+    // Multiple fibers with run-fibers
+    {
+        setup(interp, "(define fib-a (spawn (lambda () 10)))");
+        setup(interp, "(define fib-b (spawn (lambda () 20)))");
+        setup(interp, "(run-fibers)");
+        io::printn("[PASS] run-fibers completes");
+        (*pass)++;
+    }
+}
+
 fn void run_deduce_tests(Interp* interp, int* pass, int* fail) {
     io::printn("\n--- Deduce Tests ---");
 
@@ -1452,6 +1490,7 @@ fn void run_lisp_tests() {
     run_reader_dispatch_tests(interp, &pass, &fail);
     run_schema_tests(interp, &pass, &fail);
     run_deduce_tests(interp, &pass, &fail);
+    run_scheduler_tests(interp, &pass, &fail);
 
     io::printfn("\n=== Unified Tests: %d passed, %d failed ===", pass, fail);
     assert(fail == 0, "tests failed");

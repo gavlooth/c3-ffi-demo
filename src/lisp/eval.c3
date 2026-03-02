@@ -1960,7 +1960,7 @@ fn void register_primitives(Interp* interp) {
     }
 
     // --- Regular primitives ---
-    PrimReg[128] regular_prims = {
+    PrimReg[131] regular_prims = {
         // List operations
         { "cons", &prim_cons, 2 }, { "car", &prim_car, 1 }, { "cdr", &prim_cdr, 1 },
         { "null?", &prim_null, 1 }, { "pair?", &prim_pair, 1 }, { "list", &prim_list, -1 },
@@ -2077,6 +2077,10 @@ fn void register_primitives(Interp* interp) {
         { "deduce-query", &prim_deduce_query, 2 },
         { "deduce-count", &prim_deduce_count, 1 },
         { "deduce-match", &prim_deduce_match, 2 },
+        // Scheduler
+        { "spawn", &prim_spawn, 1 },
+        { "await", &prim_await, 1 },
+        { "run-fibers", &prim_run_fibers, 0 },
     };
     foreach (&r : regular_prims) {
         register_prim(interp, r.name, r.func, r.arity);
