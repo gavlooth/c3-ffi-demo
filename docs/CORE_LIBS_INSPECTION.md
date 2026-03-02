@@ -181,12 +181,41 @@ Name: Deduce (the engine deduces new facts from rules)
 
 #### Deduce Grammar
 
-**Schema — declare relations with named columns:**
+**Database — LMDB-backed, always in-memory (mmap), optionally persistent:**
 ```lisp
-(define [relation] person (name age email))
-(define [relation] edge (from to))
-(define [relation] road (city1 city2 km))
+;; Persistent — file on disk, survives restart
+(define db (deduce-open "app.db"))
+
+;; Ephemeral — anonymous LMDB, same API, no durable file
+(define tmp (deduce-open 'memory))
 ```
+
+LMDB is mmap-based: reads hit OS page cache (memory speed), writes flush to disk lazily.
+No separate "in-memory mode" — LMDB already IS in-memory with persistence as side effect.
+
+**Relations — columns + optional attributes:**
+```lisp
+;; Minimal — just columns, LMDB defaults
+(define [relation db] edge (from to))
+(define [relation db] road (city1 city2 km))
+
+;; With attributes — key, index, schema, history
+(define [relation db] person (name age email)
+  (key name)                    ;; primary key — upsert on duplicate
+  (index age)                   ;; secondary B+ tree index
+  (schema person-schema)        ;; validate on every assert!
+  (history true))               ;; keep previous versions with timestamp
+```
+
+**Relation attributes:**
+
+| Attribute | Syntax | Purpose |
+|-----------|--------|---------|
+| `key` | `(key col)` or `(key col1 col2)` | Primary key. Duplicate insert = upsert. Without: duplicates allowed. |
+| `index` | `(index col)` | Secondary B+ tree index. Enables fast range scans on that column. |
+| `schema` | `(schema name)` | Contract validation on every `assert!`. Rejects invalid tuples. |
+| `history` | `(history true)` | Temporal: keep old versions with timestamp. Enables `:at` queries. |
+| `memory` | `(memory "200mb")` | Override LMDB map size for this database. Default ~1GB. |
 
 **Facts — assert tuples into relations:**
 ```lisp
@@ -255,6 +284,20 @@ Name: Deduce (the engine deduces new facts from rules)
   (person ?name ?age _)
   (order-by ?age 'desc))
 ;; => ((dict 'name "Alice" 'age 30) (dict 'name "Bob" 'age 25))
+```
+
+**Temporal queries — when history is enabled on a relation:**
+```lisp
+;; Query state at a specific time
+(query [?name ?age]
+  (person ?name ?age _ :at "2025-06-01"))
+
+;; Query all versions of a record
+(query [?name ?age ?t]
+  (person ?name ?age _ :time ?t)
+  (= ?name "Alice"))
+;; => ((dict 'name "Alice" 'age 29 't "2025-01-01")
+;;     (dict 'name "Alice" 'age 30 't "2026-01-15"))
 ```
 
 **Retract — with wildcard support:**
@@ -352,15 +395,20 @@ avoiding redundant re-derivation.
 | Component | Lines (est.) | Notes |
 |-----------|-------------|-------|
 | LMDB extern fn (C3 native, no wrapper) | ~30 | `mdb_env_*`, `mdb_txn_*`, `mdb_cursor_*` |
-| Relation storage | ~200 | Tuple encoding/decoding, LMDB index management |
+| Relation storage + attributes | ~250 | Tuple encoding, LMDB indices, key/index/schema/history handling |
 | Unification engine | ~150 | `?var` pattern matching with logic variables |
 | Semi-naive evaluator | ~200 | Bottom-up fixpoint with stratified negation |
 | Query compiler | ~150 | `query` special form → evaluation plan |
 | Dict result builder | ~50 | Query results as dicts (strip `?` from var names) |
 | Aggregation engine | ~100 | `count`, `sum`, `avg`, `min`, `max` + group-by |
-| Parser (`[relation]`, `[rule]`, `query`, `?var`) | ~100 | New bracket attrs + `?` reader char |
-| Primitives (`assert!`, `retract!`) | ~80 | Relation as first-class value |
-| **Total** | **~1060** | |
+| Temporal (history/`:at`/`:time`) | ~80 | Version tracking with timestamps, temporal query clauses |
+| Parser (`[relation]`, `[rule]`, `query`, `?var`) | ~120 | Bracket attrs + relation attribute clauses + `?` reader char |
+| Primitives (`deduce-open`, `assert!`, `retract!`) | ~100 | Database lifecycle, relation as first-class value |
+| **Total** | **~1230** | |
+
+**Storage model:** LMDB is always the backend (mmap = in-memory speed, disk persistence
+as side effect). `(deduce-open 'memory)` for ephemeral use (anonymous mmap, no file).
+No separate in-memory engine — LMDB already IS in-memory.
 
 **Parser changes needed:**
 - `?` as reader prefix for logic variables → `T_LOGIC_VAR` token type
