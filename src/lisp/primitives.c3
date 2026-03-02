@@ -992,9 +992,10 @@ fn bool ValueKey.is_eq(self, ValueKey other) {
     return values_equal(self.val, other.val);
 }
 
-// C3 native map — deferred: Value* not equatable for map{Key, Value}
-// Need to either add .is_eq to Value* or use wrapper type for value too.
-// See M1.4b in c3-migration.md for approach.
+// C3 native map BLOCKED: std::collections::map fully instantiates ALL methods,
+// including has_value() which requires Value type to be equatable.
+// Value* (pointer) lacks .equals/.is_eq/.less methods that C3 generics require.
+// Custom HashMap retained — not historical debt, it's a necessary workaround.
 
 fn uint hash_value(Value* key) {
     if (key == null) return 0;
