@@ -1960,7 +1960,7 @@ fn void register_primitives(Interp* interp) {
     }
 
     // --- Regular primitives ---
-    PrimReg[133] regular_prims = {
+    PrimReg[137] regular_prims = {
         // List operations
         { "cons", &prim_cons, 2 }, { "car", &prim_car, 1 }, { "cdr", &prim_cdr, 1 },
         { "null?", &prim_null, 1 }, { "pair?", &prim_pair, 1 }, { "list", &prim_list, -1 },
@@ -2084,6 +2084,11 @@ fn void register_primitives(Interp* interp) {
         // HTTP
         { "__raw-http-get", &prim_http_get, 1 },
         { "__raw-http-request", &prim_http_request, -1 },
+        // Atomics
+        { "atomic", &prim_atomic, 1 },
+        { "atomic-add!", &prim_atomic_add, 2 },
+        { "atomic-read", &prim_atomic_read, 1 },
+        { "atomic-cas!", &prim_atomic_cas, 3 },
     };
     foreach (&r : regular_prims) {
         register_prim(interp, r.name, r.func, r.arity);

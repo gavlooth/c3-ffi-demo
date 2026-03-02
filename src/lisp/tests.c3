@@ -1245,6 +1245,64 @@ fn void run_pika_tests(Interp* interp, int* pass, int* fail) {
         "(re-match \"\\\\w+\" \"hello_world\")", pass, fail);
 }
 
+fn void run_atomic_tests(Interp* interp, int* pass, int* fail) {
+    io::printn("\n--- Atomic Tests ---");
+
+    // Create atomic
+    test_tag(interp, "atomic creates handle",
+        "(atomic 0)", FFI_HANDLE, pass, fail);
+
+    // Read initial value
+    {
+        setup(interp, "(define a (atomic 42))");
+        EvalResult r = run("(atomic-read a)", interp);
+        if (!r.error.has_error && is_int(r.value) && r.value.int_val == 42) {
+            io::printn("[PASS] atomic-read initial");
+            (*pass)++;
+        } else {
+            io::printn("[FAIL] atomic-read initial");
+            (*fail)++;
+        }
+    }
+
+    // Add and read
+    {
+        setup(interp, "(atomic-add! a 10)");
+        EvalResult r = run("(atomic-read a)", interp);
+        if (!r.error.has_error && is_int(r.value) && r.value.int_val == 52) {
+            io::printn("[PASS] atomic-add! + read");
+            (*pass)++;
+        } else {
+            io::printfn("[FAIL] atomic-add! + read (got %d)", is_int(r.value) ? (int)r.value.int_val : -1);
+            (*fail)++;
+        }
+    }
+
+    // CAS success
+    {
+        EvalResult r = run("(atomic-cas! a 52 100)", interp);
+        if (!r.error.has_error && r.value != null && r.value.tag == SYMBOL) {
+            io::printn("[PASS] atomic-cas! success");
+            (*pass)++;
+        } else {
+            io::printn("[FAIL] atomic-cas! success");
+            (*fail)++;
+        }
+    }
+
+    // CAS fail (value is now 100, not 52)
+    {
+        EvalResult r = run("(atomic-cas! a 52 200)", interp);
+        if (!r.error.has_error && (r.value == null || r.value.tag == NIL)) {
+            io::printn("[PASS] atomic-cas! fail");
+            (*pass)++;
+        } else {
+            io::printn("[FAIL] atomic-cas! fail");
+            (*fail)++;
+        }
+    }
+}
+
 fn void run_http_tests(Interp* interp, int* pass, int* fail) {
     io::printn("\n--- HTTP Tests ---");
 
@@ -1512,6 +1570,7 @@ fn void run_lisp_tests() {
     run_deduce_tests(interp, &pass, &fail);
     run_scheduler_tests(interp, &pass, &fail);
     run_http_tests(interp, &pass, &fail);
+    run_atomic_tests(interp, &pass, &fail);
 
     io::printfn("\n=== Unified Tests: %d passed, %d failed ===", pass, fail);
     assert(fail == 0, "tests failed");
