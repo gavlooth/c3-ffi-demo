@@ -193,72 +193,65 @@ Name: Deduce (the engine deduces new facts from rules)
 LMDB is mmap-based: reads hit OS page cache (memory speed), writes flush to disk lazily.
 No separate "in-memory mode" — LMDB already IS in-memory with persistence as side effect.
 
-**Relations — columns with `^` metadata (types, roles, flags):**
+**Relations — column syntax (Deduce-specific):**
 
-`^` is Omni's metadata mechanism — types, flags, and dict metadata all in one prefix.
-Metadata **precedes** what it annotates, matching `(^Int x)` in types and lambdas.
-For Deduce columns, the dict key IS the column role, the value IS the type:
+Each `define` form has its own body grammar. Deduce columns use:
+- `^Type` before column name (metadata = type, same as `(^Int x)` in types)
+- `[attr]` after column name (Deduce-specific column attribute: key, index)
 
 ```lisp
-;; Minimal — bare column names, no types or roles
+;; Minimal — bare column names, no types or attributes
 (define [relation db] edge (from to))
 
-;; Typed columns — ^Type BEFORE column name (like (^Int x) in types)
+;; Typed columns — ^Type before name (standard Omni metadata)
 (define [relation db] road
   (^String city1)
   (^String city2)
   (^Int km))
 
-;; Roles via metadata dict — ^{'role Type} BEFORE column name
+;; Column attributes — [key], [index] after name (Deduce-specific)
 (define [relation db] person
-  (^{'key String} name)         ;; primary key, type String
-  (^{'index Int} age)           ;; indexed, type Int
-  (^String email))              ;; plain, type String
+  (^String name [key])           ;; ^type before, [role] after
+  (^Int age [index])             ;; indexed for fast range scans
+  (^String email))               ;; no attribute needed
 
-;; Relation-level metadata in bracket attr or ^{...}
+;; Relation-level attributes in the define bracket
 (define [relation db history] person
-  (^{'key String} name)
-  (^{'index Int} age)
+  (^String name [key])
+  (^Int age [index])
   (^String email))
 
-;; Rich metadata when needed
-(define [relation db] ^{'schema person-schema} employee
-  (^{'key Int} id)
+;; With schema validation
+(define [relation db history schema person-schema] employee
+  (^Int id [key])
   (^String name)
-  (^{'index String} dept)
+  (^String dept [index])
   (^Int salary))
 ```
 
-**Column metadata — two equivalent forms (metadata always precedes name):**
+**Convention: `^` pre, `[...]` post — two different questions:**
 
-Short form (bare `^` modifiers, like `^rec`/`^strict`):
-```lisp
-(^String ^key name)        ;; type + role before column name
-(^Int ^index age)
-```
+| Position | Syntax | Answers | Example |
+|----------|--------|---------|---------|
+| Before name | `^Type` | "What IS this?" (type/kind) | `^String name` |
+| After name | `[attr]` | "What DOES it do?" (role) | `name [key]` |
 
-Dict form (`^{'role Type}`, role carries the type):
-```lisp
-(^{'key String} name)      ;; same thing, one annotation
-(^{'index Int} age)
-```
+Column attributes are Deduce-specific (like `^RetType` is FFI-specific).
+The parser knows it's inside `define [relation]` and interprets `[key]` accordingly.
 
-| Metadata | Short form | Dict form | Meaning |
-|----------|-----------|-----------|---------|
-| Plain typed | `(^String name)` | — | Column with type, no special role |
-| Primary key | `(^String ^key name)` | `(^{'key String} name)` | Upsert on duplicate |
-| Indexed | `(^Int ^index name)` | `(^{'index Int} name)` | Secondary B+ tree for range scans |
-| Key + indexed | `(^String ^key ^index name)` | `(^{'key String 'index true} name)` | Both roles |
+| Column Attribute | Syntax | Meaning |
+|-----------------|--------|---------|
+| `[key]` | `(^String name [key])` | Primary key. Upsert on duplicate. |
+| `[index]` | `(^Int age [index])` | Secondary B+ tree index. Fast range scans. |
+| `[key index]` | `(^String name [key index])` | Both key and indexed. |
 
-Matches existing Omni: `(^Int x)` in `define [type]`, `(^String s)` in lambda params.
+**Relation-level attributes (in the `define` bracket):**
 
-**Relation-level metadata:**
-
-| Metadata | Syntax | Purpose |
-|----------|--------|---------|
+| Attribute | Syntax | Purpose |
+|-----------|--------|---------|
+| `db` | `[relation db]` | Which LMDB database to use |
 | `history` | `[relation db history]` | Temporal: keep old versions. Enables `:at`/`:time` queries. |
-| `schema` | `^{'schema name}` | Contract validation on every `assert!`. |
-| `memory` | `^{'memory "200mb"}` | Override LMDB map size. Default ~1GB. |
+| `schema` | `[relation db schema name]` | Contract validation on every `assert!`. |
 
 **Facts — assert tuples into relations:**
 ```lisp
