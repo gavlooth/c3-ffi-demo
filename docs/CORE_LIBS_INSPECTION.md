@@ -193,57 +193,33 @@ Name: Deduce (the engine deduces new facts from rules)
 LMDB is mmap-based: reads hit OS page cache (memory speed), writes flush to disk lazily.
 No separate "in-memory mode" — LMDB already IS in-memory with persistence as side effect.
 
-**Relations — column syntax (Deduce-specific):**
+**Relations — column syntax:**
 
-Each `define` form has its own body grammar. Deduce columns use:
-- `^Type` before column name (metadata = type, same as `(^Int x)` in types)
-- `[attr]` after column name (Deduce-specific column attribute: key, index)
+Columns reuse `define [type]` field syntax. Optional role prefix (`key`, `index`) before the type:
 
 ```lisp
-;; Minimal — bare column names, no types or attributes
+;; Minimal — bare column names, no types
 (define [relation db] edge (from to))
 
-;; Typed columns — ^Type before name (standard Omni metadata)
-(define [relation db] road
-  (^String city1)
-  (^String city2)
-  (^Int km))
+;; Typed columns — same as define [type] fields
+(define [relation db] road (^String city1) (^String city2) (^Int km))
 
-;; Column attributes — [key], [index] after name (Deduce-specific)
-(define [relation db] person
-  (^String name [key])           ;; ^type before, [role] after
-  (^Int age [index])             ;; indexed for fast range scans
-  (^String email))               ;; no attribute needed
-
-;; Relation-level attributes in the define bracket
+;; With roles — role prefix before ^Type name
 (define [relation db history] person
-  (^String name [key])
-  (^Int age [index])
-  (^String email))
+  (key ^String name)             ;; role + type + name
+  (index ^Int age)               ;; indexed for fast range scans
+  (^String email))               ;; no role, just typed
 
-;; With schema validation
-(define [relation db history schema person-schema] employee
-  (^Int id [key])
-  (^String name)
-  (^String dept [index])
-  (^Int salary))
+;; Parser: first token is ^ → plain column. First token is key/index → constrained.
 ```
 
-**Convention: `^` pre, `[...]` post — two different questions:**
-
-| Position | Syntax | Answers | Example |
-|----------|--------|---------|---------|
-| Before name | `^Type` | "What IS this?" (type/kind) | `^String name` |
-| After name | `[attr]` | "What DOES it do?" (role) | `name [key]` |
-
-Column attributes are Deduce-specific (like `^RetType` is FFI-specific).
-The parser knows it's inside `define [relation]` and interprets `[key]` accordingly.
-
-| Column Attribute | Syntax | Meaning |
-|-----------------|--------|---------|
-| `[key]` | `(^String name [key])` | Primary key. Upsert on duplicate. |
-| `[index]` | `(^Int age [index])` | Secondary B+ tree index. Fast range scans. |
-| `[key index]` | `(^String name [key index])` | Both key and indexed. |
+| Column form | Meaning |
+|-------------|---------|
+| `(name)` | Untyped column |
+| `(^String name)` | Typed column (same as type fields) |
+| `(key ^String name)` | Primary key. Upsert on duplicate. |
+| `(index ^Int age)` | Secondary B+ tree index. Fast range scans. |
+| `(key index ^String name)` | Both key and indexed. |
 
 **Relation-level attributes (in the `define` bracket):**
 
