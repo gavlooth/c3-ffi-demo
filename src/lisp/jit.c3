@@ -3150,52 +3150,64 @@ fn void? jit_compile_call(void* s, Expr* expr, Interp* interp, JitLocals* locals
     }
 
     // Check if this is a known binary primitive: (+ a b), (- a b), etc.
-    // Supports both simple (E_LIT/E_VAR) and complex (nested calls) arguments
-    // by spilling intermediate results to the stack frame.
     if (expr.call.arg_count == 2 && expr.call.func.tag == E_VAR) {
         void* direct_fn = jit_get_direct_prim(expr.call.func.var_expr.name, interp);
         if (direct_fn != null) {
-            bool arg0_simple = jit_is_simple_expr(expr.call.args[0]);
-            bool arg1_simple = jit_is_simple_expr(expr.call.args[1]);
-
-            if (arg0_simple && arg1_simple) {
-                // Fast path: both args are simple, no spilling needed
-                // Compile arg0 -> R0, save to V1
-                jit_compile_expr(s, expr.call.args[0], interp, locals)!;
-                _jit_new_node_ww(s, CODE_MOVR, JIT_V1, JIT_R0);  // V1 = arg0
-
-                // Compile arg1 -> R0, save to V2
-                jit_compile_expr(s, expr.call.args[1], interp, locals)!;
-                _jit_new_node_ww(s, CODE_MOVR, JIT_V2, JIT_R0);  // V2 = arg1
-            } else {
-                // Nested path: at least one arg is complex (e.g. a function call).
-                // Compile arg0, spill to stack, compile arg1, restore arg0.
-                // This avoids V1/V2 clobbering when nested jit_compile_expr
-                // uses those registers internally.
-
-                // Allocate a stack slot for spilling arg0 result
-                int spill_offset = _jit_allocai(s, 8);  // 8 bytes for a pointer
-
-                // Compile first arg -> result in R0
-                jit_compile_expr(s, expr.call.args[0], interp, locals)!;
-                // Spill arg0 result to stack: *(FP + spill_offset) = R0
-                _jit_new_node_www(s, CODE_STXI_L, (long)spill_offset, (long)JIT_FP, (long)JIT_R0);
-
-                // Compile second arg -> result in R0, move to V2
-                jit_compile_expr(s, expr.call.args[1], interp, locals)!;
-                _jit_new_node_ww(s, CODE_MOVR, JIT_V2, JIT_R0);  // V2 = arg1
-
-                // Restore arg0 from stack into V1: V1 = *(FP + spill_offset)
-                _jit_new_node_www(s, CODE_LDXI_L, (long)JIT_V1, (long)JIT_FP, (long)spill_offset);
-            }
-
-            // Call direct_fn(interp=V0, a=V1, b=V2) -> R0
-            emit_call_3(s, direct_fn, JIT_V0, JIT_V1, JIT_V2);
+            jit_compile_inline_binop(s, expr, interp, locals, direct_fn)!;
             return;
         }
     }
 
-    // General case: compile function and args
+    // General case: compile function and args, dispatch through apply
+    jit_compile_multi_arg(s, expr, interp, locals, is_tail)!;
+}
+
+// Inline 2-arg call for known binary primitives (+, -, *, /, =, <, >).
+// Supports both simple (E_LIT/E_VAR) and complex (nested calls) arguments
+// by spilling intermediate results to the stack frame.
+fn void? jit_compile_inline_binop(void* s, Expr* expr, Interp* interp, JitLocals* locals, void* direct_fn) {
+    bool arg0_simple = jit_is_simple_expr(expr.call.args[0]);
+    bool arg1_simple = jit_is_simple_expr(expr.call.args[1]);
+
+    if (arg0_simple && arg1_simple) {
+        // Fast path: both args are simple, no spilling needed
+        // Compile arg0 -> R0, save to V1
+        jit_compile_expr(s, expr.call.args[0], interp, locals)!;
+        _jit_new_node_ww(s, CODE_MOVR, JIT_V1, JIT_R0);  // V1 = arg0
+
+        // Compile arg1 -> R0, save to V2
+        jit_compile_expr(s, expr.call.args[1], interp, locals)!;
+        _jit_new_node_ww(s, CODE_MOVR, JIT_V2, JIT_R0);  // V2 = arg1
+    } else {
+        // Nested path: at least one arg is complex (e.g. a function call).
+        // Compile arg0, spill to stack, compile arg1, restore arg0.
+        // This avoids V1/V2 clobbering when nested jit_compile_expr
+        // uses those registers internally.
+
+        // Allocate a stack slot for spilling arg0 result
+        int spill_offset = _jit_allocai(s, 8);  // 8 bytes for a pointer
+
+        // Compile first arg -> result in R0
+        jit_compile_expr(s, expr.call.args[0], interp, locals)!;
+        // Spill arg0 result to stack: *(FP + spill_offset) = R0
+        _jit_new_node_www(s, CODE_STXI_L, (long)spill_offset, (long)JIT_FP, (long)JIT_R0);
+
+        // Compile second arg -> result in R0, move to V2
+        jit_compile_expr(s, expr.call.args[1], interp, locals)!;
+        _jit_new_node_ww(s, CODE_MOVR, JIT_V2, JIT_R0);  // V2 = arg1
+
+        // Restore arg0 from stack into V1: V1 = *(FP + spill_offset)
+        _jit_new_node_www(s, CODE_LDXI_L, (long)JIT_V1, (long)JIT_FP, (long)spill_offset);
+    }
+
+    // Call direct_fn(interp=V0, a=V1, b=V2) -> R0
+    emit_call_3(s, direct_fn, JIT_V0, JIT_V1, JIT_V2);
+}
+
+// General multi-arg call: handles 0, 1, 2+ arguments.
+// Compiles function and args, spills to stack slots, builds cons arg list
+// right-to-left, dispatches through jit_apply_multi_args / jit_apply_value.
+fn void? jit_compile_multi_arg(void* s, Expr* expr, Interp* interp, JitLocals* locals, bool is_tail) {
     usz argc = expr.call.arg_count;
 
     // Set call name for error messages (before any apply call)
