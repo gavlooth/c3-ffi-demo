@@ -992,6 +992,10 @@ fn bool ValueKey.is_eq(self, ValueKey other) {
     return values_equal(self.val, other.val);
 }
 
+// C3 native list for Array replacement
+import std::collections::list;
+alias ValueList = list::List{Value*};
+
 // C3 native map BLOCKED: std::collections::map fully instantiates ALL methods,
 // including has_value() which requires Value type to be equatable.
 // Value* (pointer) lacks .equals/.is_eq/.less methods that C3 generics require.
