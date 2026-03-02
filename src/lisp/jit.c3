@@ -5,6 +5,58 @@ import std::collections::list;
 import main;
 
 // =============================================================================
+// Context boundary state — saved/restored at every StackCtx switch point.
+// Replaces 12-field manual save/restore (24 lines per site → 2 lines).
+// =============================================================================
+
+struct SavedInterpState {
+    Env*        jit_env;
+    Env*        match_env;
+    usz         eval_depth;
+    InterpFlags flags;
+    Expr*       tco_expr;
+    Env*        tco_env;
+    main::ScopeRegion* tco_recycle;
+    usz         reset_depth;
+    usz         handler_count;
+    main::ScopeRegion* scope;
+    main::ScopeRegion* escape_scope;
+    bool        escape_env_mode;
+}
+
+fn SavedInterpState save_interp_state(Interp* interp) {
+    SavedInterpState s;
+    s.jit_env        = interp.jit_env;
+    s.match_env      = interp.match_env;
+    s.eval_depth     = interp.eval_depth;
+    s.flags          = interp.flags;
+    s.tco_expr       = interp.jit_tco_expr;
+    s.tco_env        = interp.jit_tco_env;
+    s.tco_recycle    = interp.tco_recycle_scope;
+    s.reset_depth    = interp.reset_depth;
+    s.handler_count  = interp.handler_count;
+    s.scope          = interp.current_scope;
+    s.escape_scope   = interp.escape_scope;
+    s.escape_env_mode = interp.escape_env_mode;
+    return s;
+}
+
+fn void restore_interp_state(Interp* interp, SavedInterpState* s) {
+    interp.jit_env           = s.jit_env;
+    interp.match_env         = s.match_env;
+    interp.eval_depth        = s.eval_depth;
+    interp.flags             = s.flags;
+    interp.jit_tco_expr      = s.tco_expr;
+    interp.jit_tco_env       = s.tco_env;
+    interp.tco_recycle_scope = s.tco_recycle;
+    interp.reset_depth       = s.reset_depth;
+    interp.handler_count     = s.handler_count;
+    interp.current_scope     = s.scope;
+    interp.escape_scope      = s.escape_scope;
+    interp.escape_env_mode   = s.escape_env_mode;
+}
+
+// =============================================================================
 // SECTION 1: GNU LIGHTNING FFI DECLARATIONS
 // =============================================================================
 //
@@ -1287,41 +1339,14 @@ fn EvalResult jit_reset_impl(Expr* expr, Env* env, Interp* interp) {
     void* saved_state = interp.current_reset_state;
     interp.current_reset_state = &state;
 
-    // Save interp state before entering context. The context shares the same Interp
-    // and its jit_eval calls modify these fields (eval_depth, jit_env, etc.).
-    // When the context suspends (shift) or completes, these are left in the context's
-    // state. We must restore the parent's values.
-    Env*        saved_jit_env       = interp.jit_env;
-    Env*        saved_match_env     = interp.match_env;
-    usz         saved_eval_depth    = interp.eval_depth;
-    InterpFlags saved_flags         = interp.flags;
-    Expr*       saved_tco_expr      = interp.jit_tco_expr;
-    Env*        saved_tco_env       = interp.jit_tco_env;
-    main::ScopeRegion* saved_tco_recycle = interp.tco_recycle_scope;
-    usz         saved_reset_depth   = interp.reset_depth;
-    usz         saved_handler_count = interp.handler_count;
-    main::ScopeRegion* saved_scope = interp.current_scope;
-    main::ScopeRegion* saved_escape_scope = interp.escape_scope;
-    bool saved_escape_env_mode = interp.escape_env_mode;
+    // Save/restore interp state across context switch
+    SavedInterpState saved = save_interp_state(interp);
 
-    // Run the body context
     main::StackContext parent_ctx;
     main::stack_ctx_switch_to(ctx, &parent_ctx);
 
-    // Restore interp state after context suspends/completes
     interp.current_reset_state = saved_state;
-    interp.jit_env        = saved_jit_env;
-    interp.match_env      = saved_match_env;
-    interp.eval_depth     = saved_eval_depth;
-    interp.flags          = saved_flags;
-    interp.jit_tco_expr   = saved_tco_expr;
-    interp.jit_tco_env    = saved_tco_env;
-    interp.tco_recycle_scope = saved_tco_recycle;
-    interp.reset_depth    = saved_reset_depth;
-    interp.handler_count  = saved_handler_count;
-    interp.current_scope  = saved_scope;
-    interp.escape_scope   = saved_escape_scope;
-    interp.escape_env_mode = saved_escape_env_mode;
+    restore_interp_state(interp, &saved);
 
     // Stack overflow — context hit guard page
     if (ctx.status == main::StackCtxStatus.CTX_DEAD) {
@@ -1385,40 +1410,13 @@ fn Value* jit_shift_impl(Expr* expr, Env* env, Interp* interp) {
     rstate.shift_env = shift_env;
 
     // Save interpreter state that the parent's evaluation will corrupt.
-    // These are effectively "callee-saved registers" of the interpreter —
-    // the context's evaluation expects them to be preserved across the suspend.
-    // The parent shares the same Interp but modifies these fields when
-    // evaluating the shift body. We must restore them on resume.
-    Env*       saved_jit_env    = interp.jit_env;
-    Env*       saved_match_env  = interp.match_env;
-    usz        saved_eval_depth = interp.eval_depth;
-    InterpFlags saved_flags     = interp.flags;
-    Expr*      saved_tco_expr   = interp.jit_tco_expr;
-    Env*       saved_tco_env    = interp.jit_tco_env;
-    main::ScopeRegion* saved_tco_recycle = interp.tco_recycle_scope;
-    usz        saved_reset_depth = interp.reset_depth;
-    usz        saved_handler_count = interp.handler_count;
-    main::ScopeRegion* saved_scope = interp.current_scope;
-    main::ScopeRegion* saved_escape_scope = interp.escape_scope;
-    bool saved_escape_env_mode = interp.escape_env_mode;
+    SavedInterpState saved = save_interp_state(interp);
 
     // Suspend the context — control returns to jit_reset_impl
     main::stack_ctx_suspend();
 
     // === RESUMED HERE by (k val) via jit_apply_continuation_impl ===
-    // Restore interpreter state (corrupted by parent's evaluation of shift body)
-    interp.jit_env = saved_jit_env;
-    interp.match_env = saved_match_env;
-    interp.eval_depth = saved_eval_depth;
-    interp.flags = saved_flags;
-    interp.jit_tco_expr = saved_tco_expr;
-    interp.jit_tco_env = saved_tco_env;
-    interp.tco_recycle_scope = saved_tco_recycle;
-    interp.reset_depth = saved_reset_depth;
-    interp.handler_count = saved_handler_count;
-    interp.current_scope = saved_scope;
-    interp.escape_scope = saved_escape_scope;
-    interp.escape_env_mode = saved_escape_env_mode;
+    restore_interp_state(interp, &saved);
 
     return interp.resume_value;
 }
@@ -1463,39 +1461,14 @@ fn EvalResult jit_apply_continuation_impl(Value* k_val, Value* arg, Interp* inte
     void* saved_state = interp.current_reset_state;
     interp.current_reset_state = &resume_state;
 
-    // Save interp state before resuming clone. The clone's jit_eval unwind
-    // will modify eval_depth, jit_env, etc. on the shared Interp.
-    Env*        saved_jit_env       = interp.jit_env;
-    Env*        saved_match_env     = interp.match_env;
-    usz         saved_eval_depth    = interp.eval_depth;
-    InterpFlags saved_flags         = interp.flags;
-    Expr*       saved_tco_expr      = interp.jit_tco_expr;
-    Env*        saved_tco_env       = interp.jit_tco_env;
-    main::ScopeRegion* saved_tco_recycle = interp.tco_recycle_scope;
-    usz         saved_reset_depth   = interp.reset_depth;
-    usz         saved_handler_count = interp.handler_count;
-    main::ScopeRegion* saved_scope = interp.current_scope;
-    main::ScopeRegion* saved_escape_scope = interp.escape_scope;
-    bool saved_escape_env_mode = interp.escape_env_mode;
+    SavedInterpState saved = save_interp_state(interp);
 
     // Resume the clone
     main::StackContext parent_ctx;
     main::stack_ctx_resume(target, &parent_ctx);
 
-    // Restore interp state after clone completes/shifts
     interp.current_reset_state = saved_state;
-    interp.jit_env        = saved_jit_env;
-    interp.match_env      = saved_match_env;
-    interp.eval_depth     = saved_eval_depth;
-    interp.flags          = saved_flags;
-    interp.jit_tco_expr   = saved_tco_expr;
-    interp.jit_tco_env    = saved_tco_env;
-    interp.tco_recycle_scope = saved_tco_recycle;
-    interp.reset_depth    = saved_reset_depth;
-    interp.handler_count  = saved_handler_count;
-    interp.current_scope  = saved_scope;
-    interp.escape_scope   = saved_escape_scope;
-    interp.escape_env_mode = saved_escape_env_mode;
+    restore_interp_state(interp, &saved);
 
     // Stack overflow — clone hit guard page
     if (target.status == main::StackCtxStatus.CTX_DEAD) {
@@ -1617,36 +1590,10 @@ fn Value* jit_signal_impl(Expr* expr, Env* env, Interp* interp) {
                         hstate.signal_tag = tag;
                         hstate.signal_arg = arg_v;
 
-                        // Save interp state before suspending context
-                        Env*        saved_jit_env       = interp.jit_env;
-                        Env*        saved_match_env     = interp.match_env;
-                        usz         saved_eval_depth    = interp.eval_depth;
-                        InterpFlags saved_flags         = interp.flags;
-                        Expr*       saved_tco_expr      = interp.jit_tco_expr;
-                        Env*        saved_tco_env       = interp.jit_tco_env;
-                        main::ScopeRegion* saved_tco_recycle = interp.tco_recycle_scope;
-                        usz         saved_reset_depth   = interp.reset_depth;
-                        usz         saved_handler_count = interp.handler_count;
-                        main::ScopeRegion* saved_scope = interp.current_scope;
-                        main::ScopeRegion* saved_escape_scope = interp.escape_scope;
-                        bool saved_escape_env_mode = interp.escape_env_mode;
-
-                        // Suspend context — control returns to handle loop
+                        SavedInterpState saved_sig = save_interp_state(interp);
                         main::stack_ctx_suspend();
-
                         // === RESUMED by resolve ===
-                        interp.jit_env        = saved_jit_env;
-                        interp.match_env      = saved_match_env;
-                        interp.eval_depth     = saved_eval_depth;
-                        interp.flags          = saved_flags;
-                        interp.jit_tco_expr   = saved_tco_expr;
-                        interp.jit_tco_env    = saved_tco_env;
-                        interp.tco_recycle_scope = saved_tco_recycle;
-                        interp.reset_depth    = saved_reset_depth;
-                        interp.handler_count  = saved_handler_count;
-                        interp.current_scope  = saved_scope;
-                        interp.escape_scope   = saved_escape_scope;
-                        interp.escape_env_mode = saved_escape_env_mode;
+                        restore_interp_state(interp, &saved_sig);
 
                         return interp.resume_value;
                     }
@@ -1754,42 +1701,14 @@ fn EvalResult jit_handle_impl(Expr* expr, Env* env, Interp* interp) {
     state.handler_copy = *h;
     state.handler_idx = my_idx;
 
-    // Save interp state before entering body context
-    Env*        saved_jit_env       = interp.jit_env;
-    Env*        saved_match_env     = interp.match_env;
-    usz         saved_eval_depth    = interp.eval_depth;
-    InterpFlags saved_flags         = interp.flags;
-    Expr*       saved_tco_expr      = interp.jit_tco_expr;
-    Env*        saved_tco_env       = interp.jit_tco_env;
-    main::ScopeRegion* saved_tco_recycle = interp.tco_recycle_scope;
-    usz         saved_reset_depth   = interp.reset_depth;
-    usz         saved_handler_count = interp.handler_count;  // my_idx + 1
-    main::ScopeRegion* saved_scope = interp.current_scope;
-    main::ScopeRegion* saved_escape_scope = interp.escape_scope;
-    bool saved_escape_env_mode = interp.escape_env_mode;
+    SavedInterpState saved = save_interp_state(interp);
 
-    // Run the body on the context
     main::StackContext parent_ctx;
     main::stack_ctx_switch_to(ctx, &parent_ctx);
 
     // Capture raise_pending before restoring flags (the context may have set it)
     bool body_raise_pending = interp.flags.raise_pending;
-
-    // Restore interp state
-    interp.jit_env        = saved_jit_env;
-    interp.match_env      = saved_match_env;
-    interp.eval_depth     = saved_eval_depth;
-    interp.flags          = saved_flags;
-    interp.jit_tco_expr   = saved_tco_expr;
-    interp.jit_tco_env    = saved_tco_env;
-    interp.tco_recycle_scope = saved_tco_recycle;
-    interp.reset_depth    = saved_reset_depth;
-    interp.handler_count  = saved_handler_count;
-    interp.current_scope  = saved_scope;
-    interp.escape_scope   = saved_escape_scope;
-    interp.escape_env_mode = saved_escape_env_mode;
-
-    // Propagate raise_pending from body context execution
+    restore_interp_state(interp, &saved);
     if (body_raise_pending) interp.flags.raise_pending = true;
 
     // Stack overflow — context hit guard page
@@ -3649,37 +3568,12 @@ fn Value* jit_exec_resolve(Interp* interp, Expr* expr, Env* env) {
         // Set resume value
         interp.resume_value = val;
 
-        // Save interp state before resuming context
-        Env*        saved_jit_env       = interp.jit_env;
-        Env*        saved_match_env     = interp.match_env;
-        usz         saved_eval_depth    = interp.eval_depth;
-        InterpFlags saved_flags         = interp.flags;
-        Expr*       saved_tco_expr      = interp.jit_tco_expr;
-        Env*        saved_tco_env       = interp.jit_tco_env;
-        main::ScopeRegion* saved_tco_recycle = interp.tco_recycle_scope;
-        usz         saved_reset_depth   = interp.reset_depth;
-        usz         saved_handler_count = interp.handler_count;
-        main::ScopeRegion* saved_scope = interp.current_scope;
-        main::ScopeRegion* saved_escape_scope = interp.escape_scope;
-        bool saved_escape_env_mode = interp.escape_env_mode;
+        SavedInterpState saved_resolve = save_interp_state(interp);
 
-        // Resume the context (single-shot, no clone)
         main::StackContext parent_ctx;
         main::stack_ctx_resume(ctx, &parent_ctx);
 
-        // Restore interp state
-        interp.jit_env        = saved_jit_env;
-        interp.match_env      = saved_match_env;
-        interp.eval_depth     = saved_eval_depth;
-        interp.flags          = saved_flags;
-        interp.jit_tco_expr   = saved_tco_expr;
-        interp.jit_tco_env    = saved_tco_env;
-        interp.tco_recycle_scope = saved_tco_recycle;
-        interp.reset_depth    = saved_reset_depth;
-        interp.handler_count  = saved_handler_count;
-        interp.current_scope  = saved_scope;
-        interp.escape_scope   = saved_escape_scope;
-        interp.escape_env_mode = saved_escape_env_mode;
+        restore_interp_state(interp, &saved_resolve);
 
         // Pop the reinstalled handler
         interp.handler_count = hstate.handler_idx;
@@ -4062,18 +3956,14 @@ fn Value* jit_reset_value(Interp* interp, Value* body) {
     void* saved_state = interp.current_reset_state;
     interp.current_reset_state = &state;
 
-    // Save state (omitted for brevity, same as jit_reset_impl)
-    Env* saved_jit_env = interp.jit_env;
-    usz saved_eval_depth = interp.eval_depth;
-    InterpFlags saved_flags = interp.flags;
+    // Save ALL interp state (was incomplete — only saved 3 of 12 fields)
+    SavedInterpState saved = save_interp_state(interp);
 
     main::StackContext parent_ctx;
     main::stack_ctx_switch_to(ctx, &parent_ctx);
 
     interp.current_reset_state = saved_state;
-    interp.jit_env = saved_jit_env;
-    interp.eval_depth = saved_eval_depth;
-    interp.flags = saved_flags;
+    restore_interp_state(interp, &saved);
 
     if (ctx.status == main::StackCtxStatus.CTX_DEAD) {
         main::stack_ctx_destroy(ctx, &interp.stack_ctx_pool);
