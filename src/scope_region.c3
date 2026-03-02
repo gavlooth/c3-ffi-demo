@@ -199,6 +199,7 @@ fn void scope_release(ScopeRegion* scope) @inline {
     }
 }
 
+<* @require scope != null *>
 fn void scope_run_dtors(ScopeRegion* scope) {
     ScopeDtor* d = scope.dtors;
     while (d != null) {
@@ -207,6 +208,10 @@ fn void scope_run_dtors(ScopeRegion* scope) {
     }
 }
 
+<*
+ @require scope != null
+ @require scope.refcount == 0 : "scope_destroy: refcount not zero"
+*>
 fn void scope_destroy(ScopeRegion* scope) {
     // 1. Run destructors (reverse order — LIFO)
     scope_run_dtors(scope);
