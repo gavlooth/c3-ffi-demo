@@ -201,6 +201,26 @@ fn void Lexer.advance(Lexer* self) {
         return;
     }
 
+    // Logic variable: ?name (for Deduce queries)
+    if (c == '?' && self.pos + 1 < self.len) {
+        char next = self.source[self.pos + 1];
+        if ((next >= 'a' && next <= 'z') || (next >= 'A' && next <= 'Z') || next == '_') {
+            // Read ?varname as a symbol with ? prefix
+            usz start = self.pos;
+            self.next_char();  // consume ?
+            usz out_idx = 0;
+            self.current.text[out_idx++] = '?';
+            while (self.pos < self.len && is_symbol_char(self.source[self.pos]) && out_idx < 63) {
+                self.current.text[out_idx++] = self.source[self.pos];
+                self.next_char();
+            }
+            self.current.text[out_idx] = 0;
+            self.current.text_len = out_idx;
+            self.current.type = T_SYMBOL;  // ?var is a symbol starting with ?
+            return;
+        }
+    }
+
     // Reader dispatch: # followed by {, r", _, N_
     if (c == '#') {
         if (self.pos + 1 < self.len) {

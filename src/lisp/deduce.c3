@@ -426,6 +426,81 @@ fn Value* prim_define_relation(Value*[] args, Env* env, Interp* interp) {
     return v;
 }
 
+// ============================================================
+// (deduce-query relation filter-fn) → filtered list of dicts
+// filter-fn takes a dict, returns truthy/nil
+// ============================================================
+
+fn Value* prim_deduce_query(Value*[] args, Env* env, Interp* interp) {
+    if (args.len < 2) return raise_error(interp, "deduce-query: expected (deduce-query relation filter-fn)");
+
+    Value* rel_val = args[0];
+    if (rel_val == null || rel_val.tag != FFI_HANDLE) {
+        return raise_error(interp, "deduce-query: first argument must be a relation");
+    }
+    Relation* rel = (Relation*)rel_val.ffi_val;
+
+    Value* filter_fn = args[1];
+
+    // Scan all tuples and filter
+    Value* all = relation_scan_all(rel, interp);
+    Value* result = make_nil(interp);
+    Value*[256] matches;
+    usz match_count = 0;
+
+    Value* curr = all;
+    while (is_cons(curr) && match_count < 256) {
+        Value* row = car(curr);
+        // Apply filter function to row
+        Value* keep = jit_apply_value(filter_fn, row, interp);
+        if (keep != null && keep.tag != NIL) {
+            matches[match_count++] = row;
+        }
+        curr = cdr(curr);
+    }
+
+    // Build result list in order
+    for (isz i = (isz)match_count - 1; i >= 0; i--) {
+        result = make_cons(interp, matches[(usz)i], result);
+    }
+    return result;
+}
+
+// ============================================================
+// (deduce-count relation) → number of tuples
+// ============================================================
+
+fn Value* prim_deduce_count(Value*[] args, Env* env, Interp* interp) {
+    if (args.len < 1) return raise_error(interp, "deduce-count: expected (deduce-count relation)");
+
+    Value* rel_val = args[0];
+    if (rel_val == null || rel_val.tag != FFI_HANDLE) {
+        return raise_error(interp, "deduce-count: first argument must be a relation");
+    }
+    Relation* rel = (Relation*)rel_val.ffi_val;
+
+    MdbTxn* txn = null;
+    int rc = mdb_txn_begin(rel.db.env, null, MDB_RDONLY, &txn);
+    if (rc != MDB_SUCCESS) return make_int(interp, 0);
+
+    MdbCursor* cursor = null;
+    rc = mdb_cursor_open(txn, rel.dbi, &cursor);
+    if (rc != MDB_SUCCESS) { mdb_txn_abort(txn); return make_int(interp, 0); }
+
+    long count = 0;
+    MdbVal key;
+    MdbVal data;
+    rc = mdb_cursor_get(cursor, &key, &data, MDB_FIRST);
+    while (rc == MDB_SUCCESS) {
+        count++;
+        rc = mdb_cursor_get(cursor, &key, &data, MDB_NEXT);
+    }
+
+    mdb_cursor_close(cursor);
+    mdb_txn_abort(txn);
+    return make_int(interp, count);
+}
+
 fn Value* prim_deduce_scan(Value*[] args, Env* env, Interp* interp) {
     if (args.len < 1) return raise_error(interp, "deduce-scan: expected (deduce-scan relation)");
 

@@ -1309,6 +1309,42 @@ fn void run_deduce_tests(Interp* interp, int* pass, int* fail) {
             (*fail)++;
         }
     }
+
+    // deduce-count
+    {
+        EvalResult r = run("(deduce-count person)", interp);
+        if (!r.error.has_error && is_int(r.value) && r.value.int_val >= 1) {
+            io::printn("[PASS] deduce-count");
+            (*pass)++;
+        } else {
+            io::printn("[FAIL] deduce-count");
+            (*fail)++;
+        }
+    }
+
+    // deduce-query with filter
+    {
+        EvalResult r = run("(length (deduce-query person (lambda (row) (> ('age row) 28))))", interp);
+        if (!r.error.has_error && is_int(r.value) && r.value.int_val >= 1) {
+            io::printn("[PASS] deduce-query filter");
+            (*pass)++;
+        } else {
+            io::printfn("[FAIL] deduce-query filter (got %d)", is_int(r.value) ? (int)r.value.int_val : -1);
+            (*fail)++;
+        }
+    }
+
+    // deduce-query result is dict with symbol-as-function
+    {
+        EvalResult r = run("('name (car (deduce-query person (lambda (row) (> ('age row) 28)))))", interp);
+        if (!r.error.has_error && is_string(r.value)) {
+            io::printn("[PASS] deduce-query dict result");
+            (*pass)++;
+        } else {
+            io::printn("[FAIL] deduce-query dict result");
+            (*fail)++;
+        }
+    }
 }
 
 fn void run_schema_tests(Interp* interp, int* pass, int* fail) {
