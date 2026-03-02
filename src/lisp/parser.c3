@@ -1535,6 +1535,24 @@ fn Expr* Parser.parse_define(Parser* self) {
             self.set_error("unknown [ffi ...] form: expected 'lib' or 'λ'");
             return null;
         }
+        // [schema]: Schema definition — stores body datum under name
+        SymbolId sym_schema = self.interp.symbols.intern("schema");
+        if (annotation == sym_schema) {
+            if (self.lexer.current.type != T_SYMBOL) { self.set_error("expected schema name"); return null; }
+            SymbolId name = self.get_current_symbol();
+            self.lexer.advance();
+            // Parse body as a datum (quoted data) — the schema definition
+            Value* body = self.parse_datum();
+            self.expect(T_RPAREN, ")");
+            // Desugar to: (define name (quote body))
+            e.tag = E_DEFINE;
+            e.define.name = name;
+            Expr* quote_expr = self.interp.alloc_expr();
+            quote_expr.tag = E_QUOTE;
+            quote_expr.quote.datum = body;
+            e.define.value = quote_expr;
+            return e;
+        }
         self.set_error("unknown define attribute");
         return null;
     }

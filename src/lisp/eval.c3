@@ -1960,7 +1960,7 @@ fn void register_primitives(Interp* interp) {
     }
 
     // --- Regular primitives ---
-    PrimReg[118] regular_prims = {
+    PrimReg[120] regular_prims = {
         // List operations
         { "cons", &prim_cons, 2 }, { "car", &prim_car, 1 }, { "cdr", &prim_cdr, 1 },
         { "null?", &prim_null, 1 }, { "pair?", &prim_pair, 1 }, { "list", &prim_list, -1 },
@@ -2065,6 +2065,9 @@ fn void register_primitives(Interp* interp) {
         { "__raw-tls-read", &prim_tls_read, -1 },
         { "__raw-tls-write", &prim_tls_write, 2 },
         { "__raw-tls-close", &prim_tls_close, 1 },
+        // Schema validation
+        { "validate", &prim_validate, 2 },
+        { "explain", &prim_explain, 2 },
     };
     foreach (&r : regular_prims) {
         register_prim(interp, r.name, r.func, r.arity);

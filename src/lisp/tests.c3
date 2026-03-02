@@ -1245,6 +1245,49 @@ fn void run_pika_tests(Interp* interp, int* pass, int* fail) {
         "(re-match \"\\\\w+\" \"hello_world\")", pass, fail);
 }
 
+fn void run_schema_tests(Interp* interp, int* pass, int* fail) {
+    io::printn("\n--- Schema/Contract Tests ---");
+
+    // Define a schema
+    setup(interp, "(define [schema] age-schema (and int (> 0)))");
+
+    // validate with inline schema
+    test_tag(interp, "validate int passes",
+        "(validate 'int 42)", SYMBOL, pass, fail);
+    test_tag(interp, "validate int fails on string",
+        "(validate 'int \"hello\")", NIL, pass, fail);
+    test_tag(interp, "validate string passes",
+        "(validate 'string \"hello\")", SYMBOL, pass, fail);
+    test_tag(interp, "validate any passes",
+        "(validate 'any 42)", SYMBOL, pass, fail);
+
+    // validate with composite schema
+    test_tag(interp, "validate (and int (> 0)) passes",
+        "(validate '(and int (> 0)) 5)", SYMBOL, pass, fail);
+    test_tag(interp, "validate (and int (> 0)) fails on negative",
+        "(validate '(and int (> 0)) -1)", NIL, pass, fail);
+    test_tag(interp, "validate (or string int) passes int",
+        "(validate '(or string int) 42)", SYMBOL, pass, fail);
+    test_tag(interp, "validate (or string int) passes string",
+        "(validate '(or string int) \"hi\")", SYMBOL, pass, fail);
+
+    // validate with named schema
+    test_tag(interp, "validate named schema passes",
+        "(validate 'age-schema 5)", SYMBOL, pass, fail);
+    test_tag(interp, "validate named schema fails",
+        "(validate 'age-schema -1)", NIL, pass, fail);
+
+    // maybe
+    test_tag(interp, "validate (maybe int) on nil",
+        "(validate '(maybe int) nil)", SYMBOL, pass, fail);
+    test_tag(interp, "validate (maybe int) on int",
+        "(validate '(maybe int) 42)", SYMBOL, pass, fail);
+
+    // explain returns nil on valid
+    test_tag(interp, "explain valid returns nil",
+        "(explain 'int 42)", NIL, pass, fail);
+}
+
 fn void run_reader_dispatch_tests(Interp* interp, int* pass, int* fail) {
     io::printn("\n--- Reader Dispatch Tests ---");
 
@@ -1304,6 +1347,7 @@ fn void run_lisp_tests() {
     run_json_tests(interp, &pass, &fail);
     run_async_tests(interp, &pass, &fail);
     run_reader_dispatch_tests(interp, &pass, &fail);
+    run_schema_tests(interp, &pass, &fail);
 
     io::printfn("\n=== Unified Tests: %d passed, %d failed ===", pass, fail);
     assert(fail == 0, "tests failed");
