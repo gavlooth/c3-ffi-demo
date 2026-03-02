@@ -1,5 +1,32 @@
 module lisp;
 
+/**
+ * /// REFACTORING NOTES (based on C3_STYLE.md) ///
+ *
+ * 1. TEST HELPER PATTERN (General):
+ *    - test_eq, test_eq_double, test_truthy, test_nil, test_tag, test_gt
+ *      all share similar structure - could use generic test framework:
+ *      ```c3
+ *      fn void test_generic(T, Interp*, char[] name, char[] expr,
+ *          fn bool(T, Value*) check, T expected, int* pass, int* fail)
+ *          <T> @generic
+ *      ```
+ *
+ * 2. @PURE FOR PREDICATES (Section 5):
+ *    - is_int, is_double, is_nil, is_string used as predicates;
+ *      they're already @pure in value.c3 (good)
+ *
+ * 3. ERROR HANDLING (Section 6):
+ *    - Tests use pattern: if (!ri.error.has_error && ...) 
+ *      Consider helper: fn bool eval_success(EvalResult r) @pure
+ *
+ * 4. DUPLICATE CODE (Section 4):
+ *    - JIT test pattern repeated; could extract:
+ *      ```c3
+ *      fn bool jit_check(char[] expr, fn bool(Value*) pred, Interp* interp)
+ *      ```
+ */
+
 import std::io;
 import main;
 
@@ -1462,7 +1489,29 @@ fn void run_deduce_tests(Interp* interp, int* pass, int* fail) {
         }
     }
 
-    // deduce-match deferred — heap corruption (malloc hangs after ~1000 tests)
+    // Pattern matching with ?vars
+    {
+        EvalResult r = run("(length (deduce-match person '(person ?name ?age)))", interp);
+        if (!r.error.has_error && is_int(r.value) && r.value.int_val >= 1) {
+            io::printn("[PASS] deduce-match all");
+            (*pass)++;
+        } else {
+            io::printfn("[FAIL] deduce-match all (got %d)", is_int(r.value) ? (int)r.value.int_val : -1);
+            (*fail)++;
+        }
+    }
+
+    // Match result has stripped ?var keys
+    {
+        EvalResult r = run("('name (car (deduce-match person '(person ?name ?age))))", interp);
+        if (!r.error.has_error && is_string(r.value)) {
+            io::printn("[PASS] deduce-match ?var binding");
+            (*pass)++;
+        } else {
+            io::printn("[FAIL] deduce-match ?var binding");
+            (*fail)++;
+        }
+    }
 }
 
 fn void run_schema_tests(Interp* interp, int* pass, int* fail) {
@@ -1511,7 +1560,9 @@ fn void run_schema_tests(Interp* interp, int* pass, int* fail) {
 fn void run_reader_dispatch_tests(Interp* interp, int* pass, int* fail) {
     io::printn("\n--- Reader Dispatch Tests ---");
 
-    // #r"" deferred — heap corruption (malloc hangs after ~1000 tests)
+    // Regex literal #r""
+    test_str(interp, "regex literal #r",
+        "(re-match #r\"hello\" \"say hello world\")", pass, fail);
 
     // Block comment
     test_eq(interp, "block comment",

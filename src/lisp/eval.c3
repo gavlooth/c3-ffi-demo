@@ -1,5 +1,82 @@
 module lisp;
 
+/**
+ * /// REFACTORING NOTES (based on C3_STYLE.md) ///
+ *
+ * 1. FOREACH LOOPS (Section 3):
+ *    - Lines 119-121, 142-144: Manual for loops copying strings should use foreach:
+ *      ```c3
+ *      foreach (i, ch : msg) { r.error.message[i] = ch; }
+ *      ```
+ *    - Lines 168-170, 172, 181, 218, 230, 279, 397, 405, 418, 421, 456, 459, 502, 540, 546, 554, 562:
+ *      Manual `for (usz i = 0; i < n; i++)` patterns should convert to:
+ *      ```c3
+ *      foreach (i, &entry : mt.entries[0:mt.entry_count]) { ... }
+ *      foreach (&arg : args) { ... }
+ *      ```
+ *
+ * 2. @PURE FOR PREDICATES (Section 6):
+ *    - Line 336: `infer_value_type` is a pure type predicate, add @pure:
+ *      ```c3
+ *      fn TypeId infer_value_type(Value* v, Interp* interp) @pure { ... }
+ *      ```
+ *    - Line 359: `value_type_name` could be @pure if it didn't intern "Coroutine"
+ *
+ * 3. CONTRACTS (Section 5):
+ *    - Line 159: `find_best_method` should have contracts:
+ *      ```c3
+ *      fn Value* find_best_method(MethodTable* mt, Value*[] args, Interp* interp)
+ *          <* @require mt != null && args != null *>
+ *          <* @ensure return == null || return.tag == CLOSURE *> { ... }
+ *      ```
+ *    - Line 497: `make_instance` should have:
+ *      ```c3
+ *      fn Value* make_instance(Interp* interp, TypeId type_id, Value** fields, usz field_count)
+ *          <* @require fields != null || field_count == 0 *> { ... }
+ *      ```
+ *
+ * 4. DEFER PATTERNS (Section 2):
+ *    - Line 498: `make_instance` allocates Instance* but has no corresponding free.
+ *      Consider using scope_region or defer for cleanup:
+ *      ```c3
+ *      Instance* inst = (Instance*)mem::malloc(Instance.sizeof);
+ *      // Register destructor or use defer if ownership is clear
+ *      ```
+ *    - Lines 394-395, 414-415, 453-454: Good defer usage with DString.free()
+ *
+ * 5. ERROR HANDLING (Section 7):
+ *    - Lines 430, 433, 482, 490: Using `!!` force unwrap on bprintf results.
+ *      Consider explicit error handling:
+ *      ```c3
+ *      char[] msg = io::bprintf(&buf, "...") ?? "error message too long";
+ *      ```
+ *
+ * 6. GLOBAL STATE (Section 9):
+ *    - Lines 55, 57, 68: Global mutable state (g_replxx, g_repl_interp, g_interrupted).
+ *      Consider encapsulating in a ReplContext struct:
+ *      ```c3
+ *      struct ReplContext {
+ *          void* replxx;
+ *          Interp* interp;
+ *          bool interrupted;
+ *      }
+ *      ```
+ *
+ * 7. FUNCTION EXTRACTION (Section 8):
+ *    - `format_dispatch_error` (lines 389-436) and `format_match_error` (lines 441-492)
+ *      could extract helper functions for building arg type lists and collecting arities.
+ *    - `eval_deftype` (lines 516-599) is ~84 lines; consider extracting:
+ *      - `resolve_parent_and_type_params()`
+ *      - `copy_field_annotations()`
+ *
+ * 8. SLICE USAGE (Section 4):
+ *    - Line 117: Manual length check `if (len > 255) len = 255` could use slice:
+ *      ```c3
+ *      char[] trimmed = msg[0:math::min(msg.len, 255)];
+ *      memcpy(r.error.message, trimmed.ptr, trimmed.len);
+ *      ```
+ */
+
 import std::io;
 import std::collections::list;
 import main;
@@ -2265,11 +2342,14 @@ fn EvalResult run(char[] source, Interp* interp) {
             result = eval_error_expr(jit_result.str_val.chars[:jit_result.str_val.len], expr);
         } else {
             if (jit_result != null) {
-                // Promote result to parent scope before releasing child
+                // ALWAYS deep-copy result to parent scope before releasing child.
+                // Cannot rely on is_in_scope check because scope_adopt may have moved
+                // chunks, and closure dtor cascades may free related scopes.
                 interp.current_scope = saved_scope;
-                interp.releasing_scope = child_scope;
+                main::ScopeRegion* saved_releasing = interp.releasing_scope;
+                interp.releasing_scope = null;  // Force deep copy (no scope skip)
                 jit_result = copy_to_parent(jit_result, interp);
-                interp.releasing_scope = null;
+                interp.releasing_scope = saved_releasing;
             }
             result = eval_ok(jit_result);
         }

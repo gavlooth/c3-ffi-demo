@@ -1,5 +1,77 @@
 module lisp;
 
+/**
+ * /// REFACTORING NOTES (based on C3_STYLE.md) ///
+ *
+ * 1. @PURE FOR PREDICATES (Section 6):
+ *    - Line 115: `is_symbol_char` is a pure predicate, add @pure:
+ *      ```c3
+ *      fn bool is_symbol_char(char c) @pure {
+ *          if (c >= 'a' && c <= 'z') return true;
+ *          ...
+ *      }
+ *      ```
+ *
+ * 2. FOREACH LOOPS (Section 3):
+ *    - Lines 325, 334: Manual for loops copying error messages:
+ *      ```c3
+ *      // Current:
+ *      for (usz i = 0; i < err.len; i++) self.current.text[i] = err[i];
+ *      // Better:
+ *      foreach (i, ch : err) self.current.text[i] = ch;
+ *      ```
+ *
+ * 3. CONTRACTS (Section 5):
+ *    - Line 55: `Lexer.init` should have contracts:
+ *      ```c3
+ *      fn void Lexer.init(Lexer* self, char[] source)
+ *          <* @require self != null && source != null *> { ... }
+ *      ```
+ *    - Line 64: `Lexer.peek` could have:
+ *      ```c3
+ *      fn char Lexer.peek(Lexer* self) <* @require self != null *> { ... }
+ *      ```
+ *
+ * 4. SLICE USAGE (Section 4):
+ *    - Line 213: Manual bounds check `out_idx < 63` repeated multiple times.
+ *      Consider using slice operations:
+ *      ```c3
+ *      char[64] text; // Fixed buffer
+ *      // Use slice for safer writes: text[0:64] = ...
+ *      ```
+ *    - Lines 82-112: Manual bounds checking with `self.pos < self.len`.
+ *      Could use slice view pattern:
+ *      ```c3
+ *      char[] remaining = self.source[self.pos:$];
+ *      if (remaining.len == 0) return 0;
+ *      ```
+ *
+ * 5. FUNCTION EXTRACTION (Section 8):
+ *    - `Lexer.advance` (lines 130-450+) is very long (~320+ lines).
+ *      Consider extracting:
+ *      - `lex_logic_var()` - handles ?var (lines 205-222)
+ *      - `lex_dispatch()` - handles # dispatch (lines 225-284)
+ *      - `lex_string_literal()` - handles "..." (lines 287-344)
+ *      - `lex_number()` - handles ints/floats (lines 346+)
+ *      - `lex_symbol_or_path()` - handles symbols (lines 400+)
+ *
+ * 6. REPEATED PATTERNS:
+ *    - Error handling pattern repeated at lines 323-328, 332-337:
+ *      ```c3
+ *      // Extract helper:
+ *      fn void set_token_error(Token* t, char[] msg) {
+ *          t.type = T_ERROR;
+ *          foreach (i, ch : msg) t.text[i] = ch;
+ *          t.text[msg.len] = 0;
+ *          t.text_len = msg.len;
+ *      }
+ *      ```
+ *
+ * 7. DEFER PATTERNS (Section 2):
+ *    - No allocations in lexer, but parser section may need defer for
+ *      any temporary heap allocations.
+ */
+
 import std::io;
 import std::collections::list;
 
