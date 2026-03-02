@@ -1960,7 +1960,7 @@ fn void register_primitives(Interp* interp) {
     }
 
     // --- Regular primitives ---
-    PrimReg[120] regular_prims = {
+    PrimReg[125] regular_prims = {
         // List operations
         { "cons", &prim_cons, 2 }, { "car", &prim_car, 1 }, { "cdr", &prim_cdr, 1 },
         { "null?", &prim_null, 1 }, { "pair?", &prim_pair, 1 }, { "list", &prim_list, -1 },
@@ -2068,6 +2068,12 @@ fn void register_primitives(Interp* interp) {
         // Schema validation
         { "validate", &prim_validate, 2 },
         { "explain", &prim_explain, 2 },
+        // Deduce
+        { "deduce-open", &prim_deduce_open, 1 },
+        { "__define-relation", &prim_define_relation, 1 },
+        { "fact!", &prim_assert_fact, -1 },
+        { "retract!", &prim_retract_fact, -1 },
+        { "deduce-scan", &prim_deduce_scan, 1 },
     };
     foreach (&r : regular_prims) {
         register_prim(interp, r.name, r.func, r.arity);

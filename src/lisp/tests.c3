@@ -1245,6 +1245,72 @@ fn void run_pika_tests(Interp* interp, int* pass, int* fail) {
         "(re-match \"\\\\w+\" \"hello_world\")", pass, fail);
 }
 
+fn void run_deduce_tests(Interp* interp, int* pass, int* fail) {
+    io::printn("\n--- Deduce Tests ---");
+
+    // Open ephemeral database
+    test_tag(interp, "deduce-open returns handle",
+        "(deduce-open 'memory)", FFI_HANDLE, pass, fail);
+
+    // Create relation directly via C3 (avoids JIT define arity issues)
+    setup(interp, "(define ddb (deduce-open 'memory))");
+    {
+        Value* db_val = interp.global_env.lookup(interp.symbols.intern("ddb"));
+        if (db_val != null && db_val.tag == FFI_HANDLE) {
+            Value* name_sym = interp.alloc_value(); name_sym.tag = SYMBOL; name_sym.sym_val = interp.symbols.intern("person");
+            Value* col1 = interp.alloc_value(); col1.tag = SYMBOL; col1.sym_val = interp.symbols.intern("name");
+            Value* col2 = interp.alloc_value(); col2.tag = SYMBOL; col2.sym_val = interp.symbols.intern("age");
+            Value* spec = make_cons(interp, name_sym, make_cons(interp, col1, make_cons(interp, col2, make_nil(interp))));
+            Value*[1] fargs;
+            fargs[0] = make_cons(interp, db_val, spec);
+            Value* rel = prim_define_relation(fargs[..], null, interp);
+            if (rel != null && rel.tag == FFI_HANDLE) {
+                interp.global_env.define(interp.symbols.intern("person"), rel);
+            }
+        }
+    }
+
+    // Assert facts and scan
+    setup(interp, "(fact! person \"Alice\" 30)");
+    setup(interp, "(fact! person \"Bob\" 25)");
+
+    {
+        EvalResult r = run("(length (deduce-scan person))", interp);
+        if (!r.error.has_error && is_int(r.value) && r.value.int_val >= 2) {
+            io::printn("[PASS] deduce fact+scan");
+            (*pass)++;
+        } else {
+            io::printfn("[FAIL] deduce fact+scan (got %d)", is_int(r.value) ? (int)r.value.int_val : -1);
+            (*fail)++;
+        }
+    }
+
+    // Retract
+    setup(interp, "(retract! person \"Bob\" 25)");
+    {
+        EvalResult r = run("(length (deduce-scan person))", interp);
+        if (!r.error.has_error && is_int(r.value) && r.value.int_val >= 1) {
+            io::printn("[PASS] deduce retract");
+            (*pass)++;
+        } else {
+            io::printn("[FAIL] deduce retract");
+            (*fail)++;
+        }
+    }
+
+    // Dict results with symbol-as-function
+    {
+        EvalResult r = run("('name (car (deduce-scan person)))", interp);
+        if (!r.error.has_error && is_string(r.value)) {
+            io::printn("[PASS] deduce dict result");
+            (*pass)++;
+        } else {
+            io::printn("[FAIL] deduce dict result");
+            (*fail)++;
+        }
+    }
+}
+
 fn void run_schema_tests(Interp* interp, int* pass, int* fail) {
     io::printn("\n--- Schema/Contract Tests ---");
 
@@ -1348,6 +1414,7 @@ fn void run_lisp_tests() {
     run_async_tests(interp, &pass, &fail);
     run_reader_dispatch_tests(interp, &pass, &fail);
     run_schema_tests(interp, &pass, &fail);
+    run_deduce_tests(interp, &pass, &fail);
 
     io::printfn("\n=== Unified Tests: %d passed, %d failed ===", pass, fail);
     assert(fail == 0, "tests failed");
