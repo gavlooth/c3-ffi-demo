@@ -1346,8 +1346,9 @@ fn void run_deduce_tests(Interp* interp, int* pass, int* fail) {
         }
     }
 
-    // Pattern matching with ?vars — deferred, needs JIT investigation
-    // deduce-match hangs in current JIT compilation path
+    // deduce-match with ?vars — deferred (hangs, needs investigation)
+    // The unification engine code (unify.c3) is correct but deduce-match
+    // primitive hangs during JIT execution — likely LMDB cursor issue.
 }
 
 fn void run_schema_tests(Interp* interp, int* pass, int* fail) {
@@ -1396,6 +1397,8 @@ fn void run_schema_tests(Interp* interp, int* pass, int* fail) {
 fn void run_reader_dispatch_tests(Interp* interp, int* pass, int* fail) {
     io::printn("\n--- Reader Dispatch Tests ---");
 
+    // #r"" deferred — hangs in test_str (interp+JIT double-evaluation path)
+
     // Block comment
     test_eq(interp, "block comment",
         "(+ 1 #| ignored |# 2)", 3, pass, fail);
@@ -1411,9 +1414,6 @@ fn void run_reader_dispatch_tests(Interp* interp, int* pass, int* fail) {
     // Nested block comment
     test_eq(interp, "nested block comment",
         "(+ 1 #| outer #| inner |# still |# 2)", 3, pass, fail);
-
-    // #r"" regex literal: deferred — needs JIT investigation
-    // See plan item: Phase B follow-up
 
     // Symbol-as-function: ('name dict) => (ref dict 'name)
     test_str_val(interp, "symbol-as-function on dict",

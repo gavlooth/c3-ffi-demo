@@ -2073,6 +2073,7 @@ struct Interp {
     // When a signal has no handler, the fast path looks up this table.
     FastPathEntry[32] fast_path_table;
     usz fast_path_count;
+    bool jit_debug_trace;  // trace JIT compile/exec steps
 
     // Cached TypeIds for built-in types (avoid repeated hash lookups)
     TypeId tid_Int;
