@@ -193,29 +193,69 @@ Name: Deduce (the engine deduces new facts from rules)
 LMDB is mmap-based: reads hit OS page cache (memory speed), writes flush to disk lazily.
 No separate "in-memory mode" — LMDB already IS in-memory with persistence as side effect.
 
-**Relations — columns + optional attributes:**
-```lisp
-;; Minimal — just columns, LMDB defaults
-(define [relation db] edge (from to))
-(define [relation db] road (city1 city2 km))
+**Relations — columns with `^` metadata (types, roles, flags):**
 
-;; With attributes — key, index, schema, history
-(define [relation db] person (name age email)
-  (key name)                    ;; primary key — upsert on duplicate
-  (index age)                   ;; secondary B+ tree index
-  (schema person-schema)        ;; validate on every assert!
-  (history true))               ;; keep previous versions with timestamp
+`^` is Omni's metadata mechanism — types, flags, and dict metadata all in one prefix.
+For Deduce columns, the dict key IS the column role, the value IS the type:
+
+```lisp
+;; Minimal — bare column names, no types or roles
+(define [relation db] edge (from to))
+
+;; Typed columns — ^Type for plain columns
+(define [relation db] road
+  (city1 ^String)
+  (city2 ^String)
+  (km ^Int))
+
+;; Roles via metadata dict — ^{'role Type}
+(define [relation db] person
+  (name ^{'key String})         ;; primary key, type String
+  (age ^{'index Int})           ;; indexed, type Int
+  (email ^String))              ;; plain, type String
+
+;; Relation-level metadata in bracket attr or ^{...}
+(define [relation db history] person
+  (name ^{'key String})
+  (age ^{'index Int})
+  (email ^String))
+
+;; Rich metadata when needed
+(define [relation db] ^{'schema person-schema} employee
+  (id ^{'key Int})
+  (name ^String)
+  (dept ^{'index String})
+  (salary ^Int))
 ```
 
-**Relation attributes:**
+**Column metadata — two equivalent forms:**
 
-| Attribute | Syntax | Purpose |
-|-----------|--------|---------|
-| `key` | `(key col)` or `(key col1 col2)` | Primary key. Duplicate insert = upsert. Without: duplicates allowed. |
-| `index` | `(index col)` | Secondary B+ tree index. Enables fast range scans on that column. |
-| `schema` | `(schema name)` | Contract validation on every `assert!`. Rejects invalid tuples. |
-| `history` | `(history true)` | Temporal: keep old versions with timestamp. Enables `:at` queries. |
-| `memory` | `(memory "200mb")` | Override LMDB map size for this database. Default ~1GB. |
+Short form (bare `^` modifiers, like `^rec`/`^strict`):
+```lisp
+(name ^String ^key)        ;; type + role as separate hints
+(age ^Int ^index)
+```
+
+Dict form (`^{'role Type}`, role carries the type):
+```lisp
+(name ^{'key String})      ;; same thing, one annotation
+(age ^{'index Int})
+```
+
+| Metadata | Short form | Dict form | Meaning |
+|----------|-----------|-----------|---------|
+| Plain typed | `^String` | — | Column with type, no special role |
+| Primary key | `^String ^key` | `^{'key String}` | Upsert on duplicate |
+| Indexed | `^Int ^index` | `^{'index Int}` | Secondary B+ tree for range scans |
+| Key + indexed | `^String ^key ^index` | `^{'key String 'index true}` | Both roles |
+
+**Relation-level metadata:**
+
+| Metadata | Syntax | Purpose |
+|----------|--------|---------|
+| `history` | `[relation db history]` | Temporal: keep old versions. Enables `:at`/`:time` queries. |
+| `schema` | `^{'schema name}` | Contract validation on every `assert!`. |
+| `memory` | `^{'memory "200mb"}` | Override LMDB map size. Default ~1GB. |
 
 **Facts — assert tuples into relations:**
 ```lisp
