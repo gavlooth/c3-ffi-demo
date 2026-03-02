@@ -992,6 +992,10 @@ fn bool ValueKey.is_eq(self, ValueKey other) {
     return values_equal(self.val, other.val);
 }
 
+// C3 native map — deferred: Value* not equatable for map{Key, Value}
+// Need to either add .is_eq to Value* or use wrapper type for value too.
+// See M1.4b in c3-migration.md for approach.
+
 fn uint hash_value(Value* key) {
     if (key == null) return 0;
     switch (key.tag) {
