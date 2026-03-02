@@ -893,8 +893,9 @@ fn Value* jit_eval_set(Interp* interp, SymbolId name, Value* value, Env* env) {
         interp.current_scope = saved_scope_ctp;
     }
     // Try local env first, then global
-    if (!env.set(name, stored)) {
-        if (interp.global_env == null || !interp.global_env.set(name, stored)) {
+    if (catch err = env.set(name, stored)) {
+        if (interp.global_env == null) return raise_error(interp, "set!: unbound variable");
+        if (catch err2 = interp.global_env.set(name, stored)) {
             return raise_error(interp, "set!: unbound variable");
         }
     }

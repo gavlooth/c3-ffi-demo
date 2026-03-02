@@ -280,7 +280,8 @@ fn lisp::Value* lookup_var(char[] name) {
 
 fn void set_var(char[] name, lisp::Value* val) {
     lisp::SymbolId sid = g_aot_interp.symbols.intern(name);
-    g_aot_interp.global_env.set(sid, val);
+    // AOT set_var on global env — silently ignore if unbound (define_var should be called first)
+    g_aot_interp.global_env.set(sid, val)!!;
 }
 
 // =============================================================================

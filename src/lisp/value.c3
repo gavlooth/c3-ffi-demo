@@ -1446,23 +1446,23 @@ fn Value* Env.lookup(Env* self, SymbolId name) {
     return null;  // Not found
 }
 
-fn bool Env.set(Env* self, SymbolId name, Value* value) {
+fn void? Env.set(Env* self, SymbolId name, Value* value) {
     if (self.hash_table != null) {
         usz idx = self.hash_lookup(name);
         if (idx != ~(usz)0) {
             self.bindings[idx].value = value;
-            return true;
+            return;
         }
     } else {
         for (usz i = 0; i < self.binding_count; i++) {
             if (self.bindings[i].name == name) {
                 self.bindings[i].value = value;
-                return true;
+                return;
             }
         }
     }
     if (self.parent != null) return self.parent.set(name, value);
-    return false;
+    return UNBOUND_VARIABLE~;
 }
 
 fn Env* Env.extend(Env* self, Interp* interp, SymbolId name, Value* value) {
