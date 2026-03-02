@@ -4,6 +4,42 @@ import std::collections::list;
 import std::io;
 import main;
 
+// ============================================================
+// Fault types — structured error categories for C3 optionals
+// Accessed as lisp::FAULT_NAME (e.g., lisp::UNBOUND_VARIABLE)
+// ============================================================
+
+faultdef
+    // Parse errors
+    UNTERMINATED_STRING,
+    UNEXPECTED_TOKEN,
+    NESTING_TOO_DEEP,
+    UNKNOWN_ATTRIBUTE,
+    INVALID_SYNTAX,
+    // Eval errors
+    UNBOUND_VARIABLE,
+    TYPE_MISMATCH,
+    ARITY_MISMATCH,
+    DIVISION_BY_ZERO,
+    STACK_OVERFLOW,
+    NOT_A_FUNCTION,
+    INDEX_OUT_OF_BOUNDS,
+    UNHANDLED_EFFECT,
+    // I/O errors
+    CONNECTION_REFUSED,
+    DNS_FAILED,
+    TLS_HANDSHAKE_FAILED,
+    READ_FAILED,
+    WRITE_FAILED,
+    // Type errors
+    EXPECTED_STRING,
+    EXPECTED_INT,
+    EXPECTED_LIST,
+    EXPECTED_ARRAY,
+    EXPECTED_DICT,
+    EXPECTED_CLOSURE,
+    EXPECTED_SYMBOL;
+
 // Compile-time debug flag: set to false for release builds (zero-cost elimination).
 const bool DEBUG_BUILD = true;
 
