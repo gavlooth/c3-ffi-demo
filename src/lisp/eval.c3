@@ -93,6 +93,8 @@ const uint COPY_SITE_JIT_TCO_FRAME_COPY = 13;
 const uint COPY_SITE_JIT_EVAL_SET = 14;
 const uint COPY_SITE_JIT_EVAL_DEFINE = 15;
 const uint COPY_SITE_JIT_ENV_EXTEND_ROOT = 16;
+const usz PROMOTION_CTX_BUDGET_RETURN = 4096;
+const usz PROMOTION_CTX_BUDGET_TCO = 2048;
 
 fn void copy_to_parent_note_tag(ValueTag tag) @inline {
     switch (tag) {
@@ -1369,6 +1371,18 @@ fn void promotion_context_end(Interp* interp, PromotionContext* ctx) {
     }
 }
 
+fn bool promotion_context_consume(PromotionContext* ctx, usz units = 1) @inline {
+    if (ctx == null) return true;
+    if (ctx.aborted) return false;
+    if (ctx.budget == usz.max) return true;
+    if (ctx.budget < units) {
+        ctx.aborted = true;
+        return false;
+    }
+    ctx.budget -= units;
+    return true;
+}
+
 fn Value* promotion_context_lookup(PromotionContext* ctx, Value* src) @inline {
     if (ctx == null || src == null) return null;
     PromotionMemoEntry* e = ctx.memo_head;
@@ -1381,18 +1395,12 @@ fn Value* promotion_context_lookup(PromotionContext* ctx, Value* src) @inline {
 
 fn void promotion_context_remember(PromotionContext* ctx, Value* src, Value* dst, Interp* interp) {
     if (ctx == null || src == null || dst == null || interp == null || interp.current_scope == null) return;
+    if (ctx.aborted) return;
     PromotionMemoEntry* e = (PromotionMemoEntry*)interp.current_scope.alloc(PromotionMemoEntry.sizeof);
     e.src = src;
     e.dst = dst;
     e.next = ctx.memo_head;
     ctx.memo_head = e;
-    if (ctx.budget != usz.max) {
-        if (ctx.budget > 0) {
-            ctx.budget--;
-        } else {
-            ctx.aborted = true;
-        }
-    }
 }
 
 fn Value* copy_to_parent_site_ctx(Value* v, Interp* interp, uint site, PromotionContext* ctx) {
@@ -1401,8 +1409,9 @@ fn Value* copy_to_parent_site_ctx(Value* v, Interp* interp, uint site, Promotion
         Value* cached = promotion_context_lookup(ctx, v);
         if (cached != null) return cached;
     }
+    bool can_track = promotion_context_consume(ctx, 1);
     Value* copied = copy_to_parent_site(v, interp, site);
-    if (ctx != null && copied != null) {
+    if (can_track && ctx != null && copied != null) {
         promotion_context_remember(ctx, v, copied, interp);
     }
     return copied;
@@ -1448,6 +1457,9 @@ fn Value* copy_value_if_owned_by_scope(Value* v, Interp* interp, main::ScopeRegi
  */
 fn Value* promote_to_escape(Value* v, Interp* interp) {
     if (v == null || interp == null || interp.current_scope == null) return v;
+    PromotionContext* ctx = interp.active_promotion_ctx;
+    if (ctx != null && ctx.aborted) return v;
+
     // Fast paths:
     // - already in current ESCAPE lane
     // - in current TEMP lane (normal case for lane promotion)
@@ -1458,15 +1470,15 @@ fn Value* promote_to_escape(Value* v, Interp* interp) {
         // Defensive fallback: disjoint lifetime object (e.g. standalone env_scope).
         // Copy into current TEMP lane first, then continue promotion into ESCAPE.
         PromotionContext local_ctx = {};
-        PromotionContext* ctx = interp.active_promotion_ctx;
+        PromotionContext* local_ptr = interp.active_promotion_ctx;
         bool owns_ctx = false;
-        if (ctx == null) {
+        if (local_ptr == null) {
             promotion_context_begin(interp, &local_ctx);
-            ctx = &local_ctx;
+            local_ptr = &local_ctx;
             owns_ctx = true;
         }
-        Value* copied = copy_to_parent_site_ctx(v, interp, COPY_SITE_GENERIC, ctx);
-        if (owns_ctx) promotion_context_end(interp, ctx);
+        Value* copied = copy_to_parent_site_ctx(v, interp, COPY_SITE_GENERIC, local_ptr);
+        if (owns_ctx) promotion_context_end(interp, local_ptr);
         if (copied == null || copied == v) return copied;
         return promote_to_escape(copied, interp);
     }
@@ -1474,22 +1486,27 @@ fn Value* promote_to_escape(Value* v, Interp* interp) {
     Value* result;
     switch (v.tag) {
         case NIL:
+            if (!promotion_context_consume(ctx, 1)) return v;
             result = interp.alloc_value_escape();
             result.tag = NIL;
         case INT:
+            if (!promotion_context_consume(ctx, 1)) return v;
             result = interp.alloc_value_escape();
             result.tag = INT;
             result.int_val = v.int_val;
         case DOUBLE:
+            if (!promotion_context_consume(ctx, 1)) return v;
             result = interp.alloc_value_escape();
             result.tag = DOUBLE;
             result.double_val = v.double_val;
         case SYMBOL:
+            if (!promotion_context_consume(ctx, 1)) return v;
             result = interp.alloc_value_escape();
             result.tag = SYMBOL;
             result.sym_val = v.sym_val;
         case STRING:
         case ERROR: {
+            if (!promotion_context_consume(ctx, 1)) return v;
             result = interp.alloc_value_escape();
             result.tag = v.tag;
             main::scope_register_dtor_escape(interp.current_scope, (void*)result, &scope_dtor_value);
@@ -1505,6 +1522,7 @@ fn Value* promote_to_escape(Value* v, Interp* interp) {
             break;
         }
         case CONS: {
+            if (!promotion_context_consume(ctx, 1)) return v;
             // Iterative spine copy to avoid recursion blowups on long lists.
             Value* head = interp.alloc_value_escape();
             head.tag = CONS;
@@ -1513,9 +1531,11 @@ fn Value* promote_to_escape(Value* v, Interp* interp) {
 
             while (true) {
                 current_new.cons_val.car = promote_to_escape(current_old.cons_val.car, interp);
+                if (ctx != null && ctx.aborted) return v;
                 Value* old_cdr = current_old.cons_val.cdr;
                 if (old_cdr != null && old_cdr.tag == CONS &&
                     old_cdr.scope_gen == interp.current_scope.generation) {
+                    if (!promotion_context_consume(ctx, 1)) return v;
                     Value* next_new = interp.alloc_value_escape();
                     next_new.tag = CONS;
                     current_new.cons_val.cdr = next_new;
@@ -1523,6 +1543,7 @@ fn Value* promote_to_escape(Value* v, Interp* interp) {
                     current_old = old_cdr;
                 } else {
                     current_new.cons_val.cdr = promote_to_escape(old_cdr, interp);
+                    if (ctx != null && ctx.aborted) return v;
                     break;
                 }
             }
@@ -1530,6 +1551,7 @@ fn Value* promote_to_escape(Value* v, Interp* interp) {
             break;
         }
         case CLOSURE: {
+            if (!promotion_context_consume(ctx, 1)) return v;
             result = interp.alloc_value_escape();
             result.tag = CLOSURE;
             main::scope_register_dtor_escape(interp.current_scope, (void*)result, &scope_dtor_closure);
@@ -1557,6 +1579,7 @@ fn Value* promote_to_escape(Value* v, Interp* interp) {
             break;
         }
         case PARTIAL_PRIM: {
+            if (!promotion_context_consume(ctx, 1)) return v;
             result = interp.alloc_value_escape();
             result.tag = PARTIAL_PRIM;
             result.partial_val.func = v.partial_val.func;
@@ -1566,14 +1589,17 @@ fn Value* promote_to_escape(Value* v, Interp* interp) {
             break;
         }
         case CONTINUATION:
+            if (!promotion_context_consume(ctx, 1)) return v;
             result = interp.alloc_value_escape();
             result.tag = CONTINUATION;
             result.cont_val = v.cont_val;
         case ITERATOR:
+            if (!promotion_context_consume(ctx, 1)) return v;
             result = interp.alloc_value_escape();
             result.tag = ITERATOR;
             result.iterator_val = promote_to_escape(v.iterator_val, interp);
         case COROUTINE:
+            if (!promotion_context_consume(ctx, 1)) return v;
             result = interp.alloc_value_escape();
             result.tag = COROUTINE;
             result.coroutine_val = v.coroutine_val;
@@ -1586,11 +1612,15 @@ fn Value* promote_to_escape(Value* v, Interp* interp) {
         case TYPE_INFO:
         case MODULE:
             // Wrapper promotion into ESCAPE lane; backing data/ownership remains unchanged.
+            if (!promotion_context_consume(ctx, 1)) return v;
             result = interp.alloc_value_escape();
             *result = *v;
             result.scope_gen = interp.current_scope.escape_generation;
         default:
             result = v;
+    }
+    if (ctx != null && result != null && result != v) {
+        promotion_context_remember(ctx, v, result, interp);
     }
     return result;
 }
@@ -2678,7 +2708,8 @@ fn EvalResult run(char[] source, Interp* interp) {
         bool child_spliced = false;
         if (jit_result != null) {
             PromotionContext boundary_ctx = {};
-            promotion_context_begin(interp, &boundary_ctx);
+            promotion_context_begin(interp, &boundary_ctx, PROMOTION_CTX_BUDGET_RETURN);
+            Value* original_result = jit_result;
             interp.current_scope = saved_scope;
 
             if (child_scope.refcount == 1) {
@@ -2688,7 +2719,14 @@ fn EvalResult run(char[] source, Interp* interp) {
                     jit_result = promote_to_escape(jit_result, interp);
                     interp.current_scope = saved_scope;
                 }
-                if (jit_result.scope_gen == child_scope.escape_generation) {
+                if (boundary_ctx.aborted) {
+                    main::ScopeRegion* saved_releasing = interp.releasing_scope;
+                    interp.releasing_scope = child_scope;
+                    jit_result = copy_value_if_owned_by_scope(original_result, interp, child_scope, COPY_SITE_RUN_JIT_RESULT);
+                    interp.releasing_scope = saved_releasing;
+                }
+                if (!boundary_ctx.aborted &&
+                    jit_result.scope_gen == child_scope.escape_generation) {
                     main::scope_splice_escapes(saved_scope, child_scope);
                     child_scope = null;
                     child_spliced = true;

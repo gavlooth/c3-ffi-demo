@@ -1999,6 +1999,53 @@ fn void run_memory_lifetime_regression_tests(Interp* interp, int* pass, int* fai
             (*fail)++;
         }
     }
+
+    // Invariant: budget abort triggers deterministic fallback in same epoch context.
+    {
+        main::ScopeRegion* saved_scope = interp.current_scope;
+        main::ScopeRegion* parent = main::scope_create(saved_scope);
+        main::ScopeRegion* child = main::scope_create(parent);
+
+        interp.current_scope = child;
+        Value* src = make_cons(interp, make_int(interp, 11), make_nil(interp));
+
+        PromotionContext ctx = {};
+        promotion_context_begin(interp, &ctx, 0);
+        Value* promoted = promote_to_escape(src, interp);
+
+        interp.current_scope = parent;
+        main::ScopeRegion* saved_releasing = interp.releasing_scope;
+        interp.releasing_scope = child;
+        usz base_site = copy_to_parent_site_calls(COPY_SITE_RUN_JIT_RESULT);
+        Value* fallback = copy_value_if_owned_by_scope(src, interp, child, COPY_SITE_RUN_JIT_RESULT);
+        usz site_delta = copy_to_parent_site_calls(COPY_SITE_RUN_JIT_RESULT) - base_site;
+        interp.releasing_scope = saved_releasing;
+        promotion_context_end(interp, &ctx);
+
+        bool ok = promoted == src &&
+                  ctx.aborted &&
+                  ctx.epoch != 0 &&
+                  fallback != null &&
+                  fallback.tag == CONS &&
+                  site_delta == 1;
+
+        interp.current_scope = saved_scope;
+        main::scope_release(child);
+        main::scope_release(parent);
+
+        if (ok) {
+            io::printn("[PASS] lifetime: promotion abort fallback gate");
+            (*pass)++;
+        } else {
+            io::printfn("[FAIL] lifetime: promotion abort fallback gate (aborted=%s epoch=%d promoted_same=%s site_delta=%d fallback_tag=%d)",
+                ctx.aborted ? "yes" : "no",
+                (int)ctx.epoch,
+                (promoted == src) ? "yes" : "no",
+                (long)site_delta,
+                fallback != null ? (int)fallback.tag : -1);
+            (*fail)++;
+        }
+    }
 }
 
 fn void run_basic_tests(Interp* interp, int* pass, int* fail) {
