@@ -86,13 +86,12 @@ const uint COPY_SITE_CONS_BARRIER_CAR = 6;
 const uint COPY_SITE_CONS_BARRIER_CDR = 7;
 const uint COPY_SITE_ENV_PROMOTE_FOR_TARGET = 8;
 const uint COPY_SITE_JIT_SINGLE_SCOPE_RETURN = 9;
-const uint COPY_SITE_JIT_CALL_SCOPE_STEP1 = 10;
-const uint COPY_SITE_JIT_CALL_SCOPE_STEP2 = 11;
-const uint COPY_SITE_JIT_TCO_ESCAPE_REFRESH = 12;
-const uint COPY_SITE_JIT_TCO_FRAME_COPY = 13;
-const uint COPY_SITE_JIT_EVAL_SET = 14;
-const uint COPY_SITE_JIT_EVAL_DEFINE = 15;
-const uint COPY_SITE_JIT_ENV_EXTEND_ROOT = 16;
+const uint COPY_SITE_JIT_CALL_SCOPE_STEP2 = 10;
+const uint COPY_SITE_JIT_TCO_FRAME_COPY = 11;
+const uint COPY_SITE_JIT_EVAL_SET = 12;
+const uint COPY_SITE_JIT_EVAL_DEFINE = 13;
+const uint COPY_SITE_JIT_ENV_EXTEND_ROOT = 14;
+const uint COPY_SITE_COUNT = 15;
 const usz PROMOTION_CTX_BUDGET_RETURN = 4096;
 const usz PROMOTION_CTX_BUDGET_TCO = 2048;
 
@@ -141,12 +140,10 @@ fn void print_memory_promotion_stats() {
         (long)g_copy_to_parent_stats.site_calls[COPY_SITE_CONS_BARRIER_CAR],
         (long)g_copy_to_parent_stats.site_calls[COPY_SITE_CONS_BARRIER_CDR],
         (long)g_copy_to_parent_stats.site_calls[COPY_SITE_ENV_PROMOTE_FOR_TARGET]);
-    io::printfn("copy_to_parent by site: jit_single=%d jit_call_step1=%d jit_call_step2=%d",
+    io::printfn("copy_to_parent by site: jit_single=%d jit_call_step2=%d",
         (long)g_copy_to_parent_stats.site_calls[COPY_SITE_JIT_SINGLE_SCOPE_RETURN],
-        (long)g_copy_to_parent_stats.site_calls[COPY_SITE_JIT_CALL_SCOPE_STEP1],
         (long)g_copy_to_parent_stats.site_calls[COPY_SITE_JIT_CALL_SCOPE_STEP2]);
-    io::printfn("copy_to_parent by site: jit_tco_refresh=%d jit_tco_frame=%d jit_set=%d jit_define=%d",
-        (long)g_copy_to_parent_stats.site_calls[COPY_SITE_JIT_TCO_ESCAPE_REFRESH],
+    io::printfn("copy_to_parent by site: jit_tco_frame=%d jit_set=%d jit_define=%d",
         (long)g_copy_to_parent_stats.site_calls[COPY_SITE_JIT_TCO_FRAME_COPY],
         (long)g_copy_to_parent_stats.site_calls[COPY_SITE_JIT_EVAL_SET],
         (long)g_copy_to_parent_stats.site_calls[COPY_SITE_JIT_EVAL_DEFINE]);
@@ -163,7 +160,7 @@ fn usz copy_to_parent_total_calls() @inline {
 }
 
 fn usz copy_to_parent_site_calls(uint site) @inline {
-    if (site >= 20) return 0;
+    if (site >= COPY_SITE_COUNT) return 0;
     return g_copy_to_parent_stats.site_calls[(usz)site];
 }
 
@@ -1348,7 +1345,7 @@ fn Value* copy_to_parent(Value* v, Interp* interp) {
 }
 
 fn Value* copy_to_parent_site(Value* v, Interp* interp, uint site) {
-    if (site < 20) g_copy_to_parent_stats.site_calls[(usz)site]++;
+    if (site < COPY_SITE_COUNT) g_copy_to_parent_stats.site_calls[(usz)site]++;
     return copy_to_parent(v, interp);
 }
 
