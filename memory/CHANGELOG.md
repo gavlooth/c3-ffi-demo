@@ -1,5 +1,59 @@
 # Changelog
 
+## 2026-03-03: Thread Guardrails — Scope Affinity + Minimal Task Effects
+
+### Summary
+Added runtime thread-affinity enforcement for `ScopeRegion` access and introduced a minimal thread task effect API (`io/thread-spawn`, `io/thread-join`) over sendable offload jobs.
+
+### Changes
+- **ScopeRegion owner-thread checks** (`src/scope_region.c3`):
+  - Added `owner_thread_token` to `ScopeRegion`.
+  - Added thread-local marker and owner check helpers.
+  - Enforced owner checks in:
+    - `scope_retain`, `scope_release`, `scope_destroy`
+    - `alloc/alloc_slow`, `alloc_escape/alloc_escape_slow`
+    - `scope_register_dtor`, `scope_register_dtor_escape`
+    - `scope_reset`, `scope_reset_temp_lane`
+    - `scope_splice_escapes`
+  - Cross-thread region access now fails immediately (deterministic guardrail) instead of risking silent corruption.
+- **Minimal threaded task effects**:
+  - Added stdlib effect declarations/wrappers:
+    - `(io/thread-spawn (^Any job))`
+    - `(io/thread-join (^Int task-id))`
+    - wrappers `thread-spawn`, `thread-join`
+  - Registered runtime fast-paths:
+    - `io/thread-spawn -> __raw-thread-spawn`
+    - `io/thread-join -> __raw-thread-join`
+  - Added primitives in scheduler:
+    - `prim_thread_spawn` enqueues validated sendable job and returns integer `task-id`
+    - `prim_thread_join` waits for task completion and returns value
+- **Shared job parsing / sendable boundary** (`src/lisp/scheduler.c3`):
+  - Added `scheduler_build_offload_work` used by both `offload` and `thread-spawn`.
+  - Supported task job ops remain sendable and explicit: `sleep-ms`, `gzip`, `deflate`.
+- **Task table over existing worker thread** (`src/lisp/scheduler.c3`):
+  - Added bounded `thread_tasks` table with mutex protection.
+  - Worker route now supports:
+    - fiber completion path (`WAKEUP_OFFLOAD_READY`)
+    - task completion path (`thread-spawn` / `thread-join`)
+- **Tests** (`src/lisp/tests_tests.c3`):
+  - Added scheduler tests:
+    - `thread-spawn/thread-join gzip`
+    - concurrent thread task joins
+    - double join rejection
+
+### Files Modified
+- `src/scope_region.c3`
+- `stdlib/stdlib.lisp`
+- `src/lisp/eval.c3`
+- `src/lisp/scheduler.c3`
+- `src/lisp/tests_tests.c3`
+
+### Validation
+- `c3c build` ✅
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` ✅
+  - Unified tests: `1130 passed, 0 failed`
+  - Compiler tests: `73 passed, 0 failed`
+
 ## 2026-03-03: `io/offload` Effect + Scope Freelist Thread-Safety
 
 ### Summary

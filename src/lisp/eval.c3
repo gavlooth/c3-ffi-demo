@@ -2472,7 +2472,7 @@ fn void register_primitives(Interp* interp) {
     }
 
     // --- Regular primitives ---
-    const REGULAR_PRIM_COUNT = 139;
+    const REGULAR_PRIM_COUNT = 141;
     PrimReg[REGULAR_PRIM_COUNT] regular_prims = {
         // List operations
         { "cons", &prim_cons, 2 }, { "car", &prim_car, 1 }, { "cdr", &prim_cdr, 1 },
@@ -2574,6 +2574,8 @@ fn void register_primitives(Interp* interp) {
         { "__raw-dns-resolve", &prim_dns_resolve, 1 },
         { "__raw-async-sleep", &prim_async_sleep, 1 },
         { "__raw-offload", &prim_offload, 1 },
+        { "__raw-thread-spawn", &prim_thread_spawn, 1 },
+        { "__raw-thread-join", &prim_thread_join, 1 },
         // TLS
         { "__raw-tls-connect", &prim_tls_connect, 2 },
         { "__raw-tls-read", &prim_tls_read, -1 },
@@ -2635,6 +2637,8 @@ fn void register_primitives(Interp* interp) {
     register_fast_path(interp, "io/dns-resolve", "__raw-dns-resolve");
     register_fast_path(interp, "io/async-sleep", "__raw-async-sleep");
     register_fast_path(interp, "io/offload",     "__raw-offload");
+    register_fast_path(interp, "io/thread-spawn","__raw-thread-spawn");
+    register_fast_path(interp, "io/thread-join", "__raw-thread-join");
     register_fast_path(interp, "io/tls-connect", "__raw-tls-connect");
     register_fast_path(interp, "io/tls-read",    "__raw-tls-read");
     register_fast_path(interp, "io/tls-write",   "__raw-tls-write");

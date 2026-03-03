@@ -82,6 +82,7 @@ struct ScopeRegion {
     usz          alloc_bytes;   // Total bytes allocated (for split decisions)
     usz          alloc_count;   // Object count (for stats)
     uint         escape_generation; // Unique stamp for ESCAPE-lane membership checks
+    void*        owner_thread_token; // Thread-affinity token for runtime safety checks
 
     // Recycling
     ScopeRegion* pool_next;     // Freelist link (only used when in freelist)
@@ -108,6 +109,7 @@ uint g_scope_generation_counter = 0;
 
 thread::Mutex g_scope_global_mu;
 thread::OnceFlag g_scope_global_once;
+tlocal char g_scope_thread_marker;
 
 fn void scope_global_mu_init_once() {
     g_scope_global_mu.init()!!;
@@ -120,6 +122,22 @@ fn void scope_global_lock() @inline {
 
 fn void scope_global_unlock() @inline {
     g_scope_global_mu.unlock();
+}
+
+fn void* scope_current_thread_token() @inline {
+    return (void*)&g_scope_thread_marker;
+}
+
+fn void scope_thread_violation(char[] op) @inline {
+    io::eprintfn("scope-region thread-affinity violation in %s", op);
+    unreachable("scope-region accessed from non-owner thread");
+}
+
+fn void scope_require_owner(ScopeRegion* scope, char[] op) @inline {
+    if (scope == null) return;
+    if (scope.owner_thread_token != scope_current_thread_token()) {
+        scope_thread_violation(op);
+    }
 }
 
 struct ScopeTransferStats {
@@ -245,6 +263,7 @@ fn ScopeRegion* scope_create(ScopeRegion* parent = null) {
     scope.alloc_bytes = 0;
     scope.alloc_count = 0;
     scope.pool_next = null;
+    scope.owner_thread_token = scope_current_thread_token();
 
     // Retain parent
     if (parent != null) {
@@ -258,7 +277,9 @@ fn ScopeRegion* scope_create(ScopeRegion* parent = null) {
  * Increment the reference count of a scope.
  */
 fn void scope_retain(ScopeRegion* scope) @inline {
-    if (scope != null) scope.refcount++;
+    if (scope == null) return;
+    scope_require_owner(scope, "scope_retain");
+    scope.refcount++;
 }
 
 /**
@@ -266,6 +287,7 @@ fn void scope_retain(ScopeRegion* scope) @inline {
  */
 fn void scope_release(ScopeRegion* scope) @inline {
     if (scope == null) return;
+    scope_require_owner(scope, "scope_release");
     if (--scope.refcount == 0) {
         scope_destroy(scope);
     }
@@ -293,6 +315,7 @@ fn void scope_run_escape_dtors(ScopeRegion* scope) {
  @require scope.refcount == 0 : "scope_destroy: refcount not zero"
 *>
 fn void scope_destroy(ScopeRegion* scope) {
+    scope_require_owner(scope, "scope_destroy");
     // 1. Run destructors (reverse order — LIFO) for both lanes
     scope_run_dtors(scope);
     scope_run_escape_dtors(scope);
@@ -351,6 +374,7 @@ fn void scope_destroy(ScopeRegion* scope) {
  * Slow path: allocate a new chunk when the current one is full.
  */
 fn void* ScopeRegion.alloc_slow(ScopeRegion* self, usz aligned_size) {
+    scope_require_owner(self, "scope_alloc_slow");
     // Determine new chunk capacity: double the previous, or at least fit the request
     usz prev_cap = SCOPE_CHUNK_INITIAL;
     if (self.chunks != null) {
@@ -376,6 +400,7 @@ fn void* ScopeRegion.alloc_slow(ScopeRegion* self, usz aligned_size) {
  * Escape slow path: allocate a new ESCAPE chunk when current escape chunk is full.
  */
 fn void* ScopeRegion.alloc_escape_slow(ScopeRegion* self, usz aligned_size) {
+    scope_require_owner(self, "scope_alloc_escape_slow");
     usz prev_cap = SCOPE_CHUNK_INITIAL;
     if (self.escape_chunks != null) {
         prev_cap = self.escape_chunks.capacity;
@@ -401,6 +426,7 @@ fn void* ScopeRegion.alloc_escape_slow(ScopeRegion* self, usz aligned_size) {
  * Fast path: ~3 instructions (load bump, add, compare).
  */
 fn void* ScopeRegion.alloc(ScopeRegion* self, usz size) @inline {
+    scope_require_owner(self, "scope_alloc");
     usz mask = 7;
     usz aligned = (size + mask) & ~mask;
     char* result = self.bump;
@@ -418,6 +444,7 @@ fn void* ScopeRegion.alloc(ScopeRegion* self, usz size) @inline {
  * Bump-allocate `size` bytes from ESCAPE lane. 8-byte aligned.
  */
 fn void* ScopeRegion.alloc_escape(ScopeRegion* self, usz size) @inline {
+    scope_require_owner(self, "scope_alloc_escape");
     usz mask = 7;
     usz aligned = (size + mask) & ~mask;
     if (self.escape_bump != null) {
@@ -442,6 +469,7 @@ fn void* ScopeRegion.alloc_escape(ScopeRegion* self, usz size) @inline {
  * The ScopeDtor struct itself is bump-allocated in the scope's chunks.
  */
 fn void scope_register_dtor(ScopeRegion* scope, void* ptr, ScopeDestructorFn func) {
+    scope_require_owner(scope, "scope_register_dtor");
     ScopeDtor* d = (ScopeDtor*)scope.alloc(ScopeDtor.sizeof);
     d.ptr = ptr;
     d.func = func;
@@ -454,6 +482,7 @@ fn void scope_register_dtor(ScopeRegion* scope, void* ptr, ScopeDestructorFn fun
  * The ScopeDtor struct itself is ESCAPE-lane allocated.
  */
 fn void scope_register_dtor_escape(ScopeRegion* scope, void* ptr, ScopeDestructorFn func) {
+    scope_require_owner(scope, "scope_register_dtor_escape");
     ScopeDtor* d = (ScopeDtor*)scope.alloc_escape(ScopeDtor.sizeof);
     d.ptr = ptr;
     d.func = func;
@@ -497,6 +526,7 @@ fn bool scope_contains(ScopeRegion* scope, void* ptr) {
  * O(1) amortized per loop iteration when no escapes occur.
  */
 fn void scope_reset(ScopeRegion* scope) {
+    scope_require_owner(scope, "scope_reset");
     assert(scope.refcount == 1, "scope_reset: refcount must be 1 (nothing escaped)");
     // Run destructors first for both lanes
     scope_run_dtors(scope);
@@ -546,6 +576,7 @@ fn void scope_reset(ScopeRegion* scope) {
  * Safe only when RC == 1 (no external scope ownership changes during reset).
  */
 fn void scope_reset_temp_lane(ScopeRegion* scope) {
+    scope_require_owner(scope, "scope_reset_temp_lane");
     assert(scope.refcount == 1, "scope_reset_temp_lane: refcount must be 1");
 
     // TEMP dtors only; ESCAPE dtors remain registered.
@@ -613,6 +644,8 @@ fn bool is_in_scope(void* ptr, ScopeRegion* scope) {
 
 fn void scope_splice_escapes(ScopeRegion* parent, ScopeRegion* child) {
     if (child == null || parent == null) return;
+    scope_require_owner(parent, "scope_splice_escapes(parent)");
+    scope_require_owner(child, "scope_splice_escapes(child)");
 
     g_scope_transfer_stats.splice_calls++;
     g_scope_transfer_stats.splice_escape_chunk_bytes += scope_chunk_bytes(child.escape_chunks);

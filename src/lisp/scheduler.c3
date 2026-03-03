@@ -16,6 +16,8 @@ import main;
 
 const usz MAX_FIBERS = 256;
 const usz NO_FIBER = MAX_FIBERS;
+const usz MAX_THREAD_TASKS = 256;
+const usz NO_TASK = MAX_THREAD_TASKS;
 
 enum FiberState : char {
     FIBER_READY,
@@ -94,6 +96,7 @@ enum OffloadResultKind : char {
 
 struct OffloadWork {
     usz fiber_id;
+    usz task_id;
     OffloadOp op;
     long int_arg;
     SharedBlob* blob;
@@ -122,6 +125,12 @@ struct OffloadQueue {
     thread::Thread worker;
 }
 
+struct ThreadTaskEntry {
+    bool active;
+    bool completed;
+    OffloadCompletion* completion;
+}
+
 struct Scheduler {
     FiberEntry[MAX_FIBERS] fibers;
     PendingTcpRead[MAX_FIBERS] pending_reads;
@@ -137,6 +146,9 @@ struct Scheduler {
     void* uv_loop;
     void* async_handle;                // uv_async_t*
     OffloadQueue offload_queue;
+    ThreadTaskEntry[MAX_THREAD_TASKS] thread_tasks;
+    thread::Mutex thread_task_mu;
+    bool thread_task_mu_ready;
 }
 
 // Global scheduler (single-threaded)
@@ -220,6 +232,102 @@ fn void scheduler_set_offload_error(OffloadCompletion* completion, char[] messag
         return;
     }
     for (usz i = 0; i < message.len; i++) completion.error_msg[i] = message[i];
+}
+
+fn Value* scheduler_build_offload_work(Value* job, OffloadWork* work, Interp* interp) {
+    if (!is_cons(job)) return raise_error(interp, "offload: expected (op args...)");
+    Value* op_val = job.cons_val.car;
+    if (!is_symbol(op_val)) return raise_error(interp, "offload: op must be a symbol");
+    char[] op_name = interp.symbols.get_name(op_val.sym_val);
+    Value* arg_list = job.cons_val.cdr;
+
+    work.fiber_id = NO_FIBER;
+    work.task_id = NO_TASK;
+    work.op = OFFLOAD_SLEEP_MS;
+    work.int_arg = 0;
+    work.blob = null;
+
+    if (scheduler_str_eq(op_name, "sleep-ms")) {
+        if (!is_cons(arg_list) || !is_int(arg_list.cons_val.car)) {
+            return raise_error(interp, "offload sleep-ms: expected integer milliseconds");
+        }
+        work.op = OFFLOAD_SLEEP_MS;
+        work.int_arg = arg_list.cons_val.car.int_val;
+        return null;
+    }
+
+    if (scheduler_str_eq(op_name, "gzip") || scheduler_str_eq(op_name, "deflate")) {
+        if (!is_cons(arg_list) || !is_string(arg_list.cons_val.car)) {
+            return raise_error(interp, "offload compress: expected string payload");
+        }
+        Value* src = arg_list.cons_val.car;
+        work.op = scheduler_str_eq(op_name, "gzip") ? OFFLOAD_GZIP : OFFLOAD_DEFLATE;
+        work.blob = shared_blob_new_copy(src.str_chars[:src.str_len]);
+        if (work.blob == null) return raise_error(interp, "offload: out of memory");
+        return null;
+    }
+
+    return raise_error(interp, "offload: unsupported op");
+}
+
+fn usz scheduler_alloc_thread_task() {
+    if (!g_scheduler.thread_task_mu_ready) return NO_TASK;
+    g_scheduler.thread_task_mu.lock();
+    defer g_scheduler.thread_task_mu.unlock();
+
+    for (usz i = 0; i < MAX_THREAD_TASKS; i++) {
+        if (g_scheduler.thread_tasks[i].active) continue;
+        g_scheduler.thread_tasks[i] = {};
+        g_scheduler.thread_tasks[i].active = true;
+        return i;
+    }
+    return NO_TASK;
+}
+
+fn void scheduler_complete_thread_task(usz task_id, OffloadCompletion* completion) {
+    if (completion == null) return;
+    if (task_id >= MAX_THREAD_TASKS || !g_scheduler.thread_task_mu_ready) {
+        scheduler_free_offload_completion(completion);
+        return;
+    }
+
+    g_scheduler.thread_task_mu.lock();
+    if (!g_scheduler.thread_tasks[task_id].active || g_scheduler.thread_tasks[task_id].completed) {
+        g_scheduler.thread_task_mu.unlock();
+        scheduler_free_offload_completion(completion);
+        return;
+    }
+    g_scheduler.thread_tasks[task_id].completion = completion;
+    g_scheduler.thread_tasks[task_id].completed = true;
+    g_scheduler.thread_task_mu.unlock();
+}
+
+fn OffloadCompletion* scheduler_take_thread_task_completion(usz task_id) {
+    if (task_id >= MAX_THREAD_TASKS || !g_scheduler.thread_task_mu_ready) return null;
+
+    g_scheduler.thread_task_mu.lock();
+    defer g_scheduler.thread_task_mu.unlock();
+    if (!g_scheduler.thread_tasks[task_id].active || !g_scheduler.thread_tasks[task_id].completed) {
+        return null;
+    }
+
+    OffloadCompletion* completion = g_scheduler.thread_tasks[task_id].completion;
+    g_scheduler.thread_tasks[task_id] = {};
+    return completion;
+}
+
+fn void scheduler_drop_thread_task(usz task_id) {
+    if (task_id >= MAX_THREAD_TASKS || !g_scheduler.thread_task_mu_ready) return;
+    g_scheduler.thread_task_mu.lock();
+    OffloadCompletion* completion = null;
+    if (g_scheduler.thread_tasks[task_id].active) {
+        if (g_scheduler.thread_tasks[task_id].completed) {
+            completion = g_scheduler.thread_tasks[task_id].completion;
+        }
+        g_scheduler.thread_tasks[task_id] = {};
+    }
+    g_scheduler.thread_task_mu.unlock();
+    if (completion != null) scheduler_free_offload_completion(completion);
 }
 
 fn bool scheduler_offload_compress(bool gzip_mode, SharedBlob* input, OffloadCompletion* completion) {
@@ -313,6 +421,11 @@ fn int scheduler_offload_worker_main(void* arg) {
             continue;
         }
 
+        if (work.task_id != NO_TASK) {
+            scheduler_complete_thread_task(work.task_id, completion);
+            continue;
+        }
+
         while (!wakeup_enqueue(WAKEUP_OFFLOAD_READY, work.fiber_id, 0, completion)) {
             c_usleep(1000);
         }
@@ -364,6 +477,11 @@ fn void scheduler_init() {
     g_scheduler.fiber_count = 0;
     g_scheduler.current_fiber_id = NO_FIBER;
     g_scheduler.running = false;
+    if (catch err = g_scheduler.thread_task_mu.init()) {
+        g_scheduler.thread_task_mu_ready = false;
+    } else {
+        g_scheduler.thread_task_mu_ready = true;
+    }
     scheduler_reset_wakeup_queue();
     scheduler_init_offload_queue();
 
@@ -936,33 +1054,9 @@ fn Value* prim_offload(Value*[] args, Env* env, Interp* interp) {
     scheduler_init();
 
     if (args.len < 1) return raise_error(interp, "offload: expected job list");
-    Value* job = args[0];
-    if (!is_cons(job)) return raise_error(interp, "offload: expected (op args...)");
-
-    Value* op_val = job.cons_val.car;
-    if (!is_symbol(op_val)) return raise_error(interp, "offload: op must be a symbol");
-    char[] op_name = interp.symbols.get_name(op_val.sym_val);
-
-    Value* arg_list = job.cons_val.cdr;
     OffloadWork work = {};
-
-    if (scheduler_str_eq(op_name, "sleep-ms")) {
-        if (!is_cons(arg_list) || !is_int(arg_list.cons_val.car)) {
-            return raise_error(interp, "offload sleep-ms: expected integer milliseconds");
-        }
-        work.op = OFFLOAD_SLEEP_MS;
-        work.int_arg = arg_list.cons_val.car.int_val;
-    } else if (scheduler_str_eq(op_name, "gzip") || scheduler_str_eq(op_name, "deflate")) {
-        if (!is_cons(arg_list) || !is_string(arg_list.cons_val.car)) {
-            return raise_error(interp, "offload compress: expected string payload");
-        }
-        Value* src = arg_list.cons_val.car;
-        work.op = scheduler_str_eq(op_name, "gzip") ? OFFLOAD_GZIP : OFFLOAD_DEFLATE;
-        work.blob = shared_blob_new_copy(src.str_chars[:src.str_len]);
-        if (work.blob == null) return raise_error(interp, "offload: out of memory");
-    } else {
-        return raise_error(interp, "offload: unsupported op");
-    }
+    Value* parse_err = scheduler_build_offload_work(args[0], &work, interp);
+    if (parse_err != null) return parse_err;
 
     if (!scheduler_is_running_fiber_context()) {
         OffloadCompletion* completion = scheduler_execute_offload(work);
@@ -980,6 +1074,7 @@ fn Value* prim_offload(Value*[] args, Env* env, Interp* interp) {
     }
 
     work.fiber_id = fiber_id;
+    work.task_id = NO_TASK;
     if (!scheduler_enqueue_offload(work)) {
         shared_blob_release(work.blob);
         return raise_error(interp, "offload: queue is full");
@@ -996,6 +1091,79 @@ fn Value* prim_offload(Value*[] args, Env* env, Interp* interp) {
     if (y != null && y.tag == ERROR) return y;
 
     return scheduler_consume_pending_offload(fiber_id, interp);
+}
+
+// ============================================================
+// (__raw-thread-spawn (op arg...)) -> task-id
+// (__raw-thread-join task-id) -> value
+//
+// Minimal threaded task API over sendable offload jobs.
+// ============================================================
+
+fn Value* prim_thread_spawn(Value*[] args, Env* env, Interp* interp) {
+    (void)env;
+    scheduler_init();
+    if (!g_scheduler.thread_task_mu_ready) return raise_error(interp, "thread-spawn: task mutex unavailable");
+    if (args.len < 1) return raise_error(interp, "thread-spawn: expected job list");
+
+    OffloadWork work = {};
+    Value* parse_err = scheduler_build_offload_work(args[0], &work, interp);
+    if (parse_err != null) return parse_err;
+
+    usz task_id = scheduler_alloc_thread_task();
+    if (task_id == NO_TASK) {
+        shared_blob_release(work.blob);
+        return raise_error(interp, "thread-spawn: task table full");
+    }
+
+    work.fiber_id = NO_FIBER;
+    work.task_id = task_id;
+    if (!scheduler_enqueue_offload(work)) {
+        shared_blob_release(work.blob);
+        scheduler_drop_thread_task(task_id);
+        return raise_error(interp, "thread-spawn: offload queue is full");
+    }
+
+    return make_int(interp, (long)task_id);
+}
+
+fn Value* prim_thread_join(Value*[] args, Env* env, Interp* interp) {
+    (void)env;
+    scheduler_init();
+    if (!g_scheduler.thread_task_mu_ready) return raise_error(interp, "thread-join: task mutex unavailable");
+    if (args.len < 1 || !is_int(args[0])) {
+        return raise_error(interp, "thread-join: expected task-id integer");
+    }
+    if (scheduler_is_running_fiber_context()) {
+        return raise_error(interp, "thread-join: not allowed inside a running fiber");
+    }
+
+    long raw_id = args[0].int_val;
+    if (raw_id < 0) return raise_error(interp, "thread-join: invalid task id");
+    usz task_id = (usz)raw_id;
+    if (task_id >= MAX_THREAD_TASKS) return raise_error(interp, "thread-join: invalid task id");
+
+    usz spins = 0;
+    while (true) {
+        OffloadCompletion* completion = scheduler_take_thread_task_completion(task_id);
+        if (completion != null) {
+            Value* out = scheduler_value_from_offload_completion(completion, interp);
+            scheduler_free_offload_completion(completion);
+            return out;
+        }
+
+        if (g_scheduler.thread_task_mu_ready) {
+            bool exists = false;
+            g_scheduler.thread_task_mu.lock();
+            exists = g_scheduler.thread_tasks[task_id].active;
+            g_scheduler.thread_task_mu.unlock();
+            if (!exists) return raise_error(interp, "thread-join: task already joined or invalid");
+        }
+
+        c_usleep(1000);
+        spins++;
+        if (spins > 60000000) return raise_error(interp, "thread-join: timeout");
+    }
 }
 
 // ============================================================

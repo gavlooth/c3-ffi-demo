@@ -1565,6 +1565,60 @@ fn void run_scheduler_tests(Interp* interp, int* pass, int* fail) {
             (*fail)++;
         }
     }
+
+    // Thread task API: spawn + join returns offloaded result.
+    {
+        EvalResult r = run(
+            "(begin "
+            "  (define t (thread-spawn 'gzip \"thread-task\")) "
+            "  (gunzip (thread-join t)))",
+            interp);
+        if (!r.error.has_error && is_string(r.value) &&
+            r.value.str_len == 11 &&
+            str_starts_with(r.value.str_chars[:r.value.str_len], "thread-task")) {
+            io::printn("[PASS] thread-spawn/thread-join gzip");
+            (*pass)++;
+        } else {
+            io::printn("[FAIL] thread-spawn/thread-join gzip");
+            (*fail)++;
+        }
+    }
+
+    // Thread task API: concurrent tasks complete and join deterministically.
+    {
+        EvalResult r = run(
+            "(begin "
+            "  (define t1 (thread-spawn 'sleep-ms 5)) "
+            "  (define t2 (thread-spawn 'sleep-ms 5)) "
+            "  (thread-join t1) "
+            "  (thread-join t2) "
+            "  1)",
+            interp);
+        if (!r.error.has_error && is_int(r.value) && r.value.int_val == 1) {
+            io::printn("[PASS] thread-spawn concurrent join");
+            (*pass)++;
+        } else {
+            io::printn("[FAIL] thread-spawn concurrent join");
+            (*fail)++;
+        }
+    }
+
+    // Joining the same task twice should fail (task handle consumed).
+    {
+        EvalResult r = run(
+            "(begin "
+            "  (define t (thread-spawn 'sleep-ms 1)) "
+            "  (thread-join t) "
+            "  (thread-join t))",
+            interp);
+        if (r.error.has_error || (r.value != null && r.value.tag == ERROR)) {
+            io::printn("[PASS] thread-join double join rejected");
+            (*pass)++;
+        } else {
+            io::printn("[FAIL] thread-join double join rejected");
+            (*fail)++;
+        }
+    }
 }
 
 fn void run_deduce_tests(Interp* interp, int* pass, int* fail) {
