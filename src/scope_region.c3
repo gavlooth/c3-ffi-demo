@@ -508,6 +508,62 @@ fn bool is_in_scope(void* ptr, ScopeRegion* scope) {
 // Scope adoption (merge child memory into parent)
 // =============================================================================
 
+fn void scope_splice_escapes(ScopeRegion* parent, ScopeRegion* child) {
+    if (child == null || parent == null) return;
+
+    // Move child's ESCAPE dtors to parent's ESCAPE dtor list.
+    if (child.escape_dtors != null) {
+        ScopeDtor* last = child.escape_dtors;
+        while (last.next != null) last = last.next;
+        last.next = parent.escape_dtors;
+        parent.escape_dtors = child.escape_dtors;
+        child.escape_dtors = null;
+    }
+
+    // Move child's ESCAPE chunks to parent's ESCAPE chunk list.
+    if (child.escape_chunks != null) {
+        ScopeChunk* last = child.escape_chunks;
+        while (last.next != null) last = last.next;
+        last.next = parent.escape_chunks;
+        parent.escape_chunks = child.escape_chunks;
+        child.escape_chunks = null;
+    }
+
+    // Destroy TEMP lane immediately.
+    scope_run_dtors(child);
+    child.dtors = null;
+
+    ScopeChunk* c = child.chunks;
+    while (c != null) {
+        ScopeChunk* next = c.next;
+        mem::free(c);
+        c = next;
+    }
+    child.chunks = null;
+    child.bump = null;
+    child.limit = null;
+    child.escape_bump = null;
+    child.escape_limit = null;
+
+    // Detach and release child scope ownership.
+    if (child.parent != null) {
+        scope_release(child.parent);
+        child.parent = null;
+    }
+
+    // Recycle child struct.
+    child.refcount = 0;
+    child.generation++;
+    child.escape_generation++;
+    if (g_scope_freelist_count < SCOPE_FREELIST_MAX) {
+        child.pool_next = g_scope_freelist;
+        g_scope_freelist = child;
+        g_scope_freelist_count++;
+    } else {
+        mem::free(child);
+    }
+}
+
 fn void scope_adopt(ScopeRegion* parent, ScopeRegion* child) {
     if (child == null || parent == null) return;
 
@@ -880,6 +936,40 @@ fn void run_scope_region_tests() {
         if (parent.alloc_bytes == parent_bytes_before + child_bytes) { passed++; } else { io::printn("FAIL: adopt: bytes"); failed++; }
 
         scope_release(parent);
+    }
+
+    // Test 16: scope_splice_escapes
+    {
+        ScopeRegion* parent = scope_create(null);
+        ScopeRegion* child = scope_create(parent);
+
+        void* escape_ptr = child.alloc_escape(24);
+        if (escape_ptr != null) { passed++; } else { io::printn("FAIL: splice escape alloc"); failed++; }
+
+        int* temp_counter = (int*)mem::malloc(int.sizeof);
+        int* escape_counter = (int*)mem::malloc(int.sizeof);
+        *temp_counter = 0;
+        *escape_counter = 0;
+
+        scope_register_dtor(child, (void*)temp_counter, fn void(void* ptr) {
+            int* c = (int*)ptr;
+            *c = *c + 1;
+        });
+        scope_register_dtor_escape(child, (void*)escape_counter, fn void(void* ptr) {
+            int* c = (int*)ptr;
+            *c = *c + 1;
+        });
+
+        scope_splice_escapes(parent, child);
+        if (*temp_counter == 1) { passed++; } else { io::printfn("FAIL: splice temp dtor=%d", *temp_counter); failed++; }
+        if (*escape_counter == 0) { passed++; } else { io::printfn("FAIL: splice escape dtor early=%d", *escape_counter); failed++; }
+        if (is_in_scope(escape_ptr, parent)) { passed++; } else { io::printn("FAIL: splice escape ptr in parent"); failed++; }
+
+        scope_release(parent);
+        if (*escape_counter == 1) { passed++; } else { io::printfn("FAIL: splice escape dtor late=%d", *escape_counter); failed++; }
+
+        mem::free(temp_counter);
+        mem::free(escape_counter);
     }
 
     io::printfn("%d passed, %d failed", (int)passed, (int)failed);
