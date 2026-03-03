@@ -2086,9 +2086,20 @@ fn Value* get_list_nth(Value* v, usz n) {
 }
 
 /**
- * Get the rest of a list starting at index n.
+ * Get the rest of a sequence starting at index n.
+ * Works for both CONS lists and ARRAY values.
  */
 fn Value* get_list_rest(Value* v, usz n, Interp* interp) {
+    if (v != null && v.tag == ARRAY && v.array_val != null) {
+        // ARRAY: build cons list from remaining elements
+        Value* result = make_nil(interp);
+        usz alen = v.array_val.length;
+        for (usz i = alen; i > n; i--) {
+            result = make_cons(interp, v.array_val.items[i - 1], result);
+        }
+        return result;
+    }
+    // CONS list: walk to position n
     for (usz i = 0; i < n; i++) {
         if (!is_cons(v)) return make_nil(interp);
         v = cdr(v);
@@ -2158,8 +2169,27 @@ fn MatchResult match_pattern(Pattern* pat, Value* val, Interp* interp) {
             return car_result;
 
         case PAT_SEQ:
-            // Sequence pattern matches lists
+            // Sequence pattern matches lists and arrays
             return match_seq_pattern(pat, val, interp);
+
+        case PAT_DICT: {
+            // Dict pattern {name age} — extract 'name and 'age keys from hashmap
+            if (val == null || val.tag != HASHMAP || val.hashmap_val == null) {
+                return match_fail();
+            }
+            MatchResult dict_result = match_ok();
+            for (usz di = 0; di < pat.dict_key_count; di++) {
+                // Look up 'key in the dict
+                Value* lookup_key = interp.alloc_value();
+                lookup_key.tag = SYMBOL;
+                lookup_key.sym_val = pat.dict_keys[di];
+                Value* found = hashmap_get(val.hashmap_val, lookup_key);
+                // Bind to the key name (nil if not found)
+                if (found == null) found = make_nil(interp);
+                dict_result.add_binding(pat.dict_keys[di], found);
+            }
+            return dict_result;
+        }
 
         case PAT_CONSTRUCTOR: {
             // Constructor pattern: (ConstructorName sub-patterns...)
@@ -2225,14 +2255,25 @@ fn MatchResult match_seq_pattern(Pattern* pat, Value* val, Interp* interp) {
     usz elem_count = pat.elem_count;
     RestPosition rest_pos = pat.rest_pos;
 
-    // Collect list elements into flat array in one pass (O(n) instead of O(n²))
+    // Collect elements into flat array — supports both CONS lists and ARRAY values
     Value*[64] elems;
     usz list_len = 0;
-    Value* cursor = val;
-    while (is_cons(cursor) && list_len < 64) {
-        elems[list_len] = car(cursor);
-        list_len++;
-        cursor = cdr(cursor);
+    if (val != null && val.tag == ARRAY && val.array_val != null) {
+        // ARRAY: read elements directly
+        usz alen = val.array_val.length;
+        if (alen > 64) alen = 64;
+        for (usz i = 0; i < alen; i++) {
+            elems[i] = val.array_val.items[i];
+        }
+        list_len = alen;
+    } else {
+        // CONS list: walk and collect
+        Value* cursor = val;
+        while (is_cons(cursor) && list_len < 64) {
+            elems[list_len] = car(cursor);
+            list_len++;
+            cursor = cdr(cursor);
+        }
     }
 
     switch (rest_pos) {
@@ -2431,7 +2472,7 @@ fn void register_primitives(Interp* interp) {
     }
 
     // --- Regular primitives ---
-    const REGULAR_PRIM_COUNT = 137;
+    const REGULAR_PRIM_COUNT = 138;
     PrimReg[REGULAR_PRIM_COUNT] regular_prims = {
         // List operations
         { "cons", &prim_cons, 2 }, { "car", &prim_car, 1 }, { "cdr", &prim_cdr, 1 },
@@ -2540,9 +2581,11 @@ fn void register_primitives(Interp* interp) {
         // Schema validation
         { "validate", &prim_validate, 2 },
         { "explain", &prim_explain, 2 },
-        // Deduce
-        { "deduce-open", &prim_deduce_open, 1 },
+        // Deduce — unified dispatch
+        { "deduce", &prim_deduce, -1 },
         { "__define-relation", &prim_define_relation, 1 },
+        // Legacy deduce primitives (kept for backward compat, will remove)
+        { "deduce-open", &prim_deduce_open, 1 },
         { "fact!", &prim_assert_fact, -1 },
         { "retract!", &prim_retract_fact, -1 },
         { "deduce-scan", &prim_deduce_scan, 1 },
@@ -2797,15 +2840,48 @@ fn EvalResult run(char[] source, Interp* interp) {
 fn void register_stdlib(Interp* interp) {
     // Standard library loaded from embedded stdlib/stdlib.lisp at compile time.
     // Edit that file (with syntax highlighting) instead of inline strings here.
-    char[] stdlib_src = $embed("../../stdlib/stdlib.lisp");
+    // Supports multi-line forms — tracks paren/bracket/brace depth.
+    char[] src = $embed("../../stdlib/stdlib.lisp");
     usz pos = 0;
-    while (pos < stdlib_src.len) {
+    while (pos < src.len) {
+        // Skip whitespace and comments
+        while (pos < src.len) {
+            char c = src[pos];
+            if (c == ' ' || c == '\t' || c == '\n' || c == '\r') { pos++; continue; }
+            if (c == ';') { while (pos < src.len && src[pos] != '\n') pos++; continue; }
+            break;
+        }
+        if (pos >= src.len) break;
+
+        // Read one complete s-expression by tracking depth
         usz start = pos;
-        while (pos < stdlib_src.len && stdlib_src[pos] != '\n') pos++;
-        usz line_len = pos - start;
-        if (pos < stdlib_src.len) pos++; // skip newline
-        if (line_len == 0 || stdlib_src[start] == ';') continue;
-        run(stdlib_src[start:line_len], interp);
+        int depth = 0;
+        bool in_string = false;
+        bool started = false;
+        while (pos < src.len) {
+            char c = src[pos];
+            if (in_string) {
+                if (c == '\\' && pos + 1 < src.len) { pos += 2; continue; }
+                if (c == '"') in_string = false;
+                pos++;
+                continue;
+            }
+            if (c == '"') { in_string = true; pos++; continue; }
+            if (c == '(' || c == '[' || c == '{') { depth++; started = true; pos++; continue; }
+            if (c == ')' || c == ']' || c == '}') { depth--; pos++; if (started && depth == 0) break; continue; }
+            if (c == ';') { while (pos < src.len && src[pos] != '\n') pos++; continue; }
+            pos++;
+            // Atom without parens (bare symbol/number) — single token
+            if (!started && depth == 0) {
+                while (pos < src.len && src[pos] != ' ' && src[pos] != '\t' &&
+                       src[pos] != '\n' && src[pos] != '\r' && src[pos] != ')' &&
+                       src[pos] != ']' && src[pos] != '}' && src[pos] != ';') pos++;
+                break;
+            }
+        }
+        if (pos > start) {
+            run(src[start..pos - 1], interp);
+        }
     }
 }
 

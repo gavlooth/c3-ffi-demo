@@ -32,6 +32,15 @@
 (define [macro] when ([test .. body] (if test (begin .. body) nil)))
 (define [macro] unless ([test .. body] (if test nil (begin .. body))))
 (define [macro] cond ([] nil) ([test body .. rest] (if test body (cond .. rest))))
+(define (default v fallback) (if (null? v) fallback v))
+
+;; with-defaults: wrap body with nil-checked defaults for dict destructured bindings
+;; Usage: (with-defaults name1 val1 name2 val2 ... body)
+;; Last argument is the body expression. Preceding pairs are (name default-value).
+;; Expands to nested lets: (let (name1 (default name1 val1)) (let (name2 ...) body))
+(define [macro] with-defaults
+  ([body] body)
+  ([name val .. rest] (let (name (default name val)) (with-defaults .. rest))))
 (define with-trampoline (lambda (thunk) (handle (thunk nil) (bounce next-thunk (resolve (with-trampoline next-thunk))))))
 
 ;; =========================================================================

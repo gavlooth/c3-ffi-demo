@@ -181,13 +181,17 @@ Name: Deduce (the engine deduces new facts from rules)
 
 #### Deduce Grammar
 
+**Unified API — single `deduce` primitive with quoted symbol dispatch:**
+
+All Deduce operations go through `(deduce 'command args...)`. The first argument is always a quoted symbol selecting the operation.
+
 **Database — LMDB-backed, always in-memory (mmap), optionally persistent:**
 ```lisp
 ;; Persistent — file on disk, survives restart
-(define db (deduce-open "app.db"))
+(define db (deduce 'open "app.db"))
 
 ;; Ephemeral — anonymous LMDB, same API, no durable file
-(define tmp (deduce-open 'memory))
+(define tmp (deduce 'open 'memory))
 ```
 
 LMDB is mmap-based: reads hit OS page cache (memory speed), writes flush to disk lazily.
@@ -232,10 +236,10 @@ Columns reuse `define [type]` field syntax. Optional role prefix (`key`, `index`
 **Facts — assert tuples into relations:**
 ```lisp
 ;; person is a first-class Relation value (from define [relation])
-(assert! person "Alice" 30 "alice@b.com")
-(assert! person "Bob" 25 "bob@b.com")
-(assert! edge "A" "B")
-(assert! edge "B" "C")
+(deduce 'fact! person "Alice" 30 "alice@b.com")
+(deduce 'fact! person "Bob" 25 "bob@b.com")
+(deduce 'fact! edge "A" "B")
+(deduce 'fact! edge "B" "C")
 ```
 
 **Rules — derived relations (name, output vars, body clauses):**
@@ -314,8 +318,8 @@ Columns reuse `define [type]` field syntax. Optional role prefix (`key`, `index`
 
 **Retract — with wildcard support:**
 ```lisp
-(retract! person "Alice" 30 "alice@b.com")  ;; exact match
-(retract! person "Alice" _ _)               ;; wildcard: all Alice records
+(deduce 'retract! person "Alice" 30 "alice@b.com")  ;; exact match
+(deduce 'retract! person "Alice" _ _)               ;; wildcard: all Alice records
 ```
 
 #### Graph Encoding — Datalog's Sweet Spot
@@ -415,11 +419,11 @@ avoiding redundant re-derivation.
 | Aggregation engine | ~100 | `count`, `sum`, `avg`, `min`, `max` + group-by |
 | Temporal (history/`:at`/`:time`) | ~80 | Version tracking with timestamps, temporal query clauses |
 | Parser (`[relation]`, `[rule]`, `query`, `?var`) | ~120 | Bracket attrs + relation attribute clauses + `?` reader char |
-| Primitives (`deduce-open`, `assert!`, `retract!`) | ~100 | Database lifecycle, relation as first-class value |
+| Unified `deduce` dispatcher (`'open`, `'fact!`, `'retract!`, `'scan`, `'query`, `'count`, `'match`) | ~100 | Single primitive with quoted symbol dispatch |
 | **Total** | **~1230** | |
 
 **Storage model:** LMDB is always the backend (mmap = in-memory speed, disk persistence
-as side effect). `(deduce-open 'memory)` for ephemeral use (anonymous mmap, no file).
+as side effect). `(deduce 'open 'memory)` for ephemeral use (anonymous mmap, no file).
 No separate in-memory engine — LMDB already IS in-memory.
 
 **Parser changes needed:**

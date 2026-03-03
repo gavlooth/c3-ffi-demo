@@ -156,6 +156,13 @@ null?
 
 ; Typed parameters (for dispatch)
 (lambda ((^Int x) (^String y)) body)
+
+; Dict destructuring parameter — caller passes a dict
+(lambda ({name age}) (println name age))
+; called as: (f {'name "Alice" 'age 30})
+
+; Mixed positional + dict params
+(lambda ({host port} verbose) body)
 ```
 
 ### 3.2 `define` -- Global Definition
@@ -175,7 +182,16 @@ null?
 (define (describe (^Int n)) "integer")
 (define (describe (^String s)) "string")
 (define (describe x) "other")   ; fallback
+
+; Dict destructuring parameter
+(define (connect {host port timeout}) (tcp-connect host port))
+; called as: (connect {'host "localhost" 'port 8080 'timeout 5000})
+
+; Mixed dict + positional params
+(define (request {method url} body) ...)
 ```
+
+Note: `(define [...] ...)` with brackets is reserved for attribute syntax (`[type]`, `[ffi lib]`, `[relation db]`, etc.). Array destructuring is only available in `let` and `match`.
 
 ### 3.3 `let` -- Local Binding
 
@@ -185,6 +201,18 @@ null?
 
 ; Multi-binding (desugars to nested lets)
 (let (x 1 y 2) (+ x y))
+
+; Array destructuring
+(let ([x y] [10 20]) (+ x y))         ; => 30
+(let ([head .. tail] '(1 2 3)) head)   ; => 1
+(let ([a b ..] '(1 2 3 4 5)) (+ a b)) ; => 3
+
+; Dict destructuring
+(let ({name age} {'name "Alice" 'age 30}) name) ; => "Alice"
+(let ({x y} {'x 10 'y 20}) (+ x y))             ; => 30
+
+; Mixed bindings (plain + destructuring)
+(let ([a b] [3 4] z 5) (+ a (+ b z)))  ; => 12
 
 ; Recursive let
 (let ^rec (fact (lambda (n) (if (= n 0) 1 (* n (fact (- n 1))))))

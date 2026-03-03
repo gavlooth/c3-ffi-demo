@@ -687,12 +687,31 @@ fn Expr* Parser.parse_lambda(Parser* self) {
 
     // Collect all fixed parameters until ')' or '..'
     // Also collect type annotations: (lambda ((^Int x) (^String y)) body)
+    // Also supports destructuring: (lambda ({name age} [a b] x) body)
     List{SymbolId} params;
     List{TypeAnnotation} param_anns;
     bool has_any_typed = false;
+    Pattern*[8] lam_destr_patterns;
+    SymbolId[8] lam_destr_param_names;
+    usz lam_destr_count = 0;
 
-    while (self.lexer.current.type == T_SYMBOL || self.lexer.current.type == T_LPAREN) {
-        if (self.lexer.current.type == T_LPAREN) {
+    while (self.lexer.current.type == T_SYMBOL || self.lexer.current.type == T_LPAREN || self.lexer.current.type == T_LBRACE || self.lexer.current.type == T_LBRACKET) {
+        if (self.lexer.current.type == T_LBRACE || self.lexer.current.type == T_LBRACKET) {
+            // Destructuring param: {name age} (dict) or [a b] (array)
+            Pattern* dp = self.parse_pattern();
+            char[8] gensym_buf;
+            usz glen = io::bprintf(&gensym_buf, "__d%d", (int)lam_destr_count)!!.len;
+            SymbolId gensym = self.interp.symbols.intern(gensym_buf[:glen]);
+            params.push(gensym);
+            TypeAnnotation empty_ann;
+            empty_ann.has_annotation = false;
+            param_anns.push(empty_ann);
+            if (lam_destr_count < 8) {
+                lam_destr_patterns[lam_destr_count] = dp;
+                lam_destr_param_names[lam_destr_count] = gensym;
+                lam_destr_count++;
+            }
+        } else if (self.lexer.current.type == T_LPAREN) {
             // Typed param: (^Type name)
             self.lexer.advance();  // consume (
             TypeAnnotation ann = self.parse_type_annotation();
@@ -741,6 +760,23 @@ fn Expr* Parser.parse_lambda(Parser* self) {
         Expr* body = self.parse_implicit_begin();
         self.expect(T_RPAREN, ")");
 
+        // Wrap body for dict destructuring params
+        for (usz di = lam_destr_count; di > 0; di--) {
+            Expr* let_wrap = self.interp.alloc_expr();
+            let_wrap.tag = E_LET;
+            let_wrap.loc_line = e.loc_line;
+            let_wrap.loc_column = e.loc_column;
+            let_wrap.let_expr.name = (SymbolId)0;
+            let_wrap.let_expr.pattern = lam_destr_patterns[di - 1];
+            Expr* var_ref = self.interp.alloc_expr();
+            var_ref.tag = E_VAR;
+            var_ref.var_expr.name = lam_destr_param_names[di - 1];
+            let_wrap.let_expr.init = var_ref;
+            let_wrap.let_expr.body = body;
+            let_wrap.let_expr.is_recursive = false;
+            body = let_wrap;
+        }
+
         e.tag = E_LAMBDA;
         e.lambda = mem::malloc(ExprLambda.sizeof);
         e.lambda.param = param_count > 0 ? params[0] : (SymbolId)0xFFFFFFFF;
@@ -768,6 +804,23 @@ fn Expr* Parser.parse_lambda(Parser* self) {
 
     if (self.has_error) { params.free(); param_anns.free(); return null; }
     if (param_count < 1) { params.free(); param_anns.free(); self.set_error("expected at least one parameter"); return null; }
+
+    // Wrap body for destructuring params
+    for (usz di = lam_destr_count; di > 0; di--) {
+        Expr* let_wrap = self.interp.alloc_expr();
+        let_wrap.tag = E_LET;
+        let_wrap.loc_line = e.loc_line;
+        let_wrap.loc_column = e.loc_column;
+        let_wrap.let_expr.name = (SymbolId)0;
+        let_wrap.let_expr.pattern = lam_destr_patterns[di - 1];
+        Expr* var_ref = self.interp.alloc_expr();
+        var_ref.tag = E_VAR;
+        var_ref.var_expr.name = lam_destr_param_names[di - 1];
+        let_wrap.let_expr.init = var_ref;
+        let_wrap.let_expr.body = body;
+        let_wrap.let_expr.is_recursive = false;
+        body = let_wrap;
+    }
 
     // Build E_LAMBDA (same path for all non-variadic cases)
     e.tag = E_LAMBDA;
@@ -840,22 +893,33 @@ fn Expr* Parser.parse_let(Parser* self) {
 
     self.expect(T_LPAREN, "(");  // consume '(' of bindings list
 
-    // Collect flat-pair bindings: (x 1 y 2 z 3)
+    // Collect flat-pair bindings: (x 1 y 2 z 3) or ([a b] [1 2] x 3)
+    // Each binding is either a symbol name or a destructuring pattern.
     List{SymbolId} names;
+    List{Pattern*} patterns;
     List{Expr*} inits;
 
-    while (self.lexer.current.type == T_SYMBOL && !self.has_error) {
-        names.push(self.get_current_symbol());
-        self.lexer.advance();
-        inits.push(self.parse_expr());
+    while ((self.lexer.current.type == T_SYMBOL || self.lexer.current.type == T_LBRACKET || self.lexer.current.type == T_LBRACE) && !self.has_error) {
+        if (self.lexer.current.type == T_LBRACKET || self.lexer.current.type == T_LBRACE) {
+            // Destructuring pattern: [x y] (array) or {name age} (dict)
+            names.push((SymbolId)0);
+            patterns.push(self.parse_pattern());
+            inits.push(self.parse_expr());
+        } else {
+            // Plain symbol binding
+            names.push(self.get_current_symbol());
+            patterns.push(null);
+            self.lexer.advance();
+            inits.push(self.parse_expr());
+        }
     }
-    if (self.has_error) { names.free(); inits.free(); return null; }
+    if (self.has_error) { names.free(); patterns.free(); inits.free(); return null; }
 
     self.expect(T_RPAREN, ")");  // consume ')' of bindings list
-    if (self.has_error) { names.free(); inits.free(); return null; }
+    if (self.has_error) { names.free(); patterns.free(); inits.free(); return null; }
 
     usz binding_count = names.len();
-    if (binding_count < 1) { names.free(); inits.free(); self.set_error("expected at least one binding in let"); return null; }
+    if (binding_count < 1) { names.free(); patterns.free(); inits.free(); self.set_error("expected at least one binding in let"); return null; }
 
     Expr* body = self.parse_implicit_begin();
 
@@ -868,12 +932,12 @@ fn Expr* Parser.parse_let(Parser* self) {
         e.let_expr.init = inits[0];
         e.let_expr.body = body;
         e.let_expr.is_recursive = is_recursive;
-        names.free(); inits.free();
+        e.let_expr.pattern = patterns[0];
+        names.free(); patterns.free(); inits.free();
         return e;
     }
 
-    // Multi-binding: desugar (let ((x 1) (y 2) (z 3)) body) to nested lets
-    // Build from inside out: innermost let has last binding and body
+    // Multi-binding: desugar to nested lets (inside out)
     Expr* inner = body;
     for (usz i = binding_count; i > 1; i--) {
         Expr* wrapper = self.interp.alloc_expr();
@@ -883,7 +947,8 @@ fn Expr* Parser.parse_let(Parser* self) {
         wrapper.let_expr.name = names[i - 1];
         wrapper.let_expr.init = inits[i - 1];
         wrapper.let_expr.body = inner;
-        wrapper.let_expr.is_recursive = false;  // only first binding can be ^rec
+        wrapper.let_expr.is_recursive = false;
+        wrapper.let_expr.pattern = patterns[i - 1];
         inner = wrapper;
     }
     // Outermost let with first binding
@@ -892,6 +957,7 @@ fn Expr* Parser.parse_let(Parser* self) {
     e.let_expr.init = inits[0];
     e.let_expr.body = inner;
     e.let_expr.is_recursive = is_recursive;
+    e.let_expr.pattern = patterns[0];
     names.free(); inits.free();
     return e;
 }
@@ -1025,13 +1091,33 @@ fn Expr* Parser.parse_define(Parser* self) {
         self.lexer.advance();
 
         // Collect parameter symbols (with optional type annotations) until ')' or '..'
+        // Also supports destructuring params: {name age} (dict) or [a b] (array)
         List{SymbolId} params;
         List{TypeAnnotation} define_param_anns;
         bool define_has_typed = false;
         bool define_has_rest = false;
         SymbolId define_rest_param = 0;
-        while (self.lexer.current.type == T_SYMBOL || self.lexer.current.type == T_LPAREN) {
-            if (self.lexer.current.type == T_LPAREN) {
+        // Destructuring params: pattern + synthetic param name
+        Pattern*[8] destr_patterns;
+        SymbolId[8] destr_param_names;
+        usz destr_count = 0;
+        while (self.lexer.current.type == T_SYMBOL || self.lexer.current.type == T_LPAREN || self.lexer.current.type == T_LBRACE || self.lexer.current.type == T_LBRACKET) {
+            if (self.lexer.current.type == T_LBRACE || self.lexer.current.type == T_LBRACKET) {
+                // Destructuring param: {name age} (dict) or [a b] (array)
+                Pattern* dp = self.parse_pattern();
+                char[8] gensym_buf;
+                usz glen = io::bprintf(&gensym_buf, "__d%d", (int)destr_count)!!.len;
+                SymbolId gensym = self.interp.symbols.intern(gensym_buf[:glen]);
+                params.push(gensym);
+                TypeAnnotation empty_ann;
+                empty_ann.has_annotation = false;
+                define_param_anns.push(empty_ann);
+                if (destr_count < 8) {
+                    destr_patterns[destr_count] = dp;
+                    destr_param_names[destr_count] = gensym;
+                    destr_count++;
+                }
+            } else if (self.lexer.current.type == T_LPAREN) {
                 // Typed param: (^Type name)
                 self.lexer.advance();
                 TypeAnnotation ann = self.parse_type_annotation();
@@ -1073,6 +1159,24 @@ fn Expr* Parser.parse_define(Parser* self) {
 
         // Consume closing ')' of the define form
         self.expect(T_RPAREN, ")");
+
+        // Wrap body in let-destructs for destructuring params (inside out)
+        // (define (f {x y} z) body) → lambda body becomes (let ({x y} __d0) body)
+        for (usz di = destr_count; di > 0; di--) {
+            Expr* let_wrap = self.interp.alloc_expr();
+            let_wrap.tag = E_LET;
+            let_wrap.loc_line = e.loc_line;
+            let_wrap.loc_column = e.loc_column;
+            let_wrap.let_expr.name = (SymbolId)0;
+            let_wrap.let_expr.pattern = destr_patterns[di - 1];
+            Expr* var_ref = self.interp.alloc_expr();
+            var_ref.tag = E_VAR;
+            var_ref.var_expr.name = destr_param_names[di - 1];
+            let_wrap.let_expr.init = var_ref;
+            let_wrap.let_expr.body = body;
+            let_wrap.let_expr.is_recursive = false;
+            body = let_wrap;
+        }
 
         // Build lambda expression
         Expr* lambda_expr = self.interp.alloc_expr();
@@ -1980,6 +2084,29 @@ fn Pattern* Parser.parse_pattern(Parser* self) {
         }
 
         self.expect(T_RBRACKET, "]");
+        return p;
+    }
+
+    // Dict pattern: {name age} - extract 'name and 'age keys from dict
+    if (lex.current.type == T_LBRACE) {
+        lex.advance();  // consume '{'
+
+        Pattern* p = self.interp.alloc_pattern();
+        p.tag = PAT_DICT;
+
+        List{SymbolId} keys;
+        while (lex.current.type == T_SYMBOL && !self.has_error) {
+            keys.push(self.get_current_symbol());
+            lex.advance();
+        }
+        if (self.has_error) { keys.free(); return null; }
+
+        p.dict_key_count = keys.len();
+        p.dict_keys = (SymbolId*)mem::malloc(SymbolId.sizeof * keys.len());
+        for (usz i = 0; i < keys.len(); i++) { p.dict_keys[i] = keys[i]; }
+        keys.free();
+
+        self.expect(T_RBRACE, "}");
         return p;
     }
 

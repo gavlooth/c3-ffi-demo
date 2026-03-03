@@ -462,7 +462,6 @@ fn Value* prim_define_relation(Value*[] args, Env* env, Interp* interp) {
     interp.current_scope = saved;
     v.tag = FFI_HANDLE;
     v.ffi_val = (FfiHandle*)rel;
-    io::printfn("DEDUCE-DBG: returning FFI_HANDLE tag=%d", (int)v.tag);
     return v;
 }
 
@@ -557,4 +556,61 @@ fn Value* prim_deduce_scan(Value*[] args, Env* env, Interp* interp) {
     Relation* rel = (Relation*)rel_val.ffi_val;
 
     return relation_scan_all(rel, interp);
+}
+
+// ============================================================
+// (deduce 'cmd args...) — unified dispatch
+//
+// (deduce 'open 'memory)           → database handle
+// (deduce 'open "/path")           → database handle
+// (deduce 'scan relation)          → list of dicts
+// (deduce 'query relation fn)      → filtered list of dicts
+// (deduce 'count relation)         → int
+// (deduce 'match relation pattern) → list of dicts
+// (deduce 'fact! relation vals...) → nil
+// (deduce 'retract! relation vals...)  → nil
+// ============================================================
+
+fn Value* prim_deduce(Value*[] args, Env* env, Interp* interp) {
+    if (args.len < 1) return raise_error(interp, "deduce: expected (deduce 'command args...)");
+
+    Value* cmd = args[0];
+    if (cmd == null || cmd.tag != SYMBOL) {
+        return raise_error(interp, "deduce: first argument must be a quoted symbol");
+    }
+
+    char[] name = interp.symbols.get_name(cmd.sym_val);
+
+    // Dispatch on command symbol
+    if (name.len == 4 && name[0] == 'o' && name[1] == 'p' && name[2] == 'e' && name[3] == 'n') {
+        // (deduce 'open arg)
+        return prim_deduce_open(args[1..], env, interp);
+    }
+    if (name.len == 4 && name[0] == 's' && name[1] == 'c' && name[2] == 'a' && name[3] == 'n') {
+        // (deduce 'scan relation)
+        return prim_deduce_scan(args[1..], env, interp);
+    }
+    if (name.len == 5 && name[0] == 'q' && name[1] == 'u' && name[2] == 'e' && name[3] == 'r' && name[4] == 'y') {
+        // (deduce 'query relation filter-fn)
+        return prim_deduce_query(args[1..], env, interp);
+    }
+    if (name.len == 5 && name[0] == 'c' && name[1] == 'o' && name[2] == 'u' && name[3] == 'n' && name[4] == 't') {
+        // (deduce 'count relation)
+        return prim_deduce_count(args[1..], env, interp);
+    }
+    if (name.len == 5 && name[0] == 'm' && name[1] == 'a' && name[2] == 't' && name[3] == 'c' && name[4] == 'h') {
+        // (deduce 'match relation pattern)
+        return prim_deduce_match(args[1..], env, interp);
+    }
+    if (name.len == 5 && name[0] == 'f' && name[1] == 'a' && name[2] == 'c' && name[3] == 't' && name[4] == '!') {
+        // (deduce 'fact! relation vals...)
+        return prim_assert_fact(args[1..], env, interp);
+    }
+    if (name.len == 8 && name[0] == 'r' && name[1] == 'e' && name[2] == 't' && name[3] == 'r'
+        && name[4] == 'a' && name[5] == 'c' && name[6] == 't' && name[7] == '!') {
+        // (deduce 'retract! relation vals...)
+        return prim_retract_fact(args[1..], env, interp);
+    }
+
+    return raise_error(interp, "deduce: unknown command (expected 'open 'scan 'query 'count 'match 'fact! 'retract!)");
 }

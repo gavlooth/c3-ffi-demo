@@ -9,14 +9,17 @@
 ### 1.1 `lambda` — Function Definition
 ```lisp
 (lambda (x) body)
-(lambda (x y z) body)     ; multi-param with strict arity
-(lambda (x .. rest) body)  ; variadic with rest parameter
-(lambda () body)            ; zero-arg lambda
+(lambda (x y z) body)       ; multi-param with strict arity
+(lambda (x .. rest) body)    ; variadic with rest parameter
+(lambda () body)              ; zero-arg lambda
+(lambda ({name age}) body)   ; dict destructuring parameter
+(lambda ({x y} z) body)     ; mixed dict + positional params
 ```
 - Multi-param lambdas have strict arity: `(lambda (x y) body)` requires exactly 2 arguments
 - Use `_` placeholder `(+ 1 _)`, `|>` pipe, or `partial` for partial application
 - Variadic lambdas: `(lambda (x .. rest) body)`, rest collects extra args as list
 - Zero-arg lambdas: `(lambda () body)` uses sentinel param, `has_param=false`
+- Dict destructuring params: `{name age}` extracts `'name` and `'age` keys from a dict arg
 - Creates closure capturing lexical environment
 
 ### 1.2 `define` — Global Definition
@@ -30,14 +33,22 @@
 - Binds name in global environment
 - Value is evaluated before binding
 - Shorthand form `(define (f x ...) body)` desugars to `(define f (lambda (x ...) body))`
+- Dict destructuring params: `(define (f {x y} z) body)` — desugars to let-destruct in body
+- `(define [...] ...)` with brackets is reserved for attributes (`[type]`, `[ffi lib]`, etc.)
 
 ### 1.3 `let` — Local Binding
 ```lisp
 (let (name init) body)
-(let (x 1 y 2) (+ x y))  ; multi-binding (desugars to nested lets)
+(let (x 1 y 2) (+ x y))                     ; multi-binding (desugars to nested lets)
+(let ([x y] [10 20]) (+ x y))               ; array destructuring
+(let ([head .. tail] '(1 2 3)) head)         ; head/tail destructuring
+(let ({name age} {'name "Alice" 'age 30}) name) ; dict destructuring
+(let ([a b] [3 4] z 5) (+ a (+ b z)))       ; mixed plain + destructuring
 ```
 - Flat-pair syntax: `(let (x v) body)`, `(let (x 1 y 2) body)`
 - Multi-binding let desugars to nested single-binding lets in the parser
+- Array destructuring: `[x y]`, `[head .. tail]`, `[a b ..]` — works on both lists and arrays
+- Dict destructuring: `{name age}` — extracts `'name` and `'age` keys, binds to local vars
 - Non-recursive by default
 - Example: `(let (x 10) (+ x 1))` => 11
 

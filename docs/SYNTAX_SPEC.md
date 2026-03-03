@@ -95,6 +95,13 @@
 
 ;; Typed parameters (for dispatch)
 (lambda ((^Int x) (^String y)) body)
+
+;; Dict destructuring parameter
+(lambda ({name age}) (println name age))
+;; caller passes a dict: (f {'name "Alice" 'age 30})
+
+;; Mixed positional + dict params
+(lambda ({host port} verbose) body)
 ```
 
 ### 3.2 `if` - Conditional
@@ -114,6 +121,18 @@ Three branches required (no two-branch form).
 ;; Multi-binding let (flat pairs, desugars to nested lets)
 (let (x 1 y 2) (+ x y))
 
+;; Array destructuring
+(let ([x y] [10 20]) (+ x y))
+(let ([head .. tail] '(1 2 3)) head)
+(let ([a b ..] '(1 2 3 4 5)) (+ a b))
+
+;; Dict destructuring
+(let ({name age} {'name "Alice" 'age 30}) name)
+(let ({x y} {'x 10 'y 20}) (+ x y))
+
+;; Mixed: plain + destructuring bindings
+(let ([a b] [3 4] z 5) (+ a (+ b z)))
+
 ;; Recursive let
 (let ^rec (name init) body)
 
@@ -132,12 +151,16 @@ Three branches required (no two-branch form).
 (define (f x y) body)
 ;; desugars to: (define f (lambda (x y) body))
 
+;; Dict destructuring parameter
+(define (connect {host port}) (tcp-connect host port))
+;; called as: (connect {'host "localhost" 'port 8080})
+
 ;; Typed function define (multiple dispatch)
 (define (f (^Int x)) "integer")
 (define (f (^String x)) "string")
 (define (f x) "other")  ;; fallback
 
-;; Bracket attributes
+;; Bracket attributes (NOT destructuring — [...] is always an attribute)
 (define [macro] name (pattern template))
 (define [type] Name (^Type field1) (^Type field2))
 (define [type] (Child Parent) (^Type field))
