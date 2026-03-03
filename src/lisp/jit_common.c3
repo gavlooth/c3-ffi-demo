@@ -22,7 +22,6 @@ struct SavedInterpState {
     usz         reset_depth;
     usz         handler_count;
     main::ScopeRegion* scope;
-    main::ScopeRegion* escape_scope;
     bool        escape_env_mode;
 }
 
@@ -37,7 +36,6 @@ fn void save_interp_state(Interp* interp, SavedInterpState* s) {
     s.reset_depth     = interp.reset_depth;
     s.handler_count   = interp.handler_count;
     s.scope           = interp.current_scope;
-    s.escape_scope    = interp.escape_scope;
     s.escape_env_mode = interp.escape_env_mode;
 }
 
@@ -52,6 +50,5 @@ fn void restore_interp_state(Interp* interp, SavedInterpState* s) {
     interp.reset_depth       = s.reset_depth;
     interp.handler_count     = s.handler_count;
     interp.current_scope     = s.scope;
-    interp.escape_scope      = s.escape_scope;
     interp.escape_env_mode   = s.escape_env_mode;
 }

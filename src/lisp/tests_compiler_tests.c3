@@ -767,10 +767,10 @@ fn void run_escape_scope_tests(Interp* interp, int* pass, int* fail) {
     test_eq(interp, "escape-scope: map 1000 length",
         "(length (map (lambda (x) (+ x 1)) big-list))", 1000, pass, fail);
 
-    // --- Escape-Scope Env Optimization Tests ---
-    // (TCO loop envs allocated in escape_scope, surviving bounces without copy)
+    // --- Escape-Lane Env Optimization Tests ---
+    // (TCO loop envs allocated in current scope ESCAPE lane, surviving bounces without copy)
 
-    // Named-let reverse: loop env should survive in escape_scope
+    // Named-let reverse: loop env should survive in ESCAPE lane
     setup(interp, "(define my-rev (lambda (lst) (let loop (xs lst acc (quote ())) (if (null? xs) acc (loop (cdr xs) (cons (car xs) acc))))))");
     test_eq(interp, "esc-env: reverse car",
         "(car (my-rev (quote (1 2 3))))", 3, pass, fail);
@@ -781,7 +781,7 @@ fn void run_escape_scope_tests(Interp* interp, int* pass, int* fail) {
     test_eq(interp, "esc-env: reverse singleton",
         "(car (my-rev (quote (42))))", 42, pass, fail);
 
-    // Large list — would be very slow without escape-scope env
+    // Large list — would be very slow without ESCAPE-lane env
     test_eq(interp, "esc-env: reverse 10000 length",
         "(length (my-rev (range 10000)))", 10000, pass, fail);
 
@@ -797,11 +797,11 @@ fn void run_escape_scope_tests(Interp* interp, int* pass, int* fail) {
     test_eq(interp, "esc-env: filter gt2",
         "(length (my-filter (lambda (x) (> x 2)) (quote (1 2 3 4 5))))", 3, pass, fail);
 
-    // Non-list return from loop (scalar — no escape-scope cons involved)
+    // Non-list return from loop (scalar — no ESCAPE-lane cons involved)
     test_eq(interp, "esc-env: sum 100",
         "(let loop (n 0 sum 0) (if (= n 100) sum (loop (+ n 1) (+ sum n))))", 4950, pass, fail);
 
-    // Nested named-lets — each with independent escape_scope
+    // Nested named-lets — each with independent ESCAPE-lane lifetime
     setup(interp, "(define flatten (lambda (lst) (let outer (xs lst acc (quote ())) (if (null? xs) (reverse acc) (if (list? (car xs)) (let inner (ys (car xs) acc2 acc) (if (null? ys) (outer (cdr xs) acc2) (inner (cdr ys) (cons (car ys) acc2)))) (outer (cdr xs) (cons (car xs) acc)))))))");
     test_eq(interp, "esc-env: flatten nested",
         "(length (flatten (quote ((1 2) (3 4) (5)))))", 5, pass, fail);

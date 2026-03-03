@@ -1212,12 +1212,6 @@ fn Value* copy_to_parent(Value* v, Interp* interp) {
         g_copy_to_parent_stats.defensive_copies++;
     }
 
-    // Disable escape-scope during copy operations. copy_to_parent calls make_cons
-    // which would otherwise redirect cons cells to escape_scope. This is wrong —
-    // the escape path should only trigger for fresh user-code allocations, not copies.
-    main::ScopeRegion* saved_escape = interp.escape_scope;
-    interp.escape_scope = null;
-
     Value* result;
     switch (v.tag) {
         case NIL:
@@ -1347,7 +1341,6 @@ fn Value* copy_to_parent(Value* v, Interp* interp) {
         default:
             result = v;
     }
-    interp.escape_scope = saved_escape;
     return result;
 }
 
@@ -1363,8 +1356,19 @@ fn Value* copy_to_parent_site(Value* v, Interp* interp, uint site) {
  */
 fn Value* promote_to_escape(Value* v, Interp* interp) {
     if (v == null || interp == null || interp.current_scope == null) return v;
-    // Only promote values that belong to the current TEMP lane.
-    if (v.scope_gen != interp.current_scope.generation) return v;
+    // Fast paths:
+    // - already in current ESCAPE lane
+    // - in current TEMP lane (normal case for lane promotion)
+    // - in a surviving scope chain (root/parent/shared lifetime)
+    if (v.scope_gen == interp.current_scope.escape_generation) return v;
+    if (v.scope_gen != interp.current_scope.generation) {
+        if (in_target_scope_chain((void*)v, interp)) return v;
+        // Defensive fallback: disjoint lifetime object (e.g. standalone env_scope).
+        // Copy into current TEMP lane first, then continue promotion into ESCAPE.
+        Value* copied = copy_to_parent_site(v, interp, COPY_SITE_GENERIC);
+        if (copied == null || copied == v) return copied;
+        return promote_to_escape(copied, interp);
+    }
 
     Value* result;
     switch (v.tag) {
@@ -2570,14 +2574,32 @@ fn EvalResult run(char[] source, Interp* interp) {
     EvalResult result;
     if (f != null) {
         Value* jit_result = jit_exec(f, interp);
+        bool child_spliced = false;
         if (jit_result != null) {
-            // Promote result before any tag/string access. JIT helpers may return
-            // pointers from scopes that were already released during evaluation.
             interp.current_scope = saved_scope;
-            main::ScopeRegion* saved_releasing = interp.releasing_scope;
-            interp.releasing_scope = child_scope;
-            jit_result = copy_to_parent_site(jit_result, interp, COPY_SITE_RUN_JIT_RESULT);
-            interp.releasing_scope = saved_releasing;
+
+            if (child_scope.refcount == 1) {
+                // Try lane-promotion + splice first (zero-copy return path).
+                if (jit_result.scope_gen != child_scope.escape_generation) {
+                    interp.current_scope = child_scope;
+                    jit_result = promote_to_escape(jit_result, interp);
+                    interp.current_scope = saved_scope;
+                }
+                if (jit_result.scope_gen == child_scope.escape_generation) {
+                    main::scope_splice_escapes(saved_scope, child_scope);
+                    child_scope = null;
+                    child_spliced = true;
+                }
+            }
+
+            if (!child_spliced) {
+                if (main::is_in_scope((void*)jit_result, child_scope)) {
+                    main::ScopeRegion* saved_releasing = interp.releasing_scope;
+                    interp.releasing_scope = child_scope;
+                    jit_result = copy_to_parent_site(jit_result, interp, COPY_SITE_RUN_JIT_RESULT);
+                    interp.releasing_scope = saved_releasing;
+                }
+            }
         }
         if (jit_result != null && jit_result.tag == ERROR) {
             result = eval_error_expr(jit_result.str_chars[:jit_result.str_len], expr);
@@ -2590,7 +2612,9 @@ fn EvalResult run(char[] source, Interp* interp) {
 
     // Pop child scope — frees all temporaries from this eval
     interp.current_scope = saved_scope;
-    main::scope_release(child_scope);
+    if (child_scope != null) {
+        main::scope_release(child_scope);
+    }
 
     return result;
 }

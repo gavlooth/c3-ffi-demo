@@ -798,90 +798,20 @@ fn Value* make_symbol(Interp* interp, SymbolId sym) @inline {
     return v;
 }
 
-// Fast promotion path for legacy call-scope -> escape_scope cons building.
-// Handles common scalar/string/error payloads without going through full graph copy.
-fn Value* promote_to_escape_scope_fast(Value* v, main::ScopeRegion* src_scope, Interp* interp) {
-    if (v == null || src_scope == null) return v;
-    if (!main::is_in_scope((void*)v, src_scope)) return v;
-
-    switch (v.tag) {
-        case NIL:
-            return make_nil(interp);
-        case INT:
-            return make_int(interp, v.int_val);
-        case DOUBLE:
-            return make_double(interp, v.double_val);
-        case SYMBOL:
-            return make_symbol(interp, v.sym_val);
-        case STRING:
-            return make_string(interp, v.str_chars[:v.str_len]);
-        case ERROR:
-            return make_error(interp, v.str_chars[:v.str_len]);
-        default:
-            return copy_to_parent_site(v, interp, COPY_SITE_MAKE_CONS_ESCAPE_CAR);
-    }
-}
-
-/**
- * Allocate a cons cell in escape_scope (result_scope).
- * Promotes car/cdr from call_scope to escape_scope if needed.
- * Called when accumulator pattern detected (cdr is NIL or already in escape_scope).
- */
-fn Value* make_cons_escape(Interp* interp, Value* car, Value* cdr) {
-    main::ScopeRegion* call_scope = interp.current_scope;
-
-    // Switch to escape_scope for allocation
-    interp.current_scope = interp.escape_scope;
-
-    // Promote car/cdr: copy from call_scope to escape_scope if needed.
-    main::ScopeRegion* saved_releasing = interp.releasing_scope;
-    interp.releasing_scope = call_scope;
-    Value* safe_car = promote_to_escape_scope_fast(car, call_scope, interp);
-
-    Value* safe_cdr = cdr;
-    if (cdr == null || cdr.tag == NIL) {
-        // Avoid copying per-iteration NIL sentinels from the dying call scope.
-        safe_cdr = make_nil(interp);
-    } else if (cdr.scope_gen != interp.escape_scope.generation &&
-               main::is_in_scope((void*)cdr, call_scope)) {
-        safe_cdr = copy_to_parent_site(cdr, interp, COPY_SITE_MAKE_CONS_ESCAPE_CDR);
-    }
-    interp.releasing_scope = saved_releasing;
-
-    // Allocate cons in escape_scope
-    Value* v = interp.alloc_value();
-    v.tag = CONS;
-    v.cons_val.car = safe_car;
-    v.cons_val.cdr = safe_cdr;
-
-    // Restore call_scope
-    interp.current_scope = call_scope;
-    return v;
-}
-
 <* @ensure return != null *>
 fn Value* make_cons(Interp* interp, Value* car, Value* cdr) @inline {
     // Dual-lane path: if cdr is already in current scope's ESCAPE lane,
     // allocate pair in ESCAPE lane and promote inputs before linking.
-    // In unified one-scope loop mode (escape_env_mode), treat NIL cdr as
-    // accumulator bootstrap and seed ESCAPE lane directly.
+    // In escape-env mode, treat NIL cdr as accumulator bootstrap and seed
+    // ESCAPE lane directly.
     if (cdr != null &&
         (cdr.scope_gen == interp.current_scope.escape_generation ||
-         (interp.escape_scope == null && cdr.tag == NIL))) {
+         (interp.escape_env_mode && cdr.tag == NIL))) {
         Value* v = interp.alloc_value_escape();
         v.tag = CONS;
         v.cons_val.car = promote_to_escape(car, interp);
         v.cons_val.cdr = promote_to_escape(cdr, interp);
         return v;
-    }
-
-    // Escape-scope optimization: detect accumulator pattern (cons x acc)
-    // where acc starts as NIL and grows by consing onto the front.
-    // Trigger: cdr is NIL (start of accumulator) or cdr stamped with escape_scope's generation.
-    if (interp.escape_scope != null &&
-        interp.current_scope != interp.escape_scope &&
-        (cdr.tag == NIL || cdr.scope_gen == interp.escape_scope.generation)) {
-        return make_cons_escape(interp, car, cdr);
     }
 
     // Normal path: allocate in current_scope
@@ -1334,17 +1264,10 @@ struct Env {
 }
 
 fn Env* make_env(Interp* interp, Env* parent) {
-    // Escape-env optimization:
-    // - legacy: allocate in escape_scope when present
-    // - unified lane mode: allocate in current scope's ESCAPE lane when escape_scope is null
-    bool use_escape_scope = interp.escape_env_mode &&
-                            interp.escape_scope != null &&
-                            interp.current_scope != interp.escape_scope;
-    bool use_escape_lane = interp.escape_env_mode && interp.escape_scope == null;
-
-    main::ScopeRegion* target = use_escape_scope ? interp.escape_scope : interp.current_scope;
-    main::ScopeRegion* saved = interp.current_scope;
-    if (use_escape_scope) interp.current_scope = target;
+    // When enabled, env frames are allocated in the current scope ESCAPE lane
+    // so they survive TEMP-lane resets across TCO bounces.
+    bool use_escape_lane = interp.escape_env_mode;
+    main::ScopeRegion* target = interp.current_scope;
 
     Env* env = use_escape_lane ? interp.alloc_env_escape() : interp.alloc_env();
     env.is_inline = true;
@@ -1361,8 +1284,6 @@ fn Env* make_env(Interp* interp, Env* parent) {
     } else {
         main::scope_register_dtor(target, (void*)env, &scope_dtor_env);
     }
-
-    if (use_escape_scope) interp.current_scope = saved;
     return env;
 }
 
@@ -1485,23 +1406,6 @@ fn Value* promote_for_env_target(Env* target, Value* value, Interp* interp) {
     // Dual-lane intra-scope target: TEMP -> ESCAPE lane promotion.
     if (target.scope_gen == interp.current_scope.escape_generation) {
         return promote_to_escape(value, interp);
-    }
-
-    // Legacy two-scope target: current call-scope -> escape_scope.
-    if (interp.escape_scope != null &&
-        interp.current_scope != interp.escape_scope &&
-        target.scope_gen == interp.escape_scope.generation) {
-        main::ScopeRegion* saved_scope = interp.current_scope;
-        main::ScopeRegion* saved_releasing = interp.releasing_scope;
-        if (!main::is_in_scope((void*)value, saved_scope)) {
-            return value;
-        }
-        interp.current_scope = interp.escape_scope;
-        interp.releasing_scope = saved_scope;
-        Value* promoted = copy_to_parent_site(value, interp, COPY_SITE_ENV_PROMOTE_FOR_TARGET);
-        interp.releasing_scope = saved_releasing;
-        interp.current_scope = saved_scope;
-        return promoted;
     }
 
     return value;
@@ -2261,8 +2165,7 @@ struct Interp {
     Env*  jit_tco_env;         // Environment for next expression
     main::ScopeRegion* tco_recycle_scope; // Scope eligible for TCO recycling (set by jit_eval_in_call_scope)
     main::ScopeRegion* releasing_scope;   // Set during copy_to_parent to skip values not in this scope
-    main::ScopeRegion* escape_scope;      // Result scope for escape-aware cons allocation (null when inactive)
-    bool escape_env_mode;                 // When true, make_env allocates in escape_scope (for TCO loop envs)
+    bool escape_env_mode;                 // When true, make_env/make_cons use current scope ESCAPE lane
 
     // Stack overflow protection
     usz eval_depth;
@@ -2436,7 +2339,6 @@ fn void Interp.init(Interp* self) {
     self.jit_tco_env = null;
     self.tco_recycle_scope = null;
     self.releasing_scope = null;
-    self.escape_scope = null;
     self.escape_env_mode = false;
     self.flags.jit_tco_bounce = false;
 
@@ -2532,7 +2434,6 @@ fn void Interp.destroy(Interp* self) {
     // This is the primary deterministic cleanup point for scope-managed values/envs.
     if (self.root_scope != null) {
         self.current_scope = self.root_scope;
-        self.escape_scope = null;
         self.releasing_scope = null;
         self.tco_recycle_scope = null;
         main::scope_release(self.root_scope);

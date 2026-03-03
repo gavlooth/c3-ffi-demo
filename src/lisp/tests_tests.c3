@@ -1804,47 +1804,8 @@ fn void run_memory_lifetime_regression_tests(Interp* interp, int* pass, int* fai
         }
     }
 
-    // Invariant: env barrier handles legacy call_scope -> escape_scope promotion.
-    {
-        main::ScopeRegion* saved_scope = interp.current_scope;
-        main::ScopeRegion* saved_escape = interp.escape_scope;
-        bool saved_escape_mode = interp.escape_env_mode;
-
-        main::ScopeRegion* result_scope = main::scope_create(saved_scope);
-        main::ScopeRegion* call_scope = main::scope_create(result_scope);
-        interp.current_scope = call_scope;
-        interp.escape_scope = result_scope;
-        interp.escape_env_mode = true;
-
-        Env* e = make_env(interp, null); // allocated in escape_scope due escape_env_mode
-        SymbolId sid = interp.symbols.intern("__legacy_escape_env_barrier");
-        Value* tmp = make_int(interp, 123); // allocated in call_scope
-        env_define_with_barrier(e, sid, tmp, interp);
-        Value* got = e.lookup(sid);
-
-        bool ok = got != null &&
-                  got.tag == INT &&
-                  got.int_val == 123 &&
-                  got.scope_gen == result_scope.generation;
-
-        interp.escape_env_mode = saved_escape_mode;
-        interp.escape_scope = saved_escape;
-        interp.current_scope = saved_scope;
-        main::scope_release(call_scope);
-        main::scope_release(result_scope);
-
-        if (ok) {
-            io::printn("[PASS] lifetime: env barrier promotes call_scope->escape_scope");
-            (*pass)++;
-        } else {
-            io::printn("[FAIL] lifetime: env barrier promotes call_scope->escape_scope");
-            (*fail)++;
-        }
-    }
-
-    // Invariant: legacy accumulator path should avoid graph-copy churn.
-    // Budget gate: cons-escape car fallback copies must stay near-zero,
-    // and cdr copies must remain zero (tail is already in escape lane).
+    // Invariant: legacy cons-escape copy sites must remain unused.
+    // If these counters rise, an old path was accidentally reintroduced.
     {
         usz base_total = copy_to_parent_total_calls();
         usz base_car = copy_to_parent_site_calls(COPY_SITE_MAKE_CONS_ESCAPE_CAR);
@@ -1862,14 +1823,14 @@ fn void run_memory_lifetime_regression_tests(Interp* interp, int* pass, int* fai
                        r.value != null &&
                        r.value.tag == INT &&
                        r.value.int_val == 2000;
-        bool ok_budget = car_delta <= 16 && cdr_delta == 0;
+        bool ok_budget = car_delta == 0 && cdr_delta == 0;
         bool ok = ok_eval && ok_budget;
 
         if (ok) {
-            io::printn("[PASS] lifetime: cons-escape copy budget gate");
+            io::printn("[PASS] lifetime: legacy cons-escape sites stay at zero");
             (*pass)++;
         } else {
-            io::printfn("[FAIL] lifetime: cons-escape copy budget gate (total_delta=%d car_delta=%d cdr_delta=%d tag=%d int=%d err=%s)",
+            io::printfn("[FAIL] lifetime: legacy cons-escape sites stay at zero (total_delta=%d car_delta=%d cdr_delta=%d tag=%d int=%d err=%s)",
                 (long)total_delta,
                 (long)car_delta,
                 (long)cdr_delta,
@@ -1883,12 +1844,10 @@ fn void run_memory_lifetime_regression_tests(Interp* interp, int* pass, int* fai
     // Invariant: unified one-scope escape-env mode allocates env frames in ESCAPE lane.
     {
         main::ScopeRegion* saved_scope = interp.current_scope;
-        main::ScopeRegion* saved_escape = interp.escape_scope;
         bool saved_escape_mode = interp.escape_env_mode;
 
         main::ScopeRegion* s = main::scope_create(saved_scope);
         interp.current_scope = s;
-        interp.escape_scope = null;
         interp.escape_env_mode = true;
 
         Env* e = make_env(interp, null);
@@ -1897,7 +1856,6 @@ fn void run_memory_lifetime_regression_tests(Interp* interp, int* pass, int* fai
                   main::is_in_scope((void*)e, s);
 
         interp.escape_env_mode = saved_escape_mode;
-        interp.escape_scope = saved_escape;
         interp.current_scope = saved_scope;
         main::scope_release(s);
 

@@ -478,8 +478,7 @@ fn Value* jit_eval(Expr* expr, Env* env, Interp* interp) {
                     interp.tco_recycle_scope = cs;
                 } else {
                     // Fallback: allocate fresh call_scope and copy full env chain.
-                    main::ScopeRegion* parent = interp.escape_scope != null ? interp.escape_scope : cs.parent;
-                    main::ScopeRegion* fresh = main::scope_create(parent);
+                    main::ScopeRegion* fresh = main::scope_create(cs.parent);
                     interp.current_scope = fresh;
                     interp.tco_recycle_scope = fresh;  // Update: fresh is now the recyclable scope
                     interp.releasing_scope = cs;       // Tell copy_to_parent what's being released
@@ -498,7 +497,7 @@ fn Value* jit_eval(Expr* expr, Env* env, Interp* interp) {
 }
 
 // Single-scope wrapper: evaluates closure body in ONE child scope.
-// Used for non-loop function calls. No escape_scope/tco_recycle_scope set.
+// Used for non-loop function calls. No TCO recycle scope is set.
 // Avoids the overhead of two scopes (result_scope + call_scope).
 fn Value* jit_eval_in_single_scope(Expr* body, Env* call_env, Interp* interp) {
     main::ScopeRegion* saved_scope = interp.current_scope;
@@ -541,8 +540,7 @@ fn Value* jit_eval_in_single_scope(Expr* body, Env* call_env, Interp* interp) {
 }
 
 // Scope-per-call wrapper: evaluates closure body in a child scope.
-// Three-tier hierarchy: result_scope (persists across TCO bounces) → call_scope (recycled).
-// Accumulator cons cells go in result_scope; temporaries go in call_scope.
+// Unified lane model: one scope per call with TEMP+ESCAPE lanes.
 fn Value* jit_eval_in_call_scope(Expr* body, Env* call_env, Interp* interp) {
     main::ScopeRegion* saved_scope = interp.current_scope;
 
@@ -550,9 +548,6 @@ fn Value* jit_eval_in_call_scope(Expr* body, Env* call_env, Interp* interp) {
     main::ScopeRegion* call_scope = main::scope_create(saved_scope);
     interp.current_scope = call_scope;
 
-    // Keep legacy field saved/restored, but do not drive normal flow from it.
-    main::ScopeRegion* saved_escape = interp.escape_scope;
-    interp.escape_scope = null;
     bool saved_escape_env = interp.escape_env_mode;
     interp.escape_env_mode = true;
 
@@ -567,7 +562,6 @@ fn Value* jit_eval_in_call_scope(Expr* body, Env* call_env, Interp* interp) {
 
     // Restore saved state
     interp.tco_recycle_scope = saved_recycle;
-    interp.escape_scope = saved_escape;
     interp.escape_env_mode = saved_escape_env;
     interp.current_scope = saved_scope;
     if (active_scope.refcount == 1 && result != null) {
@@ -610,29 +604,6 @@ fn Env* copy_tco_env_chain(Env* src, Interp* interp) {
     if (src.persistent) {
         src.parent = copy_tco_env_chain(src.parent, interp);
         return src;
-    }
-
-    // Escape-env optimization: Env in escape_scope survives the bounce.
-    // Skip frame copy — just promote binding values to escape_scope.
-    // Eliminates make_env + malloc(Binding[]) + scope_register_dtor + build_hash_table per bounce.
-    if (interp.escape_scope != null &&
-        src.scope_gen == interp.escape_scope.generation) {
-        // Env is NOT in the dying scope. Update binding values in-place.
-        main::ScopeRegion* saved = interp.current_scope;
-        interp.current_scope = interp.escape_scope;
-        for (usz i = 0; i < src.binding_count; i++) {
-            Value* sv = src.bindings[i].value;
-            if (sv != null && interp.releasing_scope != null &&
-                !main::is_in_scope((void*)sv, interp.releasing_scope)) {
-                // Value is outside the dying call-scope; keep as-is.
-                src.bindings[i].value = sv;
-            } else {
-                src.bindings[i].value = copy_to_parent_site(sv, interp, COPY_SITE_JIT_TCO_ESCAPE_REFRESH);
-            }
-        }
-        interp.current_scope = saved;
-        src.parent = copy_tco_env_chain(src.parent, interp);
-        return src;  // same Env, updated values, no alloc
     }
 
     // Recursive: copy parent chain first (bottom-up)
@@ -894,8 +865,8 @@ fn Value* jit_eval_let_rec(Interp* interp, Expr* expr, Env* env) {
     // the outer loop's scope — each loop's tco_recycle_scope is independent.
 
     // Escape-env optimization: if the loop body doesn't contain shift,
-    // enable escape_env_mode so the loop's param env is allocated in
-    // escape_scope (survives TCO bounces without frame copy).
+    // enable escape_env_mode so loop env frames use the current scope ESCAPE lane
+    // and survive TEMP-lane resets during TCO bounces.
     bool body_has_shift = false;
     if (is_closure(actual_value)) {
         Expr* lambda_body = expr.let_expr.init;
