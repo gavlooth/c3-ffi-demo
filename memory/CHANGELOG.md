@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026-03-03: Fiber tcp-read Timeouts via libuv Timers
+
+### Summary
+Added timeout-capable async `tcp-read` for scheduler-managed fibers using `uv_timer`.
+
+### Changes
+- **Scheduler timeout wiring** (`src/lisp/scheduler.c3`):
+  - Extended pending async read state with `timed_out` + `timer_handle`.
+  - Added `scheduler_uv_timer_cb` to complete blocked reads on deadline expiry.
+  - Shared completion path now closes both poll and timer handles and wakes blocked fibers.
+  - `scheduler_try_async_tcp_read` now accepts `timeout_ms`, initializes/starts `uv_timer` when requested, and returns `"tcp-read: timeout"` on expiry.
+- **Async primitive support** (`src/lisp/async.c3`):
+  - Added libuv timer externs/constants already used by scheduler bridge (`uv_timer_init/start/stop`, `UV_HANDLE_TIMER`).
+  - Added `(tcp-read-timeout handle timeout-ms)` primitive (`prim_tcp_read_timeout`) delegating to `tcp-read` with timeout.
+- **Timeout entry points**:
+  - `prim_tcp_read` now accepts optional `timeout-ms` as third arg and routes it through scheduler async bridge.
+  - Added `prim_tcp_read_timeout` helper primitive implementation in `src/lisp/async.c3` (not wired into stdlib effect table yet).
+
+### Files Modified
+- `src/lisp/async.c3`
+- `src/lisp/scheduler.c3`
+
+### Validation
+- `c3c build` ✅
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` (full runtime tests) ✅
+  - Unified tests: `1117 passed, 0 failed`
+  - Compiler tests: `73 passed, 0 failed`
+- Targeted timeout smoke checks ✅
+  - Silent peer + `(__raw-tcp-read h 4096 100)` produces `tcp-read: timeout`
+  - Responding peer + `(__raw-tcp-read h 4096 1000)` returns data (`length = 2`)
+
 ## 2026-03-03: Fiber Suspend Lifetime Pinning + libuv tcp-read Bridge
 
 ### Summary

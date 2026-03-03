@@ -31,13 +31,14 @@ struct PendingTcpRead {
     bool active;
     bool completed;
     bool consumed;
-    bool handle_closed;
+    bool timed_out;
     int fd;
     usz max_bytes;
     char* buffer;
     long nread;
     int error_code;
     void* poll_handle;
+    void* timer_handle;
 }
 
 struct Scheduler {
@@ -93,7 +94,8 @@ fn usz scheduler_add_fiber(Value* coroutine, Interp* interp) {
 fn isz scheduler_find_pending_by_handle(void* handle) {
     for (usz i = 0; i < g_scheduler.fiber_count; i++) {
         PendingTcpRead* op = &g_scheduler.pending_reads[i];
-        if (op.active && op.poll_handle == handle) return (isz)i;
+        if (!op.active) continue;
+        if (op.poll_handle == handle || op.timer_handle == handle) return (isz)i;
     }
     return -1;
 }
@@ -106,11 +108,18 @@ fn void scheduler_close_pending_tcp_read(usz fiber_id) {
     if (fiber_id >= g_scheduler.fiber_count) return;
 
     PendingTcpRead* op = &g_scheduler.pending_reads[fiber_id];
-    if (!op.active || op.poll_handle == null) return;
+    if (!op.active) return;
 
-    (void)uv_poll_stop(op.poll_handle);
-    uv_close(op.poll_handle, &scheduler_free_handle_cb);
-    op.poll_handle = null;
+    if (op.poll_handle != null) {
+        (void)uv_poll_stop(op.poll_handle);
+        uv_close(op.poll_handle, &scheduler_free_handle_cb);
+        op.poll_handle = null;
+    }
+    if (op.timer_handle != null) {
+        (void)uv_timer_stop(op.timer_handle);
+        uv_close(op.timer_handle, &scheduler_free_handle_cb);
+        op.timer_handle = null;
+    }
 
     if (op.buffer != null) {
         mem::free(op.buffer);
@@ -129,13 +138,37 @@ fn void scheduler_uv_close_cb(void* handle) {
 
     PendingTcpRead* op = &g_scheduler.pending_reads[(usz)idx];
     if (handle != null) mem::free(handle);
-    op.poll_handle = null;
-    op.handle_closed = true;
+    if (op.poll_handle == handle) op.poll_handle = null;
+    if (op.timer_handle == handle) op.timer_handle = null;
+}
 
-    if (op.consumed) {
-        if (op.buffer != null) mem::free(op.buffer);
-        g_scheduler.pending_reads[(usz)idx] = {};
+fn void scheduler_complete_pending_tcp_read(usz fiber_id) {
+    PendingTcpRead* op = &g_scheduler.pending_reads[fiber_id];
+    if (!op.active) return;
+
+    if (op.poll_handle != null) {
+        (void)uv_poll_stop(op.poll_handle);
+        uv_close(op.poll_handle, &scheduler_uv_close_cb);
     }
+    if (op.timer_handle != null) {
+        (void)uv_timer_stop(op.timer_handle);
+        uv_close(op.timer_handle, &scheduler_uv_close_cb);
+    }
+
+    FiberEntry* f = &g_scheduler.fibers[fiber_id];
+    if (f.state == FIBER_BLOCKED) f.state = FIBER_READY;
+}
+
+fn void scheduler_uv_timer_cb(void* handle) {
+    isz idx = scheduler_find_pending_by_handle(handle);
+    if (idx < 0) return;
+
+    PendingTcpRead* op = &g_scheduler.pending_reads[(usz)idx];
+    if (!op.active || op.completed) return;
+
+    op.timed_out = true;
+    op.completed = true;
+    scheduler_complete_pending_tcp_read((usz)idx);
 }
 
 fn void scheduler_uv_poll_cb(void* handle, int status, int events) {
@@ -166,11 +199,7 @@ fn void scheduler_uv_poll_cb(void* handle, int status, int events) {
 
     if (!op.completed) return;
 
-    (void)uv_poll_stop(handle);
-    uv_close(handle, &scheduler_uv_close_cb);
-
-    FiberEntry* f = &g_scheduler.fibers[(usz)idx];
-    if (f.state == FIBER_BLOCKED) f.state = FIBER_READY;
+    scheduler_complete_pending_tcp_read((usz)idx);
 }
 
 fn Value* scheduler_consume_pending_tcp_read(usz fiber_id, Interp* interp) {
@@ -180,7 +209,9 @@ fn Value* scheduler_consume_pending_tcp_read(usz fiber_id, Interp* interp) {
     }
 
     Value* out;
-    if (op.error_code != 0) {
+    if (op.timed_out) {
+        out = raise_error(interp, "tcp-read: timeout");
+    } else if (op.error_code != 0) {
         out = raise_error(interp, "tcp-read: async read failed");
     } else if (op.nread <= 0) {
         out = make_string(interp, "");
@@ -189,10 +220,9 @@ fn Value* scheduler_consume_pending_tcp_read(usz fiber_id, Interp* interp) {
     }
 
     op.consumed = true;
-    if (op.handle_closed || op.poll_handle == null) {
-        if (op.buffer != null) mem::free(op.buffer);
-        g_scheduler.pending_reads[fiber_id] = {};
-    } else if (g_scheduler.uv_loop_ready && g_scheduler.uv_loop != null) {
+    if (op.buffer != null) mem::free(op.buffer);
+    g_scheduler.pending_reads[fiber_id] = {};
+    if (g_scheduler.uv_loop_ready && g_scheduler.uv_loop != null) {
         (void)uv_run(g_scheduler.uv_loop, UV_RUN_NOWAIT);
     }
 
@@ -264,7 +294,7 @@ fn void scheduler_wait_for_io_once() {
 // Async bridge used by tcp-read fast-path:
 // returns non-null when it handled the call (including errors);
 // null means "fall back to blocking path".
-fn Value* scheduler_try_async_tcp_read(int fd, usz max_bytes, Interp* interp) {
+fn Value* scheduler_try_async_tcp_read(int fd, usz max_bytes, long timeout_ms, Interp* interp) {
     scheduler_init();
     if (!g_scheduler.running) return null;
     if (g_scheduler.current_fiber_id >= g_scheduler.fiber_count) return null;
@@ -318,8 +348,38 @@ fn Value* scheduler_try_async_tcp_read(int fd, usz max_bytes, Interp* interp) {
         return raise_error(interp, "tcp-read: uv_poll_init failed");
     }
 
+    void* timer_handle = null;
+    if (timeout_ms >= 0) {
+        usz timer_size = uv_handle_size(UV_HANDLE_TIMER);
+        if (timer_size == 0) {
+            uv_close(poll_handle, &scheduler_free_handle_cb);
+            (void)uv_run(g_scheduler.uv_loop, UV_RUN_NOWAIT);
+            mem::free(read_buf);
+            return raise_error(interp, "tcp-read: uv timer handle unavailable");
+        }
+
+        timer_handle = mem::malloc(timer_size);
+        if (timer_handle == null) {
+            uv_close(poll_handle, &scheduler_free_handle_cb);
+            (void)uv_run(g_scheduler.uv_loop, UV_RUN_NOWAIT);
+            mem::free(read_buf);
+            return raise_error(interp, "tcp-read: out of memory");
+        }
+
+        if (uv_timer_init(g_scheduler.uv_loop, timer_handle) != 0) {
+            mem::free(timer_handle);
+            uv_close(poll_handle, &scheduler_free_handle_cb);
+            (void)uv_run(g_scheduler.uv_loop, UV_RUN_NOWAIT);
+            mem::free(read_buf);
+            return raise_error(interp, "tcp-read: uv_timer_init failed");
+        }
+    }
+
     if (uv_poll_start(poll_handle, UV_READABLE, &scheduler_uv_poll_cb) != 0) {
         uv_close(poll_handle, &scheduler_free_handle_cb);
+        if (timer_handle != null) {
+            uv_close(timer_handle, &scheduler_free_handle_cb);
+        }
         if (g_scheduler.uv_loop_ready && g_scheduler.uv_loop != null) {
             (void)uv_run(g_scheduler.uv_loop, UV_RUN_NOWAIT);
         }
@@ -327,16 +387,28 @@ fn Value* scheduler_try_async_tcp_read(int fd, usz max_bytes, Interp* interp) {
         return raise_error(interp, "tcp-read: uv_poll_start failed");
     }
 
+    if (timer_handle != null && uv_timer_start(timer_handle, &scheduler_uv_timer_cb, (ulong)timeout_ms, 0) != 0) {
+        (void)uv_poll_stop(poll_handle);
+        uv_close(poll_handle, &scheduler_free_handle_cb);
+        uv_close(timer_handle, &scheduler_free_handle_cb);
+        if (g_scheduler.uv_loop_ready && g_scheduler.uv_loop != null) {
+            (void)uv_run(g_scheduler.uv_loop, UV_RUN_NOWAIT);
+        }
+        mem::free(read_buf);
+        return raise_error(interp, "tcp-read: uv_timer_start failed");
+    }
+
     op.active = true;
     op.completed = false;
     op.consumed = false;
-    op.handle_closed = false;
+    op.timed_out = false;
     op.fd = fd;
     op.max_bytes = max_bytes;
     op.buffer = read_buf;
     op.nread = -1;
     op.error_code = 0;
     op.poll_handle = poll_handle;
+    op.timer_handle = timer_handle;
 
     f.state = FIBER_BLOCKED;
 

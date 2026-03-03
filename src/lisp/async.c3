@@ -26,12 +26,17 @@ extern fn usz uv_loop_size() @extern("uv_loop_size");
 extern fn usz uv_handle_size(int handle_type) @extern("uv_handle_size");
 alias UvPollCb = fn void(void* handle, int status, int events);
 alias UvCloseCb = fn void(void* handle);
+alias UvTimerCb = fn void(void* handle);
 extern fn int uv_poll_init(void* loop, void* handle, int fd) @extern("uv_poll_init");
 extern fn int uv_poll_start(void* handle, int events, UvPollCb cb) @extern("uv_poll_start");
 extern fn int uv_poll_stop(void* handle) @extern("uv_poll_stop");
+extern fn int uv_timer_init(void* loop, void* handle) @extern("uv_timer_init");
+extern fn int uv_timer_start(void* handle, UvTimerCb cb, ulong timeout, ulong repeat) @extern("uv_timer_start");
+extern fn int uv_timer_stop(void* handle) @extern("uv_timer_stop");
 extern fn void uv_close(void* handle, UvCloseCb cb) @extern("uv_close");
 extern fn int uv_loop_alive(void* loop) @extern("uv_loop_alive");
 const int UV_HANDLE_POLL = 8;
+const int UV_HANDLE_TIMER = 13;
 const int UV_READABLE = 1;
 const int UV_RUN_DEFAULT = 0;
 const int UV_RUN_ONCE = 1;
@@ -193,10 +198,15 @@ fn Value* prim_tcp_read(Value*[] args, Env* env, Interp* interp) {
         max_bytes = (usz)args[1].int_val;
         if (max_bytes > 65536) max_bytes = 65536;
     }
+    long timeout_ms = -1;
+    if (args.len >= 3 && is_int(args[2])) {
+        timeout_ms = args[2].int_val;
+        if (timeout_ms < 0) timeout_ms = -1;
+    }
 
     // Async bridge: when called from a scheduler-managed fiber, register a non-blocking
     // read with libuv and suspend this fiber until data is ready.
-    Value* async_result = scheduler_try_async_tcp_read(th.fd, max_bytes, interp);
+    Value* async_result = scheduler_try_async_tcp_read(th.fd, max_bytes, timeout_ms, interp);
     if (async_result != null) return async_result;
 
     char* buf = (char*)mem::malloc(max_bytes);
@@ -215,6 +225,21 @@ fn Value* prim_tcp_read(Value*[] args, Env* env, Interp* interp) {
 
     Value* result = make_string(interp, buf[:(usz)received]);
     return result;
+}
+
+// ============================================================
+// (tcp-read-timeout handle timeout-ms) — read with timeout
+// ============================================================
+
+fn Value* prim_tcp_read_timeout(Value*[] args, Env* env, Interp* interp) {
+    if (args.len < 2) return raise_error(interp, "tcp-read-timeout: expected (tcp-read-timeout handle timeout-ms)");
+    if (!is_int(args[1])) return raise_error(interp, "tcp-read-timeout: timeout-ms must be an integer");
+
+    Value*[3] read_args;
+    read_args[0] = args[0];             // handle
+    read_args[1] = make_int(interp, 4096); // default max-bytes
+    read_args[2] = args[1];             // timeout-ms
+    return prim_tcp_read(read_args[..], env, interp);
 }
 
 // ============================================================
