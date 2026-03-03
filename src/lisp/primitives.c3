@@ -542,12 +542,8 @@ fn Value* prim_resume(Value*[] args, Env* env, Interp* interp) {
     interp.resume_value = resume_val;
 
     // Save full interpreter state across coroutine switch.
-    SavedInterpState* saved = (SavedInterpState*)mem::malloc(SavedInterpState.sizeof);
-    if (saved == null) {
-        return raise_error(interp, "resume: failed to allocate state save");
-    }
-    defer mem::free(saved);
-    save_interp_state(interp, saved);
+    SavedInterpState saved;
+    save_interp_state(interp, &saved);
 
     main::StackContext parent_ctx;
     if (ctx.status == main::StackCtxStatus.CTX_READY) {
@@ -557,7 +553,7 @@ fn Value* prim_resume(Value*[] args, Env* env, Interp* interp) {
     }
 
     // Restore full interpreter state.
-    restore_interp_state(interp, saved);
+    restore_interp_state(interp, &saved);
 
     // Stack overflow — coroutine hit guard page
     if (ctx.status == main::StackCtxStatus.CTX_DEAD) {
@@ -603,13 +599,13 @@ fn Value* prim_yield(Value*[] args, Env* env, Interp* interp) {
     interp.yield_value = yield_val;
 
     // Save full interpreter state across suspend/resume.
-    SavedInterpState* saved = (SavedInterpState*)interp.current_scope.alloc(SavedInterpState.sizeof);
-    save_interp_state(interp, saved);
+    SavedInterpState saved;
+    save_interp_state(interp, &saved);
 
     main::stack_ctx_suspend();
 
     // Resumed — restore full interpreter state.
-    restore_interp_state(interp, saved);
+    restore_interp_state(interp, &saved);
 
     return interp.resume_value != null ? interp.resume_value : make_nil(interp);
 }

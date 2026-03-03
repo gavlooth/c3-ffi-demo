@@ -162,17 +162,8 @@ fn JitFn jit_compile(Expr* expr, Interp* interp) {
     _jit_getarg_l(s, JIT_V0, arg);  // V0 = interp (callee-saved)
 
     // Compile the expression, result goes to R0.
-    // ASAN + custom stack switching is sensitive to large stack-allocated
-    // aggregate initialization here, so keep locals metadata on heap.
-    JitLocals* locals = (JitLocals*)mem::malloc(JitLocals.sizeof);
-    if (locals == null) {
-        _jit_destroy_state(s);
-        return null;
-    }
-    // Intentionally not freed: GNU Lightning + custom stack switching under ASAN
-    // can corrupt deferred local pointers in this frame. Locals is tiny.
-    *locals = {};
-    if (catch err = jit_compile_expr(s, expr, interp, locals, true)) {
+    JitLocals locals = {};
+    if (catch err = jit_compile_expr(s, expr, interp, &locals, true)) {
         _jit_destroy_state(s);
         return null;
     }
@@ -945,18 +936,13 @@ fn Value* jit_exec_resolve(Interp* interp, Expr* expr, Env* env) {
         // Set resume value
         interp.resume_value = val;
 
-        SavedInterpState* saved_resolve = (SavedInterpState*)mem::malloc(SavedInterpState.sizeof);
-        if (saved_resolve == null) {
-            interp.handler_count = hstate.handler_idx;
-            return make_error(interp, "resolve: failed to allocate state save");
-        }
-        defer mem::free(saved_resolve);
-        save_interp_state(interp, saved_resolve);
+        SavedInterpState saved_resolve;
+        save_interp_state(interp, &saved_resolve);
 
         main::StackContext parent_ctx;
         main::stack_ctx_resume(ctx, &parent_ctx);
 
-        restore_interp_state(interp, saved_resolve);
+        restore_interp_state(interp, &saved_resolve);
 
         // Pop the reinstalled handler
         interp.handler_count = hstate.handler_idx;

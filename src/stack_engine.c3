@@ -1070,7 +1070,7 @@ fn void run_stack_engine_tests() {
     if (test_fpu_preservation()) { io::printfn("  PASS: FPU state preserved across switch"); pass++; }
     else { io::printfn("  FAIL: FPU state preserved across switch"); fail++; }
 
-    if (stack_asan_enabled() != 0 || getenv("ASAN_OPTIONS") != null) {
+    if (stack_asan_enabled() != 0) {
         io::printfn("  SKIP: stack overflow recovery (ASAN runtime)");
     } else if (test_stack_overflow_recovery()) { io::printfn("  PASS: stack overflow recovery"); pass++; }
     else { io::printfn("  FAIL: stack overflow recovery"); fail++; }

@@ -1434,6 +1434,19 @@ fn void Env.define(Env* self, SymbolId name, Value* value) {
     }
 }
 
+// Barrier-aware env write helper for dual-lane rollout.
+// If target env is in current scope's ESCAPE lane, promote TEMP values first.
+fn void env_define_with_barrier(Env* env, SymbolId name, Value* value, Interp* interp) {
+    if (env == null) return;
+    Value* stored = value;
+    if (interp != null &&
+        interp.current_scope != null &&
+        env.scope_gen == interp.current_scope.escape_generation) {
+        stored = promote_to_escape(value, interp);
+    }
+    env.define(name, stored);
+}
+
 fn Value* Env.lookup(Env* self, SymbolId name) {
     // Fast path: use hash table if available
     if (self.hash_table != null) {

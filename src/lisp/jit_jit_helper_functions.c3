@@ -465,8 +465,12 @@ fn Value* jit_eval_in_single_scope(Expr* body, Env* call_env, Interp* interp) {
     main::ScopeRegion* active_scope = interp.current_scope;
 
     interp.current_scope = saved_scope;
-    if (active_scope.refcount == 1 && result != null && result.tag == CONS) {
-        // CONS return: adopt O(1) to avoid O(n) spine copy. Temps leak as garbage.
+    if (active_scope.refcount == 1 && result != null &&
+        result.scope_gen == active_scope.escape_generation) {
+        // Dual-lane fast path: splice ESCAPE chunks and drop TEMP chunks.
+        main::scope_splice_escapes(saved_scope, active_scope);
+    } else if (active_scope.refcount == 1 && result != null && result.tag == CONS) {
+        // Legacy O(1) path: adopt whole scope (includes temporaries).
         main::scope_adopt(saved_scope, active_scope);
     } else {
         // Scalar return: copy O(1) + release frees all temporaries.
@@ -514,8 +518,13 @@ fn Value* jit_eval_in_call_scope(Expr* body, Env* call_env, Interp* interp) {
     // Otherwise, copy the result value from active_scope to result_scope.
     if (active_scope != result_scope) {
         if (active_scope.refcount == 1) {
-            // O(1) adoption: move chunks/dtors to result_scope, recycle active_scope
-            main::scope_adopt(result_scope, active_scope);
+            if (result != null && result.scope_gen == active_scope.escape_generation) {
+                // Dual-lane fast path: splice only ESCAPE chunks into result_scope.
+                main::scope_splice_escapes(result_scope, active_scope);
+            } else {
+                // Legacy O(1) path: move all chunks/dtors to result_scope.
+                main::scope_adopt(result_scope, active_scope);
+            }
         } else {
             // Something escaped from call_scope — copy result, then release
             interp.current_scope = result_scope;
@@ -532,7 +541,10 @@ fn Value* jit_eval_in_call_scope(Expr* body, Env* call_env, Interp* interp) {
     // Only adopt for CONS returns (the O(n) case). Scalar returns use O(1) copy + release
     // to free temporaries and avoid garbage accumulation.
     interp.current_scope = saved_scope;
-    if (result_scope.refcount == 1 && result != null && result.tag == CONS) {
+    if (result_scope.refcount == 1 && result != null &&
+        result.scope_gen == result_scope.escape_generation) {
+        main::scope_splice_escapes(saved_scope, result_scope);
+    } else if (result_scope.refcount == 1 && result != null && result.tag == CONS) {
         main::scope_adopt(saved_scope, result_scope);
     } else {
         interp.releasing_scope = result_scope;
@@ -1313,12 +1325,7 @@ fn EvalResult jit_reset_impl(Expr* expr, Env* env, Interp* interp) {
     main::StackCtx* ctx = main::stack_ctx_create(&interp.stack_ctx_pool);
     if (ctx == null) return eval_error("stack engine: failed to create context for reset");
 
-    ResetState* state = (ResetState*)mem::malloc(ResetState.sizeof);
-    if (state == null) {
-        main::stack_ctx_destroy(ctx, &interp.stack_ctx_pool);
-        return eval_error("reset: failed to allocate state");
-    }
-    defer mem::free(state);
+    ResetState state;
     state.body = expr.reset.body;
     state.env = env;
     state.interp = interp;
@@ -1326,27 +1333,21 @@ fn EvalResult jit_reset_impl(Expr* expr, Env* env, Interp* interp) {
     state.shift_body = null;
     state.shift_env = null;
 
-    main::stack_ctx_init(ctx, &reset_entry, state);
+    main::stack_ctx_init(ctx, &reset_entry, &state);
 
     // Save/restore the reset state pointer for nesting
     void* saved_state = interp.current_reset_state;
-    interp.current_reset_state = state;
+    interp.current_reset_state = &state;
 
     // Save/restore interp state across context switch
-    SavedInterpState* saved = (SavedInterpState*)mem::malloc(SavedInterpState.sizeof);
-    if (saved == null) {
-        interp.current_reset_state = saved_state;
-        main::stack_ctx_destroy(ctx, &interp.stack_ctx_pool);
-        return eval_error("reset: failed to allocate state save");
-    }
-    defer mem::free(saved);
-    save_interp_state(interp, saved);
+    SavedInterpState saved;
+    save_interp_state(interp, &saved);
 
     main::StackContext parent_ctx;
     main::stack_ctx_switch_to(ctx, &parent_ctx);
 
     interp.current_reset_state = saved_state;
-    restore_interp_state(interp, saved);
+    restore_interp_state(interp, &saved);
 
     // Stack overflow — context hit guard page
     if (ctx.status == main::StackCtxStatus.CTX_DEAD) {
@@ -1410,14 +1411,14 @@ fn Value* jit_shift_impl(Expr* expr, Env* env, Interp* interp) {
     rstate.shift_env = shift_env;
 
     // Save interpreter state that the parent's evaluation will corrupt.
-    SavedInterpState* saved = (SavedInterpState*)interp.current_scope.alloc(SavedInterpState.sizeof);
-    save_interp_state(interp, saved);
+    SavedInterpState saved;
+    save_interp_state(interp, &saved);
 
     // Suspend the context — control returns to jit_reset_impl
     main::stack_ctx_suspend();
 
     // === RESUMED HERE by (k val) via jit_apply_continuation_impl ===
-    restore_interp_state(interp, saved);
+    restore_interp_state(interp, &saved);
 
     return interp.resume_value;
 }
@@ -1451,12 +1452,7 @@ fn EvalResult jit_apply_continuation_impl(Value* k_val, Value* arg, Interp* inte
     interp.resume_value = arg;
 
     // Set up a reset-like context to catch any shifts in the resumed body
-    ResetState* resume_state = (ResetState*)mem::malloc(ResetState.sizeof);
-    if (resume_state == null) {
-        main::stack_ctx_destroy(target, &interp.stack_ctx_pool);
-        return eval_error("continuation: failed to allocate state");
-    }
-    defer mem::free(resume_state);
+    ResetState resume_state;
     resume_state.shifted = false;
     resume_state.shift_body = null;
     resume_state.shift_env = null;
@@ -1465,23 +1461,17 @@ fn EvalResult jit_apply_continuation_impl(Value* k_val, Value* arg, Interp* inte
     resume_state.interp = interp;
 
     void* saved_state = interp.current_reset_state;
-    interp.current_reset_state = resume_state;
+    interp.current_reset_state = &resume_state;
 
-    SavedInterpState* saved = (SavedInterpState*)mem::malloc(SavedInterpState.sizeof);
-    if (saved == null) {
-        interp.current_reset_state = saved_state;
-        main::stack_ctx_destroy(target, &interp.stack_ctx_pool);
-        return eval_error("continuation: failed to allocate state save");
-    }
-    defer mem::free(saved);
-    save_interp_state(interp, saved);
+    SavedInterpState saved;
+    save_interp_state(interp, &saved);
 
     // Resume the clone
     main::StackContext parent_ctx;
     main::stack_ctx_resume(target, &parent_ctx);
 
     interp.current_reset_state = saved_state;
-    restore_interp_state(interp, saved);
+    restore_interp_state(interp, &saved);
 
     // Stack overflow — clone hit guard page
     if (target.status == main::StackCtxStatus.CTX_DEAD) {
@@ -1722,12 +1712,7 @@ fn EvalResult jit_handle_impl(Expr* expr, Env* env, Interp* interp) {
     main::StackCtx* ctx = main::stack_ctx_create(&interp.stack_ctx_pool);
     if (ctx == null) return eval_error("stack engine: failed to create context for handle");
 
-    HandleEffectState* state = (HandleEffectState*)mem::malloc(HandleEffectState.sizeof);
-    if (state == null) {
-        main::stack_ctx_destroy(ctx, &interp.stack_ctx_pool);
-        return eval_error("handle: failed to allocate state");
-    }
-    defer mem::free(state);
+    HandleEffectState state;
     state.body = expr.handle.body;
     state.env = env;
     state.interp = interp;
@@ -1735,7 +1720,7 @@ fn EvalResult jit_handle_impl(Expr* expr, Env* env, Interp* interp) {
     state.signal_tag = (SymbolId)0;
     state.signal_arg = null;
 
-    main::stack_ctx_init(ctx, &handle_effect_entry, state);
+    main::stack_ctx_init(ctx, &handle_effect_entry, &state);
 
     // Push handler on stack
     if (interp.handler_count >= interp.handler_capacity) interp.grow_handler_stack();
@@ -1746,7 +1731,7 @@ fn EvalResult jit_handle_impl(Expr* expr, Env* env, Interp* interp) {
     h.body_expr = expr.handle.body;
     h.body_env = env;
     h.strict_mode = expr.handle.strict_mode;
-    h.effect_state = state;
+    h.effect_state = &state;
 
     // Allocate dynamic arrays for handler clauses
     h.tags = (SymbolId*)mem::malloc(SymbolId.sizeof * expr.handle.clause_count);
@@ -1770,14 +1755,8 @@ fn EvalResult jit_handle_impl(Expr* expr, Env* env, Interp* interp) {
     state.handler_copy = *h;
     state.handler_idx = my_idx;
 
-    SavedInterpState* saved = (SavedInterpState*)mem::malloc(SavedInterpState.sizeof);
-    if (saved == null) {
-        interp.handler_count = my_idx;
-        main::stack_ctx_destroy(ctx, &interp.stack_ctx_pool);
-        return eval_error("handle: failed to allocate state save");
-    }
-    defer mem::free(saved);
-    save_interp_state(interp, saved);
+    SavedInterpState saved;
+    save_interp_state(interp, &saved);
 
     main::StackContext parent_ctx;
     main::stack_ctx_switch_to(ctx, &parent_ctx);
@@ -1790,7 +1769,7 @@ fn EvalResult jit_handle_impl(Expr* expr, Env* env, Interp* interp) {
     if (body_raise_pending && body_raise_len > 0) {
         mem::copy(&body_raise_msg[0], &interp.raise_msg[0], body_raise_len);
     }
-    restore_interp_state(interp, saved);
+    restore_interp_state(interp, &saved);
     if (body_raise_pending) {
         interp.flags.raise_pending = true;
         interp.raise_msg_len = body_raise_len;
@@ -1809,7 +1788,7 @@ fn EvalResult jit_handle_impl(Expr* expr, Env* env, Interp* interp) {
     // Handle loop: process signals
     Value* last_handler_v = null;
     while (state.signaled) {
-        last_handler_v = jit_handle_dispatch_signal(state, expr, env, interp, ctx);
+        last_handler_v = jit_handle_dispatch_signal(&state, expr, env, interp, ctx);
 
         // resolve was called, body completed
         if (ctx.status == main::StackCtxStatus.CTX_COMPLETED) {

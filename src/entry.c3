@@ -686,12 +686,8 @@ fn int main(int argc, char** argv) {
     io::printfn("Region Memory System v3 initialized");
 
     // Run stack engine tests (mmap stacks, context switch, coroutine lifecycle).
-    // Under ASAN, explicit guard-page SIGSEGV tests can destabilize later phases.
-    if (stack_asan_enabled() != 0) {
-        io::printfn("Skipping stack engine tests under ASAN");
-    } else {
-        run_stack_engine_tests();
-    }
+    // The stack engine test runner handles ASAN-specific overflow-test skipping.
+    run_stack_engine_tests();
 
     // Run scope region tests (bump allocator, RC, freelist recycling)
     run_scope_region_tests();
