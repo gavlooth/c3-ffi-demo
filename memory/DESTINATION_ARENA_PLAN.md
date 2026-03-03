@@ -826,3 +826,65 @@ Where conflicts exist, this section is authoritative.
 This is a coherent production baseline: deterministic lifetimes, no stop-the-world pauses, O(1) return transfer on the common path, and bounded fallback on dynamic boundary-heavy graphs.
 
 **Confidence Score:** **0.92**.
+
+---
+
+## 21. Revision XIV (Implementation Closure and Runtime Status)
+
+### Scope
+This section records what is implemented in the runtime as of 2026-03-03 and
+acts as the operational truth for engineering work.
+
+### Implemented Status
+
+**1. Dual-Lane Core Is Live**
+* `ScopeRegion` uses split TEMP/ESCAPE allocation and splice-based return handoff.
+* Normal return flow uses lane promotion + O(1) ESCAPE splice; the old
+  `scope_adopt` path is retired from runtime flow.
+* The runtime remains deterministic (RC/scope lifetime), with no stop-the-world GC.
+
+**2. Boundary Promotion Context Is Shared**
+* Promotion/copy operations run with a shared boundary context (epoch + memo)
+  so partial work is reused instead of duplicated.
+* Budgeted abort is enforced on boundary promotion paths; fallback copy runs in
+  the same epoch context for deterministic reuse semantics.
+
+**3. Root-Boundary Safety Is Explicit**
+* Root promotion uses a dedicated boundary helper that preserves defensive-copy
+  semantics for disjoint transient lifetimes.
+* This prevents accidental unsafe reuse when a value is outside both releasing
+  scope and surviving target chain.
+
+**4. `copy_env_to_scope` Hot Churn Reduced**
+* Env-copy now reuses one promotion context across recursive copy.
+* Shared captured values are memoized at boundary copy sites.
+* Existing target-chain values are reused directly instead of deep-copied.
+* Closure/iterator deep-copy paths are gated by scope-chain membership.
+
+**5. Telemetry Is Tightened**
+* Dead copy-site buckets were removed and active copy-site IDs compacted.
+* Copy-site counting uses `COPY_SITE_COUNT` bounds, and site storage matches
+  the active count.
+
+### Guardrails Implemented (Must Stay Green)
+Memory lifetime regression suite includes explicit gates for:
+* `lifetime: root-boundary promotion defends disjoint scope`
+* `lifetime: cons-barrier fallback sites stay at zero`
+* `lifetime: copy_env shared-value memo gate`
+* `lifetime: jit/copy hot-site budget gate`
+* `lifetime: tco frame-copy budget gate`
+* `lifetime: promotion context memo gate`
+* `lifetime: promotion abort fallback gate`
+
+### Validation Baseline
+Current verified baseline (2026-03-03):
+* Unified tests: `1051 passed, 0 failed`
+* Compiler tests: `73 passed, 0 failed`
+* ASAN run: clean (`c3c build --sanitize=address` + runtime suite)
+
+### Remaining Work Classification
+No architecture-critical migration blockers remain for this plan revision.
+Future work is optimization/tuning only (for example longer soak/benchmark runs),
+not correctness migration.
+
+**Operational Confidence:** **0.95**.

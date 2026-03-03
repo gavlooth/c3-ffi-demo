@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-03-03: Documentation Sync — Memory Model Completion
+
+### Summary
+Synchronized architecture docs and agent guidance with the implemented runtime.
+
+### Changes
+- Updated `memory/DESTINATION_ARENA_PLAN.md` with a new implementation-closure
+  section (`Revision XIV`) that records:
+  - dual-lane status,
+  - shared promotion-context behavior,
+  - root-boundary safety semantics,
+  - env-copy memoization behavior,
+  - telemetry tightening,
+  - required regression gates and verification baseline.
+- Updated `AGENTS.md` so memory/lifetime work explicitly references:
+  - `memory/DESTINATION_ARENA_PLAN.md` for current architecture truth,
+  - `memory/CHANGELOG.md` for implementation history.
+- Added explicit memory-work test expectations in `AGENTS.md`:
+  `c3c build`, `c3c build --sanitize=address`, and full runtime suite.
+
+---
+
 ## 2026-03-03: Memory Polish Finalization (Dual-Lane + Promotion Context)
 
 ### Summary

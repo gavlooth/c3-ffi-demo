@@ -20,6 +20,9 @@ For specialized work, also read:
 - Type and dispatch work: `docs/type-system-syntax.md`
 - Effects and handlers: `docs/EFFECTS_GUIDE.md`
 - Major refactors in progress: `docs/C3_MIGRATION.md`, `docs/REFACTOR_PLAN.md`
+- Memory architecture and status:
+  - `memory/DESTINATION_ARENA_PLAN.md` (authoritative architecture + current implementation status)
+  - `memory/CHANGELOG.md` (chronological implementation log)
 
 ## Core Language/Runtime Invariants
 
@@ -33,6 +36,9 @@ When implementing or reviewing features, preserve these constraints:
 - Lambda arity is strict; partial application should use `_`, `|>`, or explicit `partial`
 - Truthiness rule: only `nil` and `false` are falsy
 - Memory model is deterministic (scope/region based), so lifetime boundaries must stay explicit
+- Runtime memory architecture is dual-lane (`TEMP`/`ESCAPE`) with no stop-the-world GC
+- `scope_adopt` is retired from normal return flow; do not reintroduce it in runtime paths
+- Boundary promotion/fallback logic must preserve shared promotion-context semantics
 
 ## Build and Test
 
@@ -47,6 +53,8 @@ Before finishing significant code changes:
 - Run at least targeted tests for touched areas
 - Run `c3c build` for integration safety
 - When touching memory/lifetime logic, strongly prefer an ASAN pass: `c3c build --sanitize=address`
+- When touching memory/lifetime logic, also run full suite:
+  - `LD_LIBRARY_PATH=/usr/local/lib ./build/main`
 
 ## C3 Implementation Rules
 
