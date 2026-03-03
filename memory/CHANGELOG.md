@@ -1,6 +1,83 @@
 # Changelog
 
-## 2026-03-04: Refcounted Instance with By-Value Fields
+## 2026-03-04: ASAN Scope-Recycling + Stack-Switch Hook Triage
+
+### Summary
+ASAN still reports a deterministic failure during the broader JIT suite (`escape-scope: nested map+reverse`). Added two triage hardening changes to improve signal quality:
+- ASAN-mode scope freelist bypass (avoid stale-reuse noise).
+- Runtime ASAN symbol detection + weak-hook stack-switch integration in the C stack helper shim.
+
+### What changed
+- `src/scope_region.c3`:
+  - Added `scope_freelist_recycle_enabled()` gate.
+  - Under ASAN, `ScopeRegion` structs are freed directly instead of recycled through the freelist.
+  - Non-ASAN behavior is unchanged (freelist reuse remains enabled).
+- `csrc/stack_helpers.c`:
+  - Switched ASAN detection to runtime weak-symbol checks (`__asan_init`).
+  - Updated fiber switch hooks (`stack_asan_start_switch`, `stack_asan_finish_switch`) to call sanitizer fiber APIs when symbols are present, without relying on compile-time ASAN macros.
+- `src/stack_engine.c3`:
+  - Added `stack_runtime_asan_enabled()` and used it for stack sizing and overflow-test skip logic, preventing false "non-ASAN" behavior when runtime ASAN is active.
+
+### Triage result
+- The failure remains reproducible after both safeguards.
+- Current deterministic failure site remains in the same chain:
+  - `lisp.jit_apply_multi_args(...)` (multi-arg apply/dispatch path)
+  - `lisp.jit_eval_in_single_scope(...)`
+  - `main.scope_create(...)` / `scope_chunk_alloc(...)` where corruption becomes visible.
+- With runtime stack-switch hooks enabled, ASAN also reports internal stack-frame consistency checks at the same site, which further indicates upstream stack/state corruption before allocator entry.
+- Last stable frame before crash remains:
+  - `lisp.jit_apply_multi_args(...)` around multi-arg apply/dispatch path
+  - followed by `scope_create -> scope_chunk_alloc` where corruption becomes visible.
+
+## 2026-03-04: Ownership Guardrail Tightening (Model Preservation)
+
+### Summary
+Added explicit model-preservation guardrails to prevent future drift from Omni's scope/region ownership model. The runtime default remains region ownership for language values, with only rare and explicit foreign-resource exceptions.
+
+### Policy Clarification
+- Language values are owned by scope/region boundaries; they do not get ad-hoc per-type lifetime systems.
+- Any local RC policy is exception-only and limited to opaque foreign resources that do not own Omni `Value` graphs.
+- Root pinning is not a correctness fix for boundary bugs and must not be used as a default lifetime strategy.
+- Boundary paths (return copy, env copy, mutation copy, promotion) must stay model-consistent.
+
+### Enforcement
+- Added explicit "Ownership Drift Guardrails (Required)" section in `AGENTS.md`.
+- Previous same-day `Instance` per-type RC experiment remains documented for history but is superseded and treated as rolled back.
+
+## 2026-03-04: Instance Ownership Realigned to Scope Model (no per-type RC)
+
+### Summary
+Replaced `Instance` per-type refcounting with scope-owned lifetime tethering to preserve Omni's core ownership model. `Instance` now carries an `owner_scope`, and wrappers crossing boundaries retain/release that scope. This supersedes the earlier "Instance refcount" approach from the same day.
+
+### Why
+Per-type RC for `Instance` drifted from the runtime model (scope/region ownership) and left nested field payload lifetime unsound for pointer-backed values (for example `FFI_HANDLE` in instance fields). Escaped values could outlive source scopes incorrectly.
+
+### Changes
+- **`Instance` ownership shape** (`src/lisp/value.c3`):
+  - Removed `Instance.refcount`.
+  - Added `Instance.owner_scope`.
+  - `instance_retain`/`instance_release` now call `scope_retain`/`scope_release` on `owner_scope`.
+- **Instance construction** (`src/lisp/eval.c3`):
+  - Added `make_instance_in_scope(...)`.
+  - Each instance allocates a dedicated `owner_scope` (child of `root_scope`).
+  - Field payloads are copied into `owner_scope` via boundary copy.
+  - Wrapper lives in caller/root scope and releases `owner_scope` in dtor.
+- **Boundary copying** (`src/lisp/eval.c3`):
+  - `copy_env_value_fast(...)` no longer returns `INSTANCE` as always shareable.
+  - It now uses boundary-copy path for `INSTANCE` when not in surviving target scope chain.
+- **Mutation path** (`src/lisp/jit_jit_helper_functions.c3`):
+  - `set!` on instance fields now copies value into `instance.owner_scope` (not root pinning).
+  - Cons mutation behavior unchanged (`promote_to_root`).
+- **Guardrail docs** (`AGENTS.md`):
+  - Added explicit ownership policy forbidding per-type RC drift for language values.
+  - Documented rare/sound exception policy (external resource wrappers only).
+
+### Regression Tests
+- Added in `src/lisp/tests_tests.c3`:
+  - `instance field ffi survives scope return`
+  - `closure capture instance ffi field`
+
+## 2026-03-04: Refcounted Instance with By-Value Fields (ROLLED BACK / SUPERSEDED)
 
 ### Summary
 Fixed Instance scope-boundary ownership. Instance struct now stores field data **by value** (`Value[N]`, not `Value*[N]`) and is shared across scope boundaries via refcount retain/release — O(1) per boundary crossing, zero deep copies. This was the root cause of segfaults in tensor-heavy workloads (omni-torch diffusion LLM) where Instance field pointers dangled after scope release.

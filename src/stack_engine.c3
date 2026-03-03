@@ -189,6 +189,14 @@ const usz DEFAULT_STACK_SIZE = 65536;        // 64KB usable stack (normal builds
 const usz ASAN_STACK_SIZE = 262144;          // 256KB usable stack (ASAN-instrumented builds)
 const usz GUARD_SIZE = PAGE_SIZE;      // 4KB guard page
 
+fn bool stack_runtime_asan_enabled() @inline {
+    $if env::ADDRESS_SANITIZER:
+        return true;
+    $else
+        return stack_asan_enabled() != 0;
+    $endif
+}
+
 /**
  * Allocate a stack region: guard page (PROT_NONE) + usable stack (RW).
  *
@@ -288,7 +296,7 @@ fn void stack_pool_init(StackPool* pool) {
     pool.pool_size = 0;
     pool.max_pool = STACK_POOL_MAX;
     pool.next_id = 1;
-    pool.stack_size = stack_asan_enabled() != 0 ? ASAN_STACK_SIZE : DEFAULT_STACK_SIZE;
+    pool.stack_size = stack_runtime_asan_enabled() ? ASAN_STACK_SIZE : DEFAULT_STACK_SIZE;
     stack_guard_init();
 }
 
@@ -1088,7 +1096,7 @@ fn void run_stack_engine_tests() {
     if (test_fpu_preservation()) { io::printfn("  PASS: FPU state preserved across switch"); pass++; }
     else { io::printfn("  FAIL: FPU state preserved across switch"); fail++; }
 
-    if (stack_asan_enabled() != 0) {
+    if (stack_runtime_asan_enabled()) {
         io::printfn("  SKIP: stack overflow recovery (ASAN runtime)");
     } else if (test_stack_overflow_recovery()) { io::printfn("  PASS: stack overflow recovery"); pass++; }
     else { io::printfn("  FAIL: stack overflow recovery"); fail++; }

@@ -124,6 +124,16 @@ fn void scope_global_unlock() @inline {
     g_scope_global_mu.unlock();
 }
 
+fn bool scope_freelist_recycle_enabled() @inline {
+    // Under ASAN prefer direct free over freelist reuse to reduce stale-pointer
+    // reuse noise and surface the first invalid writer.
+    $if env::ADDRESS_SANITIZER:
+        return false;
+    $else
+        return true;
+    $endif
+}
+
 fn void* scope_current_thread_token() @inline {
     return (void*)&g_scope_thread_marker;
 }
@@ -225,15 +235,22 @@ fn ScopeRegion* scope_create(ScopeRegion* parent = null) {
     uint escape_generation = 0;
 
     // Global freelist and generation stamps are shared across threads.
-    scope_global_lock();
-    if (g_scope_freelist != null) {
-        scope = g_scope_freelist;
-        g_scope_freelist = scope.pool_next;
-        g_scope_freelist_count--;
+    if (scope_freelist_recycle_enabled()) {
+        scope_global_lock();
+        if (g_scope_freelist != null) {
+            scope = g_scope_freelist;
+            g_scope_freelist = scope.pool_next;
+            g_scope_freelist_count--;
+        }
+        generation = ++g_scope_generation_counter;
+        escape_generation = ++g_scope_generation_counter;
+        scope_global_unlock();
+    } else {
+        scope_global_lock();
+        generation = ++g_scope_generation_counter;
+        escape_generation = ++g_scope_generation_counter;
+        scope_global_unlock();
     }
-    generation = ++g_scope_generation_counter;
-    escape_generation = ++g_scope_generation_counter;
-    scope_global_unlock();
 
     if (scope == null) {
         scope = (ScopeRegion*)mem::malloc(ScopeRegion.sizeof);
@@ -354,6 +371,10 @@ fn void scope_destroy(ScopeRegion* scope) {
     // 5. Recycle ScopeRegion struct (increment generation, add to freelist)
     scope.generation++;
     scope.escape_generation++;
+    if (!scope_freelist_recycle_enabled()) {
+        mem::free(scope);
+        return;
+    }
     scope_global_lock();
     if (g_scope_freelist_count < SCOPE_FREELIST_MAX) {
         scope.pool_next = g_scope_freelist;
@@ -697,6 +718,10 @@ fn void scope_splice_escapes(ScopeRegion* parent, ScopeRegion* child) {
     child.refcount = 0;
     child.generation++;
     child.escape_generation++;
+    if (!scope_freelist_recycle_enabled()) {
+        mem::free(child);
+        return;
+    }
     scope_global_lock();
     if (g_scope_freelist_count < SCOPE_FREELIST_MAX) {
         child.pool_next = g_scope_freelist;

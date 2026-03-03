@@ -600,47 +600,56 @@ fn Value* format_match_error(Value* scrutinee, Expr* expr, Interp* interp) {
 }
 
 /**
- * Create an Instance value (heap-allocated).
+ * Create an Instance value with a dedicated owner scope.
+ *
+ * owner_scope stores field payload lifetimes.
+ * wrapper_scope stores the Value wrapper and destructor.
  */
-fn Value* make_instance(Interp* interp, TypeId type_id, Value** fields, usz field_count) {
-    Instance* inst = (Instance*)mem::malloc(Instance.sizeof);
-    inst.refcount = 1;
+fn Value* make_instance_in_scope(Interp* interp, main::ScopeRegion* wrapper_scope,
+    TypeId type_id, Value** fields, usz field_count) {
+    main::ScopeRegion* owner_scope = main::scope_create(interp.root_scope);
+    if (owner_scope == null) return null;
+
+    Instance* inst = (Instance*)owner_scope.alloc(Instance.sizeof);
+    inst.owner_scope = owner_scope;
     inst.type_id = type_id;
     inst.field_count = field_count;
     inst.type_arg_count = 0;
-    // Copy field Values BY VALUE into Instance — no scope dependency
+
+    for (usz i = 0; i < MAX_TYPE_FIELDS; i++) {
+        inst.fields[i] = {};
+        inst.fields[i].tag = NIL;
+    }
+
+    // Copy field payloads into owner_scope so Instance never points into caller scope.
+    main::ScopeRegion* saved_scope = interp.current_scope;
+    main::ScopeRegion* saved_releasing = interp.releasing_scope;
+    interp.current_scope = owner_scope;
+    interp.releasing_scope = saved_scope;
     for (usz i = 0; i < field_count && i < MAX_TYPE_FIELDS; i++) {
-        if (fields[i] != null) {
-            inst.fields[i] = *fields[i];
+        if (fields != null && fields[i] != null) {
+            Value* copied = copy_to_parent_site(fields[i], interp, COPY_SITE_GENERIC);
+            if (copied != null) inst.fields[i] = *copied;
         }
     }
+    interp.current_scope = wrapper_scope;
+    interp.releasing_scope = saved_releasing;
+
     Value* v = interp.alloc_value();
-    main::scope_register_dtor(interp.current_scope, (void*)v, &scope_dtor_value);
+    main::scope_register_dtor(wrapper_scope, (void*)v, &scope_dtor_value);
     v.tag = INSTANCE;
     v.instance_val = inst;
+    interp.current_scope = saved_scope;
     return v;
 }
 
-// Root-lifetime variant for instances stored in global env (nullary constructors, etc.)
+fn Value* make_instance(Interp* interp, TypeId type_id, Value** fields, usz field_count) {
+    return make_instance_in_scope(interp, interp.current_scope, type_id, fields, field_count);
+}
+
+// Root-scope wrapper variant for global constants (nullary union constructors, etc.)
 fn Value* make_instance_root(Interp* interp, TypeId type_id, Value** fields, usz field_count) {
-    Instance* inst = (Instance*)mem::malloc(Instance.sizeof);
-    inst.refcount = 1;
-    inst.type_id = type_id;
-    inst.field_count = field_count;
-    inst.type_arg_count = 0;
-    for (usz i = 0; i < field_count && i < MAX_TYPE_FIELDS; i++) {
-        if (fields[i] != null) {
-            inst.fields[i] = *fields[i];
-        }
-    }
-    main::ScopeRegion* saved = interp.current_scope;
-    interp.current_scope = interp.root_scope;
-    Value* v = interp.alloc_value();
-    main::scope_register_dtor(interp.root_scope, (void*)v, &scope_dtor_value);
-    interp.current_scope = saved;
-    v.tag = INSTANCE;
-    v.instance_val = inst;
-    return v;
+    return make_instance_in_scope(interp, interp.root_scope, type_id, fields, field_count);
 }
 
 fn EvalResult eval_deftype(Expr* expr, Env* env, Interp* interp) {
@@ -1713,6 +1722,19 @@ fn Value* promote_to_root(Value* v, Interp* interp) {
     return promote_to_root_site(v, interp, COPY_SITE_PROMOTE_TO_ROOT);
 }
 
+// Copy a value into an arbitrary target scope, preserving releasing_scope context.
+fn Value* copy_to_scope_site(Value* v, Interp* interp, main::ScopeRegion* target_scope, uint site) {
+    if (v == null || interp == null || target_scope == null) return v;
+    main::ScopeRegion* saved_scope = interp.current_scope;
+    main::ScopeRegion* saved_releasing = interp.releasing_scope;
+    interp.current_scope = target_scope;
+    interp.releasing_scope = saved_scope;
+    Value* result = copy_to_parent_site(v, interp, site);
+    interp.releasing_scope = saved_releasing;
+    interp.current_scope = saved_scope;
+    return result;
+}
+
 fn Value* copy_env_value_fast(Value* v, Interp* interp, PromotionContext* ctx = null) {
     if (v == null) return null;
     switch (v.tag) {
@@ -1731,12 +1753,14 @@ fn Value* copy_env_value_fast(Value* v, Interp* interp, PromotionContext* ctx = 
         case PRIMITIVE:
         case HASHMAP:
         case ARRAY:
-        case INSTANCE:
         case METHOD_TABLE:
         case TYPE_INFO:
         case MODULE:
             // Root-lifetime or external-lifetime objects can be shared.
             return v;
+        case INSTANCE:
+            if (in_target_scope_chain((void*)v, interp)) return v;
+            return copy_to_parent_site_ctx(v, interp, COPY_SITE_COPY_ENV_TO_SCOPE, ctx);
         case FFI_HANDLE:
             if (in_target_scope_chain((void*)v, interp)) return v;
             return copy_to_parent_site_ctx(v, interp, COPY_SITE_COPY_ENV_TO_SCOPE, ctx);
@@ -2797,19 +2821,27 @@ fn EvalResult run_program(char[] source, Interp* interp) {
 
         // Expand macros before JIT compilation
         expr = expand_macros_in_expr(expr, interp);
-        JitFn f = jit_compile(expr, interp);
-        if (f != null) {
-            Value* jit_result = jit_exec(f, interp);
-            if (jit_result != null && jit_result.tag == ERROR) {
-                result = eval_error_expr(jit_result.str_chars[:jit_result.str_len], expr);
-            } else {
-                result = eval_ok(jit_result);
+        if (interp.flags.jit_enabled) {
+            JitFn f = jit_compile(expr, interp);
+            if (f != null) {
+                Value* jit_result = jit_exec(f, interp);
+                if (jit_result != null && jit_result.tag == ERROR) {
+                    result = eval_error_expr(jit_result.str_chars[:jit_result.str_len], expr);
+                } else {
+                    result = eval_ok(jit_result);
+                }
+                if (result.error.has_error) break;
+                continue;
             }
-            if (result.error.has_error) break;
-            continue;
+            result = eval_error_expr("JIT compilation failed", expr);
+            break;
         }
-        result = eval_error_expr("JIT compilation failed", expr);
-        break;
+        Value* interpreted = jit_eval(expr, interp.global_env, interp);
+        if (interpreted != null && interpreted.tag == ERROR) {
+            result = eval_error_expr(interpreted.str_chars[:interpreted.str_len], expr);
+            break;
+        }
+        result = eval_ok(interpreted);
     }
 
     exprs.free();
@@ -2853,55 +2885,67 @@ fn EvalResult run(char[] source, Interp* interp) {
     main::ScopeRegion* child_scope = main::scope_create(saved_scope);
     interp.current_scope = child_scope;
 
-    JitFn f = jit_compile(expr, interp);
     EvalResult result;
-    if (f != null) {
-        Value* jit_result = jit_exec(f, interp);
-        bool child_spliced = false;
-        if (jit_result != null) {
-            PromotionContext boundary_ctx = {};
-            promotion_context_begin(interp, &boundary_ctx, PROMOTION_CTX_BUDGET_RETURN);
-            Value* original_result = jit_result;
+    Value* jit_result = null;
+    if (interp.flags.jit_enabled) {
+        JitFn f = jit_compile(expr, interp);
+        if (f == null) {
+            result = eval_error_expr("JIT compilation failed", expr);
             interp.current_scope = saved_scope;
-
-            if (child_scope.refcount == 1) {
-                // Try lane-promotion + splice first (zero-copy return path).
-                if (jit_result.scope_gen != child_scope.escape_generation) {
-                    interp.current_scope = child_scope;
-                    jit_result = promote_to_escape(jit_result, interp);
-                    interp.current_scope = saved_scope;
-                }
-                if (boundary_ctx.aborted) {
-                    main::ScopeRegion* saved_releasing = interp.releasing_scope;
-                    interp.releasing_scope = child_scope;
-                    jit_result = copy_value_if_owned_by_scope(original_result, interp, child_scope, COPY_SITE_RUN_JIT_RESULT);
-                    interp.releasing_scope = saved_releasing;
-                }
-                if (!boundary_ctx.aborted &&
-                    jit_result.scope_gen == child_scope.escape_generation) {
-                    main::scope_splice_escapes(saved_scope, child_scope);
-                    child_scope = null;
-                    child_spliced = true;
-                }
+            if (child_scope != null) {
+                main::scope_release(child_scope);
             }
-
-            if (!child_spliced) {
-                if (main::is_in_scope((void*)jit_result, child_scope)) {
-                    main::ScopeRegion* saved_releasing = interp.releasing_scope;
-                    interp.releasing_scope = child_scope;
-                    jit_result = copy_value_if_owned_by_scope(jit_result, interp, child_scope, COPY_SITE_RUN_JIT_RESULT);
-                    interp.releasing_scope = saved_releasing;
-                }
-            }
-            promotion_context_end(interp, &boundary_ctx);
+            return result;
         }
-        if (jit_result != null && jit_result.tag == ERROR) {
-            result = eval_error_expr(jit_result.str_chars[:jit_result.str_len], expr);
-        } else {
-            result = eval_ok(jit_result);
-        }
+        jit_result = jit_exec(f, interp);
     } else {
-        result = eval_error_expr("JIT compilation failed", expr);
+        // Interpreter-only mode (used by ASAN triage and explicit debug runs).
+        jit_result = jit_eval(expr, interp.global_env, interp);
+    }
+
+    if (jit_result != null) {
+        bool child_spliced = false;
+        PromotionContext boundary_ctx = {};
+        promotion_context_begin(interp, &boundary_ctx, PROMOTION_CTX_BUDGET_RETURN);
+        Value* original_result = jit_result;
+        interp.current_scope = saved_scope;
+
+        if (child_scope.refcount == 1) {
+            // Try lane-promotion + splice first (zero-copy return path).
+            if (jit_result.scope_gen != child_scope.escape_generation) {
+                interp.current_scope = child_scope;
+                jit_result = promote_to_escape(jit_result, interp);
+                interp.current_scope = saved_scope;
+            }
+            if (boundary_ctx.aborted) {
+                main::ScopeRegion* saved_releasing = interp.releasing_scope;
+                interp.releasing_scope = child_scope;
+                jit_result = copy_value_if_owned_by_scope(original_result, interp, child_scope, COPY_SITE_RUN_JIT_RESULT);
+                interp.releasing_scope = saved_releasing;
+            }
+            if (!boundary_ctx.aborted &&
+                jit_result.scope_gen == child_scope.escape_generation) {
+                main::scope_splice_escapes(saved_scope, child_scope);
+                child_scope = null;
+                child_spliced = true;
+            }
+        }
+
+        if (!child_spliced) {
+            if (main::is_in_scope((void*)jit_result, child_scope)) {
+                main::ScopeRegion* saved_releasing = interp.releasing_scope;
+                interp.releasing_scope = child_scope;
+                jit_result = copy_value_if_owned_by_scope(jit_result, interp, child_scope, COPY_SITE_RUN_JIT_RESULT);
+                interp.releasing_scope = saved_releasing;
+            }
+        }
+        promotion_context_end(interp, &boundary_ctx);
+    }
+
+    if (jit_result != null && jit_result.tag == ERROR) {
+        result = eval_error_expr(jit_result.str_chars[:jit_result.str_len], expr);
+    } else {
+        result = eval_ok(jit_result);
     }
 
     // Pop child scope — frees all temporaries from this eval

@@ -39,15 +39,16 @@
 #  define OMNI_NO_ASAN
 #endif
 
-#if OMNI_WITH_ASAN
-void __sanitizer_start_switch_fiber(void **fake_stack_save,
-                                    const void *bottom, size_t size);
-void __sanitizer_finish_switch_fiber(void *fake_stack_save,
-                                     const void **bottom_old, size_t *size_old);
-#endif
+extern void __asan_init(void) __attribute__((weak));
+extern void __sanitizer_start_switch_fiber(void **fake_stack_save,
+                                           const void *bottom, size_t size)
+    __attribute__((weak));
+extern void __sanitizer_finish_switch_fiber(void *fake_stack_save,
+                                            const void **bottom_old, size_t *size_old)
+    __attribute__((weak));
 
 int stack_asan_enabled(void) {
-    return OMNI_WITH_ASAN ? 1 : 0;
+    return __asan_init != NULL ? 1 : 0;
 }
 
 /* ============================================================
@@ -73,23 +74,23 @@ void fpu_restore(uint32_t mxcsr, uint32_t x87cw) {
 
 /* ASAN-aware stack switch hooks (no-op without ASAN). */
 void stack_asan_start_switch(void** fake_stack_save, void* stack_bottom, size_t stack_size) {
-#if OMNI_WITH_ASAN
-    __sanitizer_start_switch_fiber(fake_stack_save, stack_bottom, stack_size);
-#else
+    if (__sanitizer_start_switch_fiber != NULL) {
+        __sanitizer_start_switch_fiber(fake_stack_save, stack_bottom, stack_size);
+        return;
+    }
     (void)fake_stack_save;
     (void)stack_bottom;
     (void)stack_size;
-#endif
 }
 
 void stack_asan_finish_switch(void* fake_stack_save) {
-#if OMNI_WITH_ASAN
-    const void* old_bottom = NULL;
-    size_t old_size = 0;
-    __sanitizer_finish_switch_fiber(fake_stack_save, &old_bottom, &old_size);
-#else
+    if (__sanitizer_finish_switch_fiber != NULL) {
+        const void* old_bottom = NULL;
+        size_t old_size = 0;
+        __sanitizer_finish_switch_fiber(fake_stack_save, &old_bottom, &old_size);
+        return;
+    }
     (void)fake_stack_save;
-#endif
 }
 
 /* Raw stack copy for continuation clone.

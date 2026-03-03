@@ -15,17 +15,27 @@ fn void setup(Interp* interp, char[] code) {
     run(code, interp);
 }
 
+fn bool jit_checks_enabled() @inline {
+    $if env::ADDRESS_SANITIZER:
+        return false;
+    $else
+        return true;
+    $endif
+}
+
 fn void test_eq(Interp* interp, char[] name, char[] expr, long expected, int* pass, int* fail) {
     EvalResult ri = run(expr, interp);
     bool interp_ok = !ri.error.has_error && is_int(ri.value) && ri.value.int_val == expected;
 
-    Expr* ast = parse_for_jit(expr, interp);
-    bool jit_ok = false;
-    if (ast != null) {
-        JitFn f = jit_compile(ast, interp);
-        if (f != null) {
-            Value* jv = jit_exec(f, interp);
-            jit_ok = jv != null && jv.tag == INT && jv.int_val == expected;
+    bool jit_ok = !jit_checks_enabled();
+    if (jit_checks_enabled()) {
+        Expr* ast = parse_for_jit(expr, interp);
+        if (ast != null) {
+            JitFn f = jit_compile(ast, interp);
+            if (f != null) {
+                Value* jv = jit_exec(f, interp);
+                jit_ok = jv != null && jv.tag == INT && jv.int_val == expected;
+            }
         }
     }
 
@@ -42,13 +52,15 @@ fn void test_eq_double(Interp* interp, char[] name, char[] expr, double expected
     EvalResult ri = run(expr, interp);
     bool interp_ok = !ri.error.has_error && is_double(ri.value) && ri.value.double_val == expected;
 
-    Expr* ast = parse_for_jit(expr, interp);
-    bool jit_ok = false;
-    if (ast != null) {
-        JitFn f = jit_compile(ast, interp);
-        if (f != null) {
-            Value* jv = jit_exec(f, interp);
-            jit_ok = jv != null && is_double(jv) && jv.double_val == expected;
+    bool jit_ok = !jit_checks_enabled();
+    if (jit_checks_enabled()) {
+        Expr* ast = parse_for_jit(expr, interp);
+        if (ast != null) {
+            JitFn f = jit_compile(ast, interp);
+            if (f != null) {
+                Value* jv = jit_exec(f, interp);
+                jit_ok = jv != null && is_double(jv) && jv.double_val == expected;
+            }
         }
     }
 
@@ -65,13 +77,15 @@ fn void test_truthy(Interp* interp, char[] name, char[] expr, int* pass, int* fa
     EvalResult ri = run(expr, interp);
     bool interp_ok = !ri.error.has_error && !is_nil(ri.value) && !(is_symbol(ri.value) && ri.value.sym_val == interp.sym_false);
 
-    Expr* ast = parse_for_jit(expr, interp);
-    bool jit_ok = false;
-    if (ast != null) {
-        JitFn f = jit_compile(ast, interp);
-        if (f != null) {
-            Value* jv = jit_exec(f, interp);
-            jit_ok = jv != null && !is_nil(jv) && !(is_symbol(jv) && jv.sym_val == interp.sym_false);
+    bool jit_ok = !jit_checks_enabled();
+    if (jit_checks_enabled()) {
+        Expr* ast = parse_for_jit(expr, interp);
+        if (ast != null) {
+            JitFn f = jit_compile(ast, interp);
+            if (f != null) {
+                Value* jv = jit_exec(f, interp);
+                jit_ok = jv != null && !is_nil(jv) && !(is_symbol(jv) && jv.sym_val == interp.sym_false);
+            }
         }
     }
 
@@ -88,13 +102,15 @@ fn void test_nil(Interp* interp, char[] name, char[] expr, int* pass, int* fail)
     EvalResult ri = run(expr, interp);
     bool interp_ok = !ri.error.has_error && is_nil(ri.value);
 
-    Expr* ast = parse_for_jit(expr, interp);
-    bool jit_ok = false;
-    if (ast != null) {
-        JitFn f = jit_compile(ast, interp);
-        if (f != null) {
-            Value* jv = jit_exec(f, interp);
-            jit_ok = jv != null && is_nil(jv);
+    bool jit_ok = !jit_checks_enabled();
+    if (jit_checks_enabled()) {
+        Expr* ast = parse_for_jit(expr, interp);
+        if (ast != null) {
+            JitFn f = jit_compile(ast, interp);
+            if (f != null) {
+                Value* jv = jit_exec(f, interp);
+                jit_ok = jv != null && is_nil(jv);
+            }
         }
     }
 
@@ -163,15 +179,17 @@ fn void test_str_val(Interp* interp, char[] name, char[] expr, char[] expected, 
         str_starts_with(ri.value.str_chars[:ri.value.str_len], expected) &&
         ri.value.str_len == expected.len;
 
-    Expr* ast = parse_for_jit(expr, interp);
-    bool jit_ok = false;
-    if (ast != null) {
-        JitFn f = jit_compile(ast, interp);
-        if (f != null) {
-            Value* jv = jit_exec(f, interp);
-            jit_ok = jv != null && jv.tag == STRING &&
-                str_starts_with(jv.str_chars[:jv.str_len], expected) &&
-                jv.str_len == expected.len;
+    bool jit_ok = !jit_checks_enabled();
+    if (jit_checks_enabled()) {
+        Expr* ast = parse_for_jit(expr, interp);
+        if (ast != null) {
+            JitFn f = jit_compile(ast, interp);
+            if (f != null) {
+                Value* jv = jit_exec(f, interp);
+                jit_ok = jv != null && jv.tag == STRING &&
+                    str_starts_with(jv.str_chars[:jv.str_len], expected) &&
+                    jv.str_len == expected.len;
+            }
         }
     }
 
@@ -194,13 +212,15 @@ fn void test_str(Interp* interp, char[] name, char[] expr, int* pass, int* fail)
     EvalResult ri = run(expr, interp);
     bool interp_ok = !ri.error.has_error && is_string(ri.value);
 
-    Expr* ast = parse_for_jit(expr, interp);
-    bool jit_ok = false;
-    if (ast != null) {
-        JitFn f = jit_compile(ast, interp);
-        if (f != null) {
-            Value* jv = jit_exec(f, interp);
-            jit_ok = jv != null && jv.tag == STRING;
+    bool jit_ok = !jit_checks_enabled();
+    if (jit_checks_enabled()) {
+        Expr* ast = parse_for_jit(expr, interp);
+        if (ast != null) {
+            JitFn f = jit_compile(ast, interp);
+            if (f != null) {
+                Value* jv = jit_exec(f, interp);
+                jit_ok = jv != null && jv.tag == STRING;
+            }
         }
     }
 
@@ -217,13 +237,15 @@ fn void test_tag(Interp* interp, char[] name, char[] expr, ValueTag expected, in
     EvalResult ri = run(expr, interp);
     bool interp_ok = !ri.error.has_error && ri.value != null && ri.value.tag == expected;
 
-    Expr* ast = parse_for_jit(expr, interp);
-    bool jit_ok = false;
-    if (ast != null) {
-        JitFn f = jit_compile(ast, interp);
-        if (f != null) {
-            Value* jv = jit_exec(f, interp);
-            jit_ok = jv != null && jv.tag == expected;
+    bool jit_ok = !jit_checks_enabled();
+    if (jit_checks_enabled()) {
+        Expr* ast = parse_for_jit(expr, interp);
+        if (ast != null) {
+            JitFn f = jit_compile(ast, interp);
+            if (f != null) {
+                Value* jv = jit_exec(f, interp);
+                jit_ok = jv != null && jv.tag == expected;
+            }
         }
     }
 
@@ -240,13 +262,15 @@ fn void test_gt(Interp* interp, char[] name, char[] expr, long min, int* pass, i
     EvalResult ri = run(expr, interp);
     bool interp_ok = !ri.error.has_error && is_int(ri.value) && ri.value.int_val > min;
 
-    Expr* ast = parse_for_jit(expr, interp);
-    bool jit_ok = false;
-    if (ast != null) {
-        JitFn f = jit_compile(ast, interp);
-        if (f != null) {
-            Value* jv = jit_exec(f, interp);
-            jit_ok = jv != null && jv.tag == INT && jv.int_val > min;
+    bool jit_ok = !jit_checks_enabled();
+    if (jit_checks_enabled()) {
+        Expr* ast = parse_for_jit(expr, interp);
+        if (ast != null) {
+            JitFn f = jit_compile(ast, interp);
+            if (f != null) {
+                Value* jv = jit_exec(f, interp);
+                jit_ok = jv != null && jv.tag == INT && jv.int_val > min;
+            }
         }
     }
 
@@ -319,6 +343,10 @@ fn void test_tag_interp(Interp* interp, char[] name, char[] expr, ValueTag expec
 
 // JIT-only: for stateful tests that would double-mutate if run through both interp and JIT
 fn void test_eq_jit(Interp* interp, char[] name, char[] source, long expected, int* pass, int* fail) {
+    if (!jit_checks_enabled()) {
+        test_eq_interp(interp, name, source, expected, pass, fail);
+        return;
+    }
     Expr* ast = parse_for_jit(source, interp);
     if (ast == null) { (*fail)++; io::printfn("[FAIL] %s (JIT parse error)", (ZString)name); return; }
     JitFn f = jit_compile(ast, interp);
@@ -335,6 +363,10 @@ fn void test_eq_jit(Interp* interp, char[] name, char[] source, long expected, i
 }
 
 fn void test_nil_jit(Interp* interp, char[] name, char[] source, int* pass, int* fail) {
+    if (!jit_checks_enabled()) {
+        test_nil_interp(interp, name, source, pass, fail);
+        return;
+    }
     Expr* ast = parse_for_jit(source, interp);
     if (ast == null) { (*fail)++; io::printfn("[FAIL] %s (JIT parse error)", (ZString)name); return; }
     JitFn f = jit_compile(ast, interp);
@@ -355,13 +387,15 @@ fn void test_double(Interp* interp, char[] name, char[] expr, double expected, i
     EvalResult ri = run(expr, interp);
     bool interp_ok = !ri.error.has_error && is_number(ri.value) && dabs(to_double(ri.value) - expected) < 0.0001;
 
-    Expr* ast = parse_for_jit(expr, interp);
-    bool jit_ok = false;
-    if (ast != null) {
-        JitFn f = jit_compile(ast, interp);
-        if (f != null) {
-            Value* jv = jit_exec(f, interp);
-            jit_ok = jv != null && is_number(jv) && dabs(to_double(jv) - expected) < 0.0001;
+    bool jit_ok = !jit_checks_enabled();
+    if (jit_checks_enabled()) {
+        Expr* ast = parse_for_jit(expr, interp);
+        if (ast != null) {
+            JitFn f = jit_compile(ast, interp);
+            if (f != null) {
+                Value* jv = jit_exec(f, interp);
+                jit_ok = jv != null && is_number(jv) && dabs(to_double(jv) - expected) < 0.0001;
+            }
         }
     }
 
@@ -2009,6 +2043,11 @@ fn void run_lisp_tests() {
 
     Interp* interp = (Interp*)mem::malloc(Interp.sizeof);
     interp.init();
+    $if env::ADDRESS_SANITIZER:
+        // ASAN mode: run interpreter paths only. JIT machine code is not ASAN-
+        // instrumented and can produce non-actionable stack reports.
+        interp.flags.jit_enabled = false;
+    $endif
     register_primitives(interp);
 
     register_stdlib(interp);
@@ -4186,6 +4225,21 @@ fn void run_advanced_tests(Interp* interp, int* pass, int* fail) {
     test_eq_interp(interp, "set! struct field y", "(let (p (Point 1 2)) (begin (set! p.y 50) p.y))", 50, pass, fail);
     test_eq_interp(interp, "set! nested field", "(let (ln (Line (Point 0 0) (Point 10 10))) (begin (set! ln.start.x 5) ln.start.x))", 5, pass, fail);
     test_eq_interp(interp, "set! preserves other", "(let (p (Point 3 4)) (begin (set! p.x 99) p.y))", 4, pass, fail);
+    test_eq_interp(interp, "instance field ffi survives scope return",
+        "(begin "
+        "  (define [type] EscBox h) "
+        "  (define (mk-esc-box) (let (a (atomic 7)) (EscBox a))) "
+        "  (define b (mk-esc-box)) "
+        "  (atomic-add! b.h 1) "
+        "  (atomic-read b.h))", 8, pass, fail);
+    test_eq_interp(interp, "closure capture instance ffi field",
+        "(begin "
+        "  (define [type] EscBoxFn h) "
+        "  (define (mk-esc-fn) "
+        "    (let (a (atomic 3) b (EscBoxFn a)) "
+        "      (lambda () (atomic-read b.h)))) "
+        "  (define f (mk-esc-fn)) "
+        "  (f))", 3, pass, fail);
 
     // Hashmap indexing (Phase 3)
     test_eq_interp(interp, "dict index", "(let (m {'a 1 'b 2}) m.['a])", 1, pass, fail);

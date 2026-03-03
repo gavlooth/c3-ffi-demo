@@ -39,6 +39,27 @@ When implementing or reviewing features, preserve these constraints:
 - Runtime memory architecture is dual-lane (`TEMP`/`ESCAPE`) with no stop-the-world GC
 - `scope_adopt` is retired from normal return flow; do not reintroduce it in runtime paths
 - Boundary promotion/fallback logic must preserve shared promotion-context semantics
+- Ownership guardrail: default to scope/region ownership (`scope_retain`/`scope_release`) for runtime values.
+- Do not introduce per-type refcount lifetimes for language values (`Instance`, `Closure`, etc.).
+- Sound exception policy: only rare external-resource wrappers (for example `FFI_HANDLE` boxes over foreign pointers) may use local RC, and only with explicit finalizer policy + boundary tests.
+- Any ownership-model exception must include regression tests for:
+  - scope return boundary (`let`/function return),
+  - closure capture/env copy boundary,
+  - destruction path (no UAF/double-free).
+
+## Ownership Drift Guardrails (Required)
+
+Use this as a hard gate before merging memory/lifetime changes:
+
+- Keep Omni value lifetimes region-centric: `ScopeRegion` is the owner of language values; wrappers may cross boundaries, but ownership authority stays with region retain/release.
+- Do not add per-type lifetime systems for language objects. If a type stores or embeds Omni `Value`, it must not introduce its own independent RC/GC path.
+- Do not use root pinning as a general escape hatch for correctness. Root pinning is allowed only for explicit process-lifetime singletons.
+- Treat boundary logic as the source of truth: return-copy, env-copy, mutation copy, and promotion paths must agree on the same ownership model.
+- If an exception is unavoidable, it must be rare, local, and explicit:
+  - applies only to opaque foreign resources that do not own Omni `Value` graphs,
+  - has one clear finalizer authority,
+  - includes tests for return/env/destruction boundaries,
+  - is recorded in `memory/CHANGELOG.md` with rationale and rollback note.
 
 ## Build and Test
 

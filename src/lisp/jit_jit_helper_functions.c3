@@ -980,19 +980,17 @@ fn Value* jit_eval_set_path(Interp* interp, Expr* expr, Value* value, Env* env) 
     // Mutate the last field
     SymbolId last_seg = expr.set_expr.path_segments[expr.set_expr.path_segment_count - 1];
 
-    // Promote value to root scope — cons cells and instances live in root_scope,
-    // so storing a child-scope value would create a dangling pointer after scope release.
-    value = promote_to_root(value, interp);
-
     // Cons cell mutation
     if (current != null && current.tag == CONS) {
+        // Cons payloads are modeled as root/shared values.
+        Value* stored = promote_to_root(value, interp);
         if ((uint)last_seg == (uint)interp.sym_car) {
-            current.cons_val.car = value;
-            return value;
+            current.cons_val.car = stored;
+            return stored;
         }
         if ((uint)last_seg == (uint)interp.sym_cdr) {
-            current.cons_val.cdr = value;
-            return value;
+            current.cons_val.cdr = stored;
+            return stored;
         }
         return raise_error(interp, "set!: cons only supports .car and .cdr");
     }
@@ -1004,8 +1002,11 @@ fn Value* jit_eval_set_path(Interp* interp, Expr* expr, Value* value, Env* env) 
             for (usz fi = 0; fi < ti.field_count; fi++) {
                 if (ti.fields[fi].name == last_seg) {
                     if (fi < current.instance_val.field_count) {
-                        if (value != null) current.instance_val.fields[fi] = *value;
-                        return value;
+                        main::ScopeRegion* target = current.instance_val.owner_scope;
+                        if (target == null) target = interp.root_scope;
+                        Value* stored = copy_to_scope_site(value, interp, target, COPY_SITE_ENV_PROMOTE_FOR_TARGET);
+                        if (stored != null) current.instance_val.fields[fi] = *stored;
+                        return stored;
                     }
                 }
             }

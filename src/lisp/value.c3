@@ -588,17 +588,17 @@ fn bool TypeRegistry.is_subtype(TypeRegistry* self, TypeId child, TypeId parent)
 }
 
 /**
- * Instance — User-defined type instance (heap-allocated, refcounted).
- * Shared across scope boundaries via retain/release.
+ * Instance — User-defined type instance (scope-owned object).
  *
- * OWNERSHIP RULE: Instance owns its field data by value (not pointers).
- * Fields are Value structs copied into the Instance at construction.
- * No scope pointers, no promotion, no deep-copy on boundary crossing.
- * The Instance is self-contained — free it and everything is freed.
- * NEVER store scope-allocated Value* pointers in Instance fields.
+ * OWNERSHIP RULE:
+ * - Each Instance is allocated in a dedicated owner_scope.
+ * - Instance field payloads are copied/promoted into owner_scope.
+ * - Value wrappers that reference this Instance retain/release owner_scope.
+ *
+ * This keeps ownership in the scope/region model (no per-type RC drift).
  */
 struct Instance {
-    uint refcount;
+    main::ScopeRegion* owner_scope;
     TypeId type_id;
     Value[MAX_TYPE_FIELDS] fields;     // Value structs BY VALUE — not pointers
     usz field_count;
@@ -985,18 +985,15 @@ fn void ffi_handle_release(FfiHandle* box) {
     mem::free(box);
 }
 
-// Instance refcount management
+// Instance scope-ownership management
 fn void instance_retain(Instance* inst) @inline {
-    if (inst != null) inst.refcount++;
+    if (inst == null || inst.owner_scope == null) return;
+    main::scope_retain(inst.owner_scope);
 }
 
 fn void instance_release(Instance* inst) @inline {
-    if (inst == null) return;
-    if (inst.refcount > 1) {
-        inst.refcount--;
-        return;
-    }
-    mem::free(inst);
+    if (inst == null || inst.owner_scope == null) return;
+    main::scope_release(inst.owner_scope);
 }
 
 fn Value* make_ffi_handle_ex(Interp* interp, void* handle, char[] name,
