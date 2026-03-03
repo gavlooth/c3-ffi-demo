@@ -508,11 +508,8 @@ fn Value* jit_eval_in_single_scope(Expr* body, Env* call_env, Interp* interp) {
         result.scope_gen == active_scope.escape_generation) {
         // Dual-lane fast path: splice ESCAPE chunks and drop TEMP chunks.
         main::scope_splice_escapes(saved_scope, active_scope);
-    } else if (active_scope.refcount == 1 && result != null && result.tag == CONS) {
-        // Legacy O(1) path: adopt whole scope (includes temporaries).
-        main::scope_adopt(saved_scope, active_scope);
     } else {
-        // Scalar return: copy O(1) + release frees all temporaries.
+        // Non-escape return: explicit promotion + scope release.
         interp.releasing_scope = active_scope;
         if (result != null) {
             result = copy_to_parent(result, interp);
@@ -553,19 +550,16 @@ fn Value* jit_eval_in_call_scope(Expr* body, Env* call_env, Interp* interp) {
     interp.escape_scope = saved_escape;
 
     // Step 1: Merge active_scope (call_scope) into result_scope.
-    // If nothing escaped (RC=1), adopt is safe and O(1) — chunks move to result_scope.
-    // Otherwise, copy the result value from active_scope to result_scope.
+    // If result was built in ESCAPE lane and nothing escaped, splice O(1).
+    // Otherwise, copy promoted result to result_scope and release active_scope.
     if (active_scope != result_scope) {
-        if (active_scope.refcount == 1) {
-            if (result != null && result.scope_gen == active_scope.escape_generation) {
-                // Dual-lane fast path: splice only ESCAPE chunks into result_scope.
-                main::scope_splice_escapes(result_scope, active_scope);
-            } else {
-                // Legacy O(1) path: move all chunks/dtors to result_scope.
-                main::scope_adopt(result_scope, active_scope);
-            }
+        if (active_scope.refcount == 1 &&
+            result != null &&
+            result.scope_gen == active_scope.escape_generation) {
+            // Dual-lane fast path: splice only ESCAPE chunks into result_scope.
+            main::scope_splice_escapes(result_scope, active_scope);
         } else {
-            // Something escaped from call_scope — copy result, then release
+            // Non-escape return or captured scope: promote result, then release.
             interp.current_scope = result_scope;
             interp.releasing_scope = active_scope;
             if (result != null) {
@@ -577,14 +571,11 @@ fn Value* jit_eval_in_call_scope(Expr* body, Env* call_env, Interp* interp) {
     }
 
     // Step 2: Promote result from result_scope to caller's scope.
-    // Only adopt for CONS returns (the O(n) case). Scalar returns use O(1) copy + release
-    // to free temporaries and avoid garbage accumulation.
+    // Splice ESCAPE lane on the fast path; otherwise copy + release.
     interp.current_scope = saved_scope;
     if (result_scope.refcount == 1 && result != null &&
         result.scope_gen == result_scope.escape_generation) {
         main::scope_splice_escapes(saved_scope, result_scope);
-    } else if (result_scope.refcount == 1 && result != null && result.tag == CONS) {
-        main::scope_adopt(saved_scope, result_scope);
     } else {
         interp.releasing_scope = result_scope;
         if (result != null) {
