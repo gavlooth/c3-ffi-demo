@@ -106,12 +106,6 @@ const usz SCOPE_FREELIST_MAX = 64;  // Don't hoard too many recycled scopes
 uint g_scope_generation_counter = 0;
 
 struct ScopeTransferStats {
-    usz adopt_calls;
-    usz adopt_temp_chunk_bytes;
-    usz adopt_escape_chunk_bytes;
-    usz adopt_dtors;
-    usz adopt_alloc_bytes;
-
     usz splice_calls;
     usz splice_escape_chunk_bytes;
     usz splice_temp_chunk_bytes_freed;
@@ -141,11 +135,6 @@ fn usz scope_dtor_count(ScopeDtor* dtor) @inline {
 
 fn void scope_print_memory_stats() {
     io::printn("=== Scope Transfer Stats ===");
-    io::printfn("scope_adopt calls: %d", (long)g_scope_transfer_stats.adopt_calls);
-    io::printfn("scope_adopt temp bytes retained: %d", (long)g_scope_transfer_stats.adopt_temp_chunk_bytes);
-    io::printfn("scope_adopt escape bytes retained: %d", (long)g_scope_transfer_stats.adopt_escape_chunk_bytes);
-    io::printfn("scope_adopt dtor entries moved: %d", (long)g_scope_transfer_stats.adopt_dtors);
-    io::printfn("scope_adopt alloc_bytes merged: %d", (long)g_scope_transfer_stats.adopt_alloc_bytes);
     io::printfn("scope_splice_escapes calls: %d", (long)g_scope_transfer_stats.splice_calls);
     io::printfn("scope_splice escape bytes moved: %d", (long)g_scope_transfer_stats.splice_escape_chunk_bytes);
     io::printfn("scope_splice temp bytes freed: %d", (long)g_scope_transfer_stats.splice_temp_chunk_bytes_freed);
@@ -658,78 +647,6 @@ fn void scope_splice_escapes(ScopeRegion* parent, ScopeRegion* child) {
     }
 }
 
-fn void scope_adopt(ScopeRegion* parent, ScopeRegion* child) {
-    if (child == null || parent == null) return;
-
-    g_scope_transfer_stats.adopt_calls++;
-    g_scope_transfer_stats.adopt_temp_chunk_bytes += scope_chunk_bytes(child.chunks);
-    g_scope_transfer_stats.adopt_escape_chunk_bytes += scope_chunk_bytes(child.escape_chunks);
-    g_scope_transfer_stats.adopt_dtors += scope_dtor_count(child.dtors) + scope_dtor_count(child.escape_dtors);
-    g_scope_transfer_stats.adopt_alloc_bytes += child.alloc_bytes;
-
-    // Move child's dtors to parent (prepend child's dtor list to parent's)
-    if (child.dtors != null) {
-        ScopeDtor* last = child.dtors;
-        while (last.next != null) last = last.next;
-        last.next = parent.dtors;
-        parent.dtors = child.dtors;
-        child.dtors = null;
-    }
-
-    // Move child's escape dtors to parent
-    if (child.escape_dtors != null) {
-        ScopeDtor* last = child.escape_dtors;
-        while (last.next != null) last = last.next;
-        last.next = parent.escape_dtors;
-        parent.escape_dtors = child.escape_dtors;
-        child.escape_dtors = null;
-    }
-
-    // Move child's chunks to parent (prepend to parent's chunk list)
-    if (child.chunks != null) {
-        ScopeChunk* last = child.chunks;
-        while (last.next != null) last = last.next;
-        last.next = parent.chunks;
-        parent.chunks = child.chunks;
-        child.chunks = null;
-    }
-
-    // Move child's escape chunks to parent
-    if (child.escape_chunks != null) {
-        ScopeChunk* last = child.escape_chunks;
-        while (last.next != null) last = last.next;
-        last.next = parent.escape_chunks;
-        parent.escape_chunks = child.escape_chunks;
-        child.escape_chunks = null;
-    }
-
-    // Update parent stats
-    parent.alloc_bytes += child.alloc_bytes;
-    parent.alloc_count += child.alloc_count;
-
-    // Detach child from parent (don't release — parent is the same scope we're adopting into)
-    if (child.parent != null) {
-        scope_release(child.parent);
-        child.parent = null;
-    }
-
-    // Reset child and return to freelist
-    child.bump = null;
-    child.limit = null;
-    child.escape_bump = null;
-    child.escape_limit = null;
-    child.refcount = 0;
-    child.generation++;
-    child.escape_generation++;
-    if (g_scope_freelist_count < SCOPE_FREELIST_MAX) {
-        child.pool_next = g_scope_freelist;
-        g_scope_freelist = child;
-        g_scope_freelist_count++;
-    } else {
-        mem::free(child);
-    }
-}
-
 // =============================================================================
 // Freelist cleanup (for shutdown)
 // =============================================================================
@@ -1049,35 +966,7 @@ fn void run_scope_region_tests() {
         scope_release(s);
     }
 
-    // Test 15: scope_adopt
-    {
-        ScopeRegion* parent = scope_create(null);
-        ScopeRegion* child = scope_create(parent);
-        void* p1 = child.alloc(24);
-        void* p2 = child.alloc(24);
-        usz child_bytes = child.alloc_bytes;
-        usz child_count = child.alloc_count;
-        usz parent_bytes_before = parent.alloc_bytes;
-
-        // p1 and p2 should be in child, not parent
-        if (is_in_scope(p1, child)) { passed++; } else { io::printn("FAIL: adopt: p1 in child before"); failed++; }
-        if (!is_in_scope(p1, parent)) { passed++; } else { io::printn("FAIL: adopt: p1 not in parent before"); failed++; }
-
-        // Adopt child into parent
-        scope_adopt(parent, child);
-        // child is now recycled — don't use it
-
-        // p1 and p2 should now be findable in parent
-        if (is_in_scope(p1, parent)) { passed++; } else { io::printn("FAIL: adopt: p1 in parent after"); failed++; }
-        if (is_in_scope(p2, parent)) { passed++; } else { io::printn("FAIL: adopt: p2 in parent after"); failed++; }
-
-        // Parent stats updated
-        if (parent.alloc_bytes == parent_bytes_before + child_bytes) { passed++; } else { io::printn("FAIL: adopt: bytes"); failed++; }
-
-        scope_release(parent);
-    }
-
-    // Test 16: scope_splice_escapes
+    // Test 15: scope_splice_escapes
     {
         ScopeRegion* parent = scope_create(null);
         ScopeRegion* child = scope_create(parent);

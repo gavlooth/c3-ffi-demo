@@ -1201,7 +1201,8 @@ fn Value* copy_to_parent(Value* v, Interp* interp) {
     // Scope-aware optimization: if value is NOT in the scope being released,
     // reuse only when it is already in the target scope chain.
     // Note: uses is_in_scope (chunk walk) rather than scope_gen stamp because
-    // scope_adopt moves chunks between scopes without updating value stamps.
+    // chunk-transfer paths (scope_splice_escapes) move allocations without
+    // rewriting per-value scope_gen stamps.
     if (interp.releasing_scope != null && !main::is_in_scope((void*)v, interp.releasing_scope)) {
         if (in_target_scope_chain((void*)v, interp)) {
             g_copy_to_parent_stats.fast_reuse_hits++;
