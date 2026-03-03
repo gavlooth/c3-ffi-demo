@@ -1619,6 +1619,56 @@ fn void run_scheduler_tests(Interp* interp, int* pass, int* fail) {
             (*fail)++;
         }
     }
+
+    // Timed join with zero timeout should fail if task is not complete yet.
+    {
+        EvalResult r = run(
+            "(begin "
+            "  (define t (thread-spawn 'sleep-ms 20)) "
+            "  (thread-join-timeout t 0))",
+            interp);
+        if (r.error.has_error || (r.value != null && r.value.tag == ERROR)) {
+            io::printn("[PASS] thread-join-timeout immediate timeout");
+            (*pass)++;
+        } else {
+            io::printn("[FAIL] thread-join-timeout immediate timeout");
+            (*fail)++;
+        }
+    }
+
+    // Timed join succeeds when timeout budget is sufficient.
+    {
+        EvalResult r = run(
+            "(begin "
+            "  (define t (thread-spawn 'sleep-ms 5)) "
+            "  (thread-join-timeout t 200) "
+            "  1)",
+            interp);
+        if (!r.error.has_error && is_int(r.value) && r.value.int_val == 1) {
+            io::printn("[PASS] thread-join-timeout success");
+            (*pass)++;
+        } else {
+            io::printn("[FAIL] thread-join-timeout success");
+            (*fail)++;
+        }
+    }
+
+    // Canceling a task should make join fail with cancellation.
+    {
+        EvalResult r = run(
+            "(begin "
+            "  (define t (thread-spawn 'sleep-ms 20)) "
+            "  (thread-cancel t) "
+            "  (thread-join t))",
+            interp);
+        if (r.error.has_error || (r.value != null && r.value.tag == ERROR)) {
+            io::printn("[PASS] thread-cancel causes join cancellation");
+            (*pass)++;
+        } else {
+            io::printn("[FAIL] thread-cancel causes join cancellation");
+            (*fail)++;
+        }
+    }
 }
 
 fn void run_deduce_tests(Interp* interp, int* pass, int* fail) {

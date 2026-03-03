@@ -680,6 +680,7 @@ fn Expr* Parser.parse_lambda(Parser* self) {
         e.lambda.params = null;
         e.lambda.has_rest = true;
         e.lambda.rest_param = rest_param;
+        e.lambda.has_typed_params = false;
         e.lambda.param_annotations = null;
         e.lambda.body = body;
         return e;
@@ -3087,4 +3088,3 @@ fn Value* Parser.parse_datum(Parser* self) {
     v.tag = NIL;
     return v;
 }
-

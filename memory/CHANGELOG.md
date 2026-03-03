@@ -1,5 +1,50 @@
 # Changelog
 
+## 2026-03-03: Thread Task Timeouts/Cancellation + Variadic Lambda Parse Fix
+
+### Summary
+Extended thread task effects with timeout and cancellation semantics, and fixed a parser initialization bug that could misclassify `(lambda (.. rest) ...)` as typed.
+
+### Changes
+- **Thread task lifecycle states** (`src/lisp/scheduler.c3`):
+  - Added `ThreadTaskState` (`PENDING`, `RUNNING`, `DONE`, `CANCELLED`) and `cancel_requested`.
+  - Worker path now claims task state before execution (`scheduler_try_begin_thread_task`).
+  - Running-task cancellation is cooperative; pending-task cancellation is immediate.
+- **New task primitives/effects**:
+  - Added runtime primitives:
+    - `__raw-thread-join-timeout` (`prim_thread_join_timeout`)
+    - `__raw-thread-cancel` (`prim_thread_cancel`)
+  - Added stdlib effects/wrappers:
+    - `(io/thread-join-timeout (^Any args))` + `thread-join-timeout`
+    - `(io/thread-cancel (^Int task-id))` + `thread-cancel`
+  - Added fast-path mappings in primitive registration for both effects.
+- **Join implementation refactor** (`src/lisp/scheduler.c3`):
+  - Shared join logic extracted to `scheduler_thread_join_impl(...)`.
+  - `thread-join` now uses the shared path with infinite timeout.
+  - `thread-join-timeout` uses bounded wait and returns timeout error deterministically.
+- **Parser correctness fix** (`src/lisp/parser_parser.c3`):
+  - In `(lambda (.. rest) ...)` parsing branch, explicitly initialize:
+    - `e.lambda.has_typed_params = false`
+  - Prevents accidental method-table creation when redefining primitive names with rest-only lambdas (for example `(define collect (lambda (.. args) args))`).
+- **Tests** (`src/lisp/tests_tests.c3`):
+  - Added scheduler tests:
+    - `thread-join-timeout immediate timeout`
+    - `thread-join-timeout success`
+    - `thread-cancel causes join cancellation`
+  - Existing variadic lambda tests now pass again with parser fix.
+
+### Files Modified
+- `src/lisp/scheduler.c3`
+- `src/lisp/eval.c3`
+- `stdlib/stdlib.lisp`
+- `src/lisp/parser_parser.c3`
+- `src/lisp/tests_tests.c3`
+
+### Validation
+- `c3c build` ✅
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` ✅
+  - Unified tests: `1133 passed, 0 failed`
+
 ## 2026-03-03: Thread Guardrails — Scope Affinity + Minimal Task Effects
 
 ### Summary

@@ -125,9 +125,17 @@ struct OffloadQueue {
     thread::Thread worker;
 }
 
+enum ThreadTaskState : char {
+    THREAD_TASK_PENDING,
+    THREAD_TASK_RUNNING,
+    THREAD_TASK_DONE,
+    THREAD_TASK_CANCELLED
+}
+
 struct ThreadTaskEntry {
     bool active;
-    bool completed;
+    bool cancel_requested;
+    ThreadTaskState state;
     OffloadCompletion* completion;
 }
 
@@ -279,9 +287,40 @@ fn usz scheduler_alloc_thread_task() {
         if (g_scheduler.thread_tasks[i].active) continue;
         g_scheduler.thread_tasks[i] = {};
         g_scheduler.thread_tasks[i].active = true;
+        g_scheduler.thread_tasks[i].state = THREAD_TASK_PENDING;
+        g_scheduler.thread_tasks[i].cancel_requested = false;
         return i;
     }
     return NO_TASK;
+}
+
+fn OffloadCompletion* scheduler_make_task_cancel_completion() {
+    OffloadCompletion* completion = (OffloadCompletion*)mem::malloc(OffloadCompletion.sizeof);
+    if (completion == null) return null;
+    *completion = {};
+    scheduler_set_offload_error(completion, "thread task cancelled");
+    return completion;
+}
+
+fn bool scheduler_try_begin_thread_task(usz task_id) {
+    if (task_id >= MAX_THREAD_TASKS || !g_scheduler.thread_task_mu_ready) return false;
+    g_scheduler.thread_task_mu.lock();
+    defer g_scheduler.thread_task_mu.unlock();
+
+    if (!g_scheduler.thread_tasks[task_id].active) return false;
+    ThreadTaskEntry* task = &g_scheduler.thread_tasks[task_id];
+    if (task.state == THREAD_TASK_CANCELLED || task.state == THREAD_TASK_DONE) return false;
+    if (task.cancel_requested) {
+        task.cancel_requested = false;
+        task.state = THREAD_TASK_CANCELLED;
+        if (task.completion == null) {
+            task.completion = scheduler_make_task_cancel_completion();
+        }
+        return false;
+    }
+
+    task.state = THREAD_TASK_RUNNING;
+    return true;
 }
 
 fn void scheduler_complete_thread_task(usz task_id, OffloadCompletion* completion) {
@@ -292,13 +331,27 @@ fn void scheduler_complete_thread_task(usz task_id, OffloadCompletion* completio
     }
 
     g_scheduler.thread_task_mu.lock();
-    if (!g_scheduler.thread_tasks[task_id].active || g_scheduler.thread_tasks[task_id].completed) {
+    if (!g_scheduler.thread_tasks[task_id].active) {
         g_scheduler.thread_task_mu.unlock();
         scheduler_free_offload_completion(completion);
         return;
     }
-    g_scheduler.thread_tasks[task_id].completion = completion;
-    g_scheduler.thread_tasks[task_id].completed = true;
+    ThreadTaskEntry* task = &g_scheduler.thread_tasks[task_id];
+
+    if (task.cancel_requested || task.state == THREAD_TASK_CANCELLED) {
+        task.cancel_requested = false;
+        scheduler_free_offload_completion(completion);
+        if (task.completion == null) {
+            task.completion = scheduler_make_task_cancel_completion();
+        }
+        task.state = THREAD_TASK_CANCELLED;
+        g_scheduler.thread_task_mu.unlock();
+        return;
+    }
+
+    if (task.completion != null) scheduler_free_offload_completion(task.completion);
+    task.completion = completion;
+    task.state = THREAD_TASK_DONE;
     g_scheduler.thread_task_mu.unlock();
 }
 
@@ -307,11 +360,15 @@ fn OffloadCompletion* scheduler_take_thread_task_completion(usz task_id) {
 
     g_scheduler.thread_task_mu.lock();
     defer g_scheduler.thread_task_mu.unlock();
-    if (!g_scheduler.thread_tasks[task_id].active || !g_scheduler.thread_tasks[task_id].completed) {
+    if (!g_scheduler.thread_tasks[task_id].active) {
+        return null;
+    }
+    ThreadTaskEntry* task = &g_scheduler.thread_tasks[task_id];
+    if (task.state != THREAD_TASK_DONE && task.state != THREAD_TASK_CANCELLED) {
         return null;
     }
 
-    OffloadCompletion* completion = g_scheduler.thread_tasks[task_id].completion;
+    OffloadCompletion* completion = task.completion;
     g_scheduler.thread_tasks[task_id] = {};
     return completion;
 }
@@ -321,13 +378,47 @@ fn void scheduler_drop_thread_task(usz task_id) {
     g_scheduler.thread_task_mu.lock();
     OffloadCompletion* completion = null;
     if (g_scheduler.thread_tasks[task_id].active) {
-        if (g_scheduler.thread_tasks[task_id].completed) {
-            completion = g_scheduler.thread_tasks[task_id].completion;
-        }
+        completion = g_scheduler.thread_tasks[task_id].completion;
         g_scheduler.thread_tasks[task_id] = {};
     }
     g_scheduler.thread_task_mu.unlock();
     if (completion != null) scheduler_free_offload_completion(completion);
+}
+
+fn bool scheduler_thread_task_exists(usz task_id) {
+    if (task_id >= MAX_THREAD_TASKS || !g_scheduler.thread_task_mu_ready) return false;
+    g_scheduler.thread_task_mu.lock();
+    bool exists = g_scheduler.thread_tasks[task_id].active;
+    g_scheduler.thread_task_mu.unlock();
+    return exists;
+}
+
+fn bool scheduler_cancel_thread_task(usz task_id, bool* out_already_done) {
+    if (out_already_done != null) *out_already_done = false;
+    if (task_id >= MAX_THREAD_TASKS || !g_scheduler.thread_task_mu_ready) return false;
+
+    g_scheduler.thread_task_mu.lock();
+    defer g_scheduler.thread_task_mu.unlock();
+    ThreadTaskEntry* task = &g_scheduler.thread_tasks[task_id];
+    if (!task.active) return false;
+
+    if (task.state == THREAD_TASK_DONE || task.state == THREAD_TASK_CANCELLED) {
+        if (out_already_done != null) *out_already_done = true;
+        return true;
+    }
+
+    if (task.state == THREAD_TASK_PENDING) {
+        task.state = THREAD_TASK_CANCELLED;
+        task.cancel_requested = false;
+        if (task.completion == null) {
+            task.completion = scheduler_make_task_cancel_completion();
+        }
+        return true;
+    }
+
+    // Running: cooperative cancel request, completion will convert to cancelled.
+    task.cancel_requested = true;
+    return true;
 }
 
 fn bool scheduler_offload_compress(bool gzip_mode, SharedBlob* input, OffloadCompletion* completion) {
@@ -415,6 +506,13 @@ fn int scheduler_offload_worker_main(void* arg) {
         g_scheduler.offload_queue.tail++;
         g_scheduler.offload_queue.count--;
         g_scheduler.offload_queue.mu.unlock();
+
+        if (work.task_id != NO_TASK) {
+            if (!scheduler_try_begin_thread_task(work.task_id)) {
+                shared_blob_release(work.blob);
+                continue;
+            }
+        }
 
         OffloadCompletion* completion = scheduler_execute_offload(work);
         if (completion == null) {
@@ -1127,6 +1225,33 @@ fn Value* prim_thread_spawn(Value*[] args, Env* env, Interp* interp) {
     return make_int(interp, (long)task_id);
 }
 
+fn Value* scheduler_thread_join_impl(long raw_id, long timeout_ms, Interp* interp) {
+    if (raw_id < 0) return raise_error(interp, "thread-join: invalid task id");
+    usz task_id = (usz)raw_id;
+    if (task_id >= MAX_THREAD_TASKS) return raise_error(interp, "thread-join: invalid task id");
+
+    long remaining = timeout_ms;
+    while (true) {
+        OffloadCompletion* completion = scheduler_take_thread_task_completion(task_id);
+        if (completion != null) {
+            Value* out = scheduler_value_from_offload_completion(completion, interp);
+            scheduler_free_offload_completion(completion);
+            return out;
+        }
+
+        if (!scheduler_thread_task_exists(task_id)) {
+            return raise_error(interp, "thread-join: task already joined or invalid");
+        }
+
+        if (remaining == 0) {
+            return raise_error(interp, "thread-join: timeout");
+        }
+
+        c_usleep(1000);
+        if (remaining > 0) remaining--;
+    }
+}
+
 fn Value* prim_thread_join(Value*[] args, Env* env, Interp* interp) {
     (void)env;
     scheduler_init();
@@ -1138,32 +1263,53 @@ fn Value* prim_thread_join(Value*[] args, Env* env, Interp* interp) {
         return raise_error(interp, "thread-join: not allowed inside a running fiber");
     }
 
-    long raw_id = args[0].int_val;
-    if (raw_id < 0) return raise_error(interp, "thread-join: invalid task id");
-    usz task_id = (usz)raw_id;
-    if (task_id >= MAX_THREAD_TASKS) return raise_error(interp, "thread-join: invalid task id");
+    return scheduler_thread_join_impl(args[0].int_val, -1, interp);
+}
 
-    usz spins = 0;
-    while (true) {
-        OffloadCompletion* completion = scheduler_take_thread_task_completion(task_id);
-        if (completion != null) {
-            Value* out = scheduler_value_from_offload_completion(completion, interp);
-            scheduler_free_offload_completion(completion);
-            return out;
-        }
-
-        if (g_scheduler.thread_task_mu_ready) {
-            bool exists = false;
-            g_scheduler.thread_task_mu.lock();
-            exists = g_scheduler.thread_tasks[task_id].active;
-            g_scheduler.thread_task_mu.unlock();
-            if (!exists) return raise_error(interp, "thread-join: task already joined or invalid");
-        }
-
-        c_usleep(1000);
-        spins++;
-        if (spins > 60000000) return raise_error(interp, "thread-join: timeout");
+fn Value* prim_thread_join_timeout(Value*[] args, Env* env, Interp* interp) {
+    (void)env;
+    scheduler_init();
+    if (!g_scheduler.thread_task_mu_ready) return raise_error(interp, "thread-join-timeout: task mutex unavailable");
+    if (args.len < 1 || !is_cons(args[0])) {
+        return raise_error(interp, "thread-join-timeout: expected (task-id . timeout-ms)");
     }
+    if (scheduler_is_running_fiber_context()) {
+        return raise_error(interp, "thread-join-timeout: not allowed inside a running fiber");
+    }
+
+    Value* pair = args[0];
+    Value* task_id = pair.cons_val.car;
+    Value* timeout_val = pair.cons_val.cdr;
+    if (!is_int(task_id) || !is_int(timeout_val)) {
+        return raise_error(interp, "thread-join-timeout: expected integer task-id and timeout-ms");
+    }
+
+    long timeout_ms = timeout_val.int_val;
+    if (timeout_ms < 0) {
+        return raise_error(interp, "thread-join-timeout: timeout-ms must be >= 0");
+    }
+    return scheduler_thread_join_impl(task_id.int_val, timeout_ms, interp);
+}
+
+fn Value* prim_thread_cancel(Value*[] args, Env* env, Interp* interp) {
+    (void)env;
+    scheduler_init();
+    if (!g_scheduler.thread_task_mu_ready) return raise_error(interp, "thread-cancel: task mutex unavailable");
+    if (args.len < 1 || !is_int(args[0])) {
+        return raise_error(interp, "thread-cancel: expected task-id integer");
+    }
+
+    long raw_id = args[0].int_val;
+    if (raw_id < 0) return raise_error(interp, "thread-cancel: invalid task id");
+    usz task_id = (usz)raw_id;
+    if (task_id >= MAX_THREAD_TASKS) return raise_error(interp, "thread-cancel: invalid task id");
+
+    bool already_done = false;
+    if (!scheduler_cancel_thread_task(task_id, &already_done)) {
+        return raise_error(interp, "thread-cancel: task already joined or invalid");
+    }
+    if (already_done) return make_nil(interp);
+    return interp.global_env.lookup(interp.symbols.intern("true"));
 }
 
 // ============================================================
