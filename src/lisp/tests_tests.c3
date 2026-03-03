@@ -1868,7 +1868,7 @@ fn void run_memory_lifetime_regression_tests(Interp* interp, int* pass, int* fai
         }
     }
 
-    // Invariant: jit_single and copy_env copy sites remain bounded on hot closure loop.
+    // Invariant: core hot copy sites remain bounded on hot closure loop.
     {
         reset_memory_promotion_stats();
 
@@ -1886,21 +1886,68 @@ fn void run_memory_lifetime_regression_tests(Interp* interp, int* pass, int* fai
 
         usz jit_single_delta = copy_to_parent_site_calls(COPY_SITE_JIT_SINGLE_SCOPE_RETURN);
         usz copy_env_delta = copy_to_parent_site_calls(COPY_SITE_COPY_ENV_TO_SCOPE);
+        usz run_jit_delta = copy_to_parent_site_calls(COPY_SITE_RUN_JIT_RESULT);
+        usz tco_frame_delta = copy_to_parent_site_calls(COPY_SITE_JIT_TCO_FRAME_COPY);
 
         bool ok_eval = !r.error.has_error &&
                        r.value != null &&
                        r.value.tag == INT &&
                        r.value.int_val == 180900;
-        bool ok_budget = jit_single_delta <= 32 && copy_env_delta <= 32;
+        bool ok_budget = jit_single_delta <= 32 &&
+                         copy_env_delta <= 32 &&
+                         run_jit_delta <= 8 &&
+                         tco_frame_delta <= 64;
         bool ok = ok_eval && ok_budget;
 
         if (ok) {
-            io::printn("[PASS] lifetime: jit_single+copy_env budget gate");
+            io::printn("[PASS] lifetime: jit/copy hot-site budget gate");
             (*pass)++;
         } else {
-            io::printfn("[FAIL] lifetime: jit_single+copy_env budget gate (jit_single=%d copy_env=%d tag=%d int=%d err=%s)",
+            io::printfn("[FAIL] lifetime: jit/copy hot-site budget gate (jit_single=%d copy_env=%d run_jit=%d tco_frame=%d tag=%d int=%d err=%s)",
                 (long)jit_single_delta,
                 (long)copy_env_delta,
+                (long)run_jit_delta,
+                (long)tco_frame_delta,
+                r.value != null ? (int)r.value.tag : -1,
+                (r.value != null && r.value.tag == INT) ? (int)r.value.int_val : -1,
+                r.error.has_error ? "yes" : "no");
+            (*fail)++;
+        }
+    }
+
+    // Invariant: named-let TCO fast path keeps frame-copy churn near-zero.
+    {
+        reset_memory_promotion_stats();
+
+        EvalResult r = run(
+            "(let ^rec (loop (lambda (n acc) "
+            "  (if (= n 5000) "
+            "      acc "
+            "      (loop (+ n 1) (+ acc 1))))) "
+            "  (loop 0 0))",
+            interp);
+
+        usz tco_frame_delta = copy_to_parent_site_calls(COPY_SITE_JIT_TCO_FRAME_COPY);
+        usz copy_env_delta = copy_to_parent_site_calls(COPY_SITE_COPY_ENV_TO_SCOPE);
+        usz run_jit_delta = copy_to_parent_site_calls(COPY_SITE_RUN_JIT_RESULT);
+
+        bool ok_eval = !r.error.has_error &&
+                       r.value != null &&
+                       r.value.tag == INT &&
+                       r.value.int_val == 5000;
+        bool ok_budget = tco_frame_delta <= 16 &&
+                         copy_env_delta <= 8 &&
+                         run_jit_delta <= 4;
+        bool ok = ok_eval && ok_budget;
+
+        if (ok) {
+            io::printn("[PASS] lifetime: tco frame-copy budget gate");
+            (*pass)++;
+        } else {
+            io::printfn("[FAIL] lifetime: tco frame-copy budget gate (tco_frame=%d copy_env=%d run_jit=%d tag=%d int=%d err=%s)",
+                (long)tco_frame_delta,
+                (long)copy_env_delta,
+                (long)run_jit_delta,
                 r.value != null ? (int)r.value.tag : -1,
                 (r.value != null && r.value.tag == INT) ? (int)r.value.int_val : -1,
                 r.error.has_error ? "yes" : "no");
