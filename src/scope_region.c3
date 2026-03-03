@@ -478,6 +478,46 @@ fn void scope_reset(ScopeRegion* scope) {
     scope.alloc_count = 0;
 }
 
+/**
+ * Reset only the TEMP lane for reuse while preserving ESCAPE lane allocations.
+ * Safe only when RC == 1 (no external scope ownership changes during reset).
+ */
+fn void scope_reset_temp_lane(ScopeRegion* scope) {
+    assert(scope.refcount == 1, "scope_reset_temp_lane: refcount must be 1");
+
+    // TEMP dtors only; ESCAPE dtors remain registered.
+    scope_run_dtors(scope);
+
+    // Free overflow TEMP chunks, keep oldest TEMP chunk.
+    ScopeChunk* keep = null;
+    ScopeChunk* c = scope.chunks;
+    while (c != null) {
+        ScopeChunk* next = c.next;
+        if (next == null) {
+            keep = c;
+        } else {
+            mem::free(c);
+        }
+        c = next;
+    }
+
+    if (keep != null) {
+        keep.next = null;
+        scope.chunks = keep;
+        scope.bump = scope_chunk_data(keep);
+        scope.limit = scope.bump + keep.capacity;
+    } else {
+        // Defensive fallback: recreate baseline TEMP chunk if scope had none.
+        ScopeChunk* chunk = scope_chunk_alloc(SCOPE_CHUNK_INITIAL);
+        chunk.next = null;
+        scope.chunks = chunk;
+        scope.bump = scope_chunk_data(chunk);
+        scope.limit = scope.bump + chunk.capacity;
+    }
+
+    scope.dtors = null;
+}
+
 // =============================================================================
 // Scope membership check (for escape-scope optimization)
 // =============================================================================
@@ -836,6 +876,45 @@ fn void run_scope_region_tests() {
         if (s.escape_dtors == null) { passed++; } else { io::printn("FAIL: reset escape dtors"); failed++; }
         if (s.escape_bump == null && s.escape_limit == null) { passed++; } else { io::printn("FAIL: reset escape bump/limit"); failed++; }
         scope_release(s);
+    }
+
+    // Test 7c: scope_reset_temp_lane preserves ESCAPE lane
+    {
+        ScopeRegion* s = scope_create(null);
+        int* temp_counter = (int*)mem::malloc(int.sizeof);
+        int* escape_counter = (int*)mem::malloc(int.sizeof);
+        *temp_counter = 0;
+        *escape_counter = 0;
+
+        void* temp_ptr = s.alloc(16);
+        void* escape_ptr = s.alloc_escape(16);
+
+        scope_register_dtor(s, (void*)temp_counter, fn void(void* ptr) {
+            int* c = (int*)ptr;
+            *c = *c + 1;
+        });
+        scope_register_dtor_escape(s, (void*)escape_counter, fn void(void* ptr) {
+            int* c = (int*)ptr;
+            *c = *c + 1;
+        });
+
+        scope_reset_temp_lane(s);
+
+        bool ok = *temp_counter == 1 &&
+                  *escape_counter == 0 &&
+                  s.dtors == null &&
+                  s.escape_dtors != null &&
+                  escape_ptr != null &&
+                  is_in_scope(escape_ptr, s) &&
+                  temp_ptr != null;
+
+        if (ok) { passed++; } else { io::printn("FAIL: reset_temp_lane invariants"); failed++; }
+
+        scope_release(s);
+        if (*escape_counter == 1) { passed++; } else { io::printn("FAIL: reset_temp_lane escape dtor on destroy"); failed++; }
+
+        mem::free(temp_counter);
+        mem::free(escape_counter);
     }
 
     // Test 10: Large allocation (bigger than initial chunk)
