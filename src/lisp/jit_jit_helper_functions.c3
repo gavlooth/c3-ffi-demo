@@ -959,7 +959,7 @@ fn Value* jit_eval_set_path(Interp* interp, Expr* expr, Value* value, Env* env) 
                 for (usz fi = 0; fi < ti.field_count; fi++) {
                     if (ti.fields[fi].name == expr.set_expr.path_segments[si]) {
                         if (fi < current.instance_val.field_count) {
-                            current = current.instance_val.fields[fi];
+                            current = &current.instance_val.fields[fi];
                             found = true;
                             break;
                         }
@@ -1004,7 +1004,7 @@ fn Value* jit_eval_set_path(Interp* interp, Expr* expr, Value* value, Env* env) 
             for (usz fi = 0; fi < ti.field_count; fi++) {
                 if (ti.fields[fi].name == last_seg) {
                     if (fi < current.instance_val.field_count) {
-                        current.instance_val.fields[fi] = value;
+                        if (value != null) current.instance_val.fields[fi] = *value;
                         return value;
                     }
                 }

@@ -588,13 +588,21 @@ fn bool TypeRegistry.is_subtype(TypeRegistry* self, TypeId child, TypeId parent)
 }
 
 /**
- * Instance — User-defined type instance (heap-allocated like HashMap/Array).
+ * Instance — User-defined type instance (heap-allocated, refcounted).
+ * Shared across scope boundaries via retain/release.
+ *
+ * OWNERSHIP RULE: Instance owns its field data by value (not pointers).
+ * Fields are Value structs copied into the Instance at construction.
+ * No scope pointers, no promotion, no deep-copy on boundary crossing.
+ * The Instance is self-contained — free it and everything is freed.
+ * NEVER store scope-allocated Value* pointers in Instance fields.
  */
 struct Instance {
+    uint refcount;
     TypeId type_id;
-    Value*[MAX_TYPE_FIELDS] fields;
+    Value[MAX_TYPE_FIELDS] fields;     // Value structs BY VALUE — not pointers
     usz field_count;
-    TypeId[MAX_TYPE_PARAMS] type_args;   // Inferred type arguments (e.g., T=Int for Box<Int>)
+    TypeId[MAX_TYPE_PARAMS] type_args;
     usz type_arg_count;
 }
 
@@ -706,7 +714,7 @@ fn void scope_dtor_value(void* ptr) {
             }
         case INSTANCE:
             if (v.instance_val != null) {
-                mem::free(v.instance_val);
+                instance_release(v.instance_val);
                 v.instance_val = null;
             }
         case METHOD_TABLE:
@@ -975,6 +983,20 @@ fn void ffi_handle_release(FfiHandle* box) {
         box.lib_handle = null;
     }
     mem::free(box);
+}
+
+// Instance refcount management
+fn void instance_retain(Instance* inst) @inline {
+    if (inst != null) inst.refcount++;
+}
+
+fn void instance_release(Instance* inst) @inline {
+    if (inst == null) return;
+    if (inst.refcount > 1) {
+        inst.refcount--;
+        return;
+    }
+    mem::free(inst);
 }
 
 fn Value* make_ffi_handle_ex(Interp* interp, void* handle, char[] name,
@@ -2733,7 +2755,7 @@ fn void print_value(Value* v, SymbolTable* syms) {
                 io::printf("instance:%d", v.instance_val.type_id);
                 for (usz fi = 0; fi < v.instance_val.field_count; fi++) {
                     io::print(" ");
-                    print_value(v.instance_val.fields[fi], syms);
+                    print_value(&v.instance_val.fields[fi], syms);
                 }
                 io::print(")");
             } else {

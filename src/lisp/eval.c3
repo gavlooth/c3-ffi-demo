@@ -604,19 +604,40 @@ fn Value* format_match_error(Value* scrutinee, Expr* expr, Interp* interp) {
  */
 fn Value* make_instance(Interp* interp, TypeId type_id, Value** fields, usz field_count) {
     Instance* inst = (Instance*)mem::malloc(Instance.sizeof);
+    inst.refcount = 1;
+    inst.type_id = type_id;
+    inst.field_count = field_count;
+    inst.type_arg_count = 0;
+    // Copy field Values BY VALUE into Instance — no scope dependency
+    for (usz i = 0; i < field_count && i < MAX_TYPE_FIELDS; i++) {
+        if (fields[i] != null) {
+            inst.fields[i] = *fields[i];
+        }
+    }
+    Value* v = interp.alloc_value();
+    main::scope_register_dtor(interp.current_scope, (void*)v, &scope_dtor_value);
+    v.tag = INSTANCE;
+    v.instance_val = inst;
+    return v;
+}
+
+// Root-lifetime variant for instances stored in global env (nullary constructors, etc.)
+fn Value* make_instance_root(Interp* interp, TypeId type_id, Value** fields, usz field_count) {
+    Instance* inst = (Instance*)mem::malloc(Instance.sizeof);
+    inst.refcount = 1;
     inst.type_id = type_id;
     inst.field_count = field_count;
     inst.type_arg_count = 0;
     for (usz i = 0; i < field_count && i < MAX_TYPE_FIELDS; i++) {
-        // Instance wrapper lives in root_scope, so field values must also be rooted.
-        inst.fields[i] = promote_to_root(fields[i], interp);
+        if (fields[i] != null) {
+            inst.fields[i] = *fields[i];
+        }
     }
-    // Allocate Value in root_scope so it persists across scope releases
-    main::ScopeRegion* saved_scope = interp.current_scope;
+    main::ScopeRegion* saved = interp.current_scope;
     interp.current_scope = interp.root_scope;
     Value* v = interp.alloc_value();
     main::scope_register_dtor(interp.root_scope, (void*)v, &scope_dtor_value);
-    interp.current_scope = saved_scope;
+    interp.current_scope = saved;
     v.tag = INSTANCE;
     v.instance_val = inst;
     return v;
@@ -878,8 +899,8 @@ fn EvalResult eval_defunion(Expr* expr, Env* env, Interp* interp) {
 
         // Create constructor for this variant
         if (variant.field_count == 0) {
-            // Nullary variant: define as a constant instance (make_instance uses root_scope)
-            Value* inst = make_instance(interp, var_id, null, 0);
+            // Nullary variant: define as a constant instance in root_scope
+            Value* inst = make_instance_root(interp, var_id, null, 0);
             env_define_with_barrier(interp.global_env, variant.name, inst, interp);
         } else {
             // Variant with fields: define as constructor primitive (make_primitive uses root_scope)
@@ -1313,9 +1334,24 @@ fn Value* copy_to_parent(Value* v, Interp* interp) {
             result.cont_val = v.cont_val;
         case HASHMAP:
         case ARRAY:
-        case INSTANCE:
         case METHOD_TABLE:
             result = v;  // Value allocated in root_scope; backing data is malloc'd with registered destructors
+        case INSTANCE: {
+            // Refcounted sharing: new Value wrapper + retain Instance*
+            bool instance_in_releasing =
+                interp.releasing_scope != null &&
+                main::is_in_scope((void*)v, interp.releasing_scope);
+            if (instance_in_releasing || !in_target_scope_chain((void*)v, interp)) {
+                result = interp.alloc_value();
+                result.tag = INSTANCE;
+                result.instance_val = v.instance_val;
+                instance_retain(v.instance_val);
+                main::scope_register_dtor(interp.current_scope, (void*)result, &scope_dtor_value);
+            } else {
+                result = v;
+            }
+            break;
+        }
         case FFI_HANDLE: {
             bool ffi_in_releasing_scope =
                 interp.releasing_scope != null &&
@@ -1449,11 +1485,11 @@ fn Value* copy_value_if_owned_by_scope(Value* v, Interp* interp, main::ScopeRegi
         case PRIMITIVE:
         case HASHMAP:
         case ARRAY:
-        case INSTANCE:
         case METHOD_TABLE:
         case TYPE_INFO:
         case MODULE:
             return v;
+        case INSTANCE:
         case FFI_HANDLE:
             if (in_target_scope_chain((void*)v, interp)) return v;
             return copy_to_parent_site_ctx(v, interp, site, interp.active_promotion_ctx);
@@ -1618,7 +1654,6 @@ fn Value* promote_to_escape(Value* v, Interp* interp) {
         case PRIMITIVE:
         case HASHMAP:
         case ARRAY:
-        case INSTANCE:
         case METHOD_TABLE:
         case TYPE_INFO:
         case MODULE:
@@ -1627,6 +1662,17 @@ fn Value* promote_to_escape(Value* v, Interp* interp) {
             result = interp.alloc_value_escape();
             *result = *v;
             result.scope_gen = interp.current_scope.escape_generation;
+        case INSTANCE: {
+            // Refcounted sharing: new Value wrapper in escape lane + retain
+            if (!promotion_context_consume(ctx, 1)) return v;
+            result = interp.alloc_value_escape();
+            result.tag = INSTANCE;
+            result.scope_gen = interp.current_scope.escape_generation;
+            result.instance_val = v.instance_val;
+            instance_retain(v.instance_val);
+            main::scope_register_dtor_escape(interp.current_scope, (void*)result, &scope_dtor_value);
+            break;
+        }
         case FFI_HANDLE:
             if (!promotion_context_consume(ctx, 1)) return v;
             result = interp.alloc_value_escape();
@@ -1925,7 +1971,7 @@ fn EvalResult eval_path(Expr* expr, Env* env, Interp* interp) {
                 for (usz fi = 0; fi < ti.field_count; fi++) {
                     if (ti.fields[fi].name == key) {
                         if (fi < current.instance_val.field_count) {
-                            current = current.instance_val.fields[fi];
+                            current = &current.instance_val.fields[fi];
                             found_field = true;
                             break;
                         }
@@ -2230,7 +2276,7 @@ fn MatchResult match_pattern(Pattern* pat, Value* val, Interp* interp) {
             }
             MatchResult result = match_ok();
             for (usz ci = 0; ci < pat.ctor_sub_count; ci++) {
-                MatchResult sub = match_pattern(pat.ctor_sub_patterns[ci], val.instance_val.fields[ci], interp);
+                MatchResult sub = match_pattern(pat.ctor_sub_patterns[ci], &val.instance_val.fields[ci], interp);
                 if (!sub.matched) { result.cleanup(); return match_fail(); }
                 result.merge(&sub);
                 sub.cleanup();

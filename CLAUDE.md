@@ -40,6 +40,30 @@ Read `docs/C3_STYLE.md` before writing any C3 code. Key rules:
 - **switch**: Exhaustive — no default case for ValueTag switches (compiler catches missing tags).
 - **ASAN**: Run `c3c build --sanitize=address` when debugging memory issues.
 
+## Scope-Boundary Ownership Rules (MANDATORY — NEVER VIOLATE)
+
+When a heap-allocated struct (Instance, Closure, FfiHandle, etc.) can be shared across scope boundaries, it MUST follow one of these two models. There is no third option.
+
+### Model A: Refcounted sharing (Instance, FfiHandle, Closure)
+- The struct is `malloc`'d with a `refcount` field, initialized to 1.
+- `copy_to_parent` / `promote_to_escape` create a **new Value wrapper** and call `retain()`. O(1).
+- Scope dtor calls `release()` — frees when refcount hits 0.
+- **The struct MUST own its data by value** (not pointers into scopes).
+  - Instance: `Value[N] fields` (by value), NOT `Value*[N] fields` (pointers).
+  - FfiHandle: `lib_handle` is a raw C pointer (scope-independent).
+  - Closure: `env` points to env_scope (refcounted separately).
+
+### Model B: Root-scope pinning (Primitive, MethodTable, TypeInfo)
+- Allocated once in `root_scope`, lives forever.
+- `copy_to_parent` returns as-is (already in root).
+- Only for truly global, singleton values.
+
+### NEVER do any of these:
+- **NEVER** deep-copy structs on every boundary crossing — this is O(fields) per function return.
+- **NEVER** store scope-allocated `Value*` pointers inside a shared struct — they dangle when the scope is released.
+- **NEVER** assume a struct "lives in root_scope" without verifying — user code creates instances in call scopes.
+- **NEVER** add a `promote_to_root` call as a "fix" for boundary bugs — find the real ownership issue.
+
 ## Conventions
 - Multi-param lambdas with strict arity (NO auto-curry); use `_` placeholder, `|>` pipe, or `partial` for partial application
 - `_` is T_UNDERSCORE — wildcard in match patterns, placeholder in call args `(+ 1 _)` → lambda

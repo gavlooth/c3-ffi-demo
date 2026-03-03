@@ -1,5 +1,51 @@
 # Changelog
 
+## 2026-03-04: Refcounted Instance with By-Value Fields
+
+### Summary
+Fixed Instance scope-boundary ownership. Instance struct now stores field data **by value** (`Value[N]`, not `Value*[N]`) and is shared across scope boundaries via refcount retain/release — O(1) per boundary crossing, zero deep copies. This was the root cause of segfaults in tensor-heavy workloads (omni-torch diffusion LLM) where Instance field pointers dangled after scope release.
+
+### Root Cause
+Three code paths returned INSTANCE values as-is across scope boundaries, assuming they lived in root_scope:
+1. `copy_to_parent` — INSTANCE grouped with HASHMAP/ARRAY as "root allocated"
+2. `promote_to_escape` — shallow-copied Value wrapper but not Instance struct/fields
+3. `copy_value_if_owned_by_scope` — returned INSTANCE as-is
+
+When user code creates instances inside function calls (e.g., Tensor constructors in omni-torch), the Instance lives in the call scope. On function return, the Value wrapper and field `Value*` pointers became dangling.
+
+### Fix
+- **Instance.fields**: `Value*[MAX_TYPE_FIELDS]` -> `Value[MAX_TYPE_FIELDS]` — fields stored by value, no scope pointers
+- **Instance.refcount**: new field, init to 1
+- **`instance_retain` / `instance_release`**: O(1) refcount helpers
+- **`copy_to_parent` INSTANCE**: new Value wrapper + `instance_retain` (O(1))
+- **`promote_to_escape` INSTANCE**: escape-lane wrapper + `instance_retain` (O(1))
+- **`copy_value_if_owned_by_scope` INSTANCE**: delegates to `copy_to_parent`
+- **`scope_dtor_value` INSTANCE**: calls `instance_release` (frees when refcount hits 0)
+- **`make_instance`**: copies `*fields[i]` by value into Instance, allocates wrapper in `current_scope`
+- **`make_instance_root`**: root-scope variant for nullary constructors (`None`, etc.)
+- **CLAUDE.md**: added mandatory Scope-Boundary Ownership Rules section
+
+### Ownership Model (enforced)
+| Struct | Ownership | Boundary cost | Field storage |
+|--------|-----------|---------------|---------------|
+| Instance | refcounted, malloc'd | O(1) retain | by value in struct |
+| FfiHandle | refcounted, malloc'd | O(1) retain | raw C pointer |
+| Closure | refcounted via env_scope | O(1) retain | env scope-refcounted |
+| Primitive | root-scope pinned | O(0) as-is | permanent |
+
+### Files Modified
+- `src/lisp/value.c3` — Instance struct, instance_retain/release, scope_dtor_value
+- `src/lisp/eval.c3` — make_instance, make_instance_root, copy_to_parent, promote_to_escape, copy_value_if_owned_by_scope, field access sites
+- `src/lisp/jit_jit_helper_functions.c3` — field access/set sites
+- `CLAUDE.md` — mandatory ownership rules
+
+### Validation
+- `c3c build` ✅
+- Unified tests: 1141 passed, 0 failed
+- Compiler tests: 73 passed, 0 failed
+- omni-torch diffusion_llm.omni: full forward pass (Linear Attention + Wave-PDE) ✅
+- omni-torch existing demos (main, xor_nn, diffusion_2d): ✅
+
 ## 2026-03-03: General FFI Handle Ownership via Refcounted Box (`ForeignBox` model)
 
 ### Summary
