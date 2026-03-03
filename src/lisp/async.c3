@@ -80,25 +80,34 @@ struct TcpHandle {
     bool connected;
 }
 
-fn Value* make_tcp_handle(Interp* interp, int fd) {
-    // Allocate in root_scope — connections are long-lived
-    main::ScopeRegion* saved = interp.current_scope;
-    interp.current_scope = interp.root_scope;
-    Value* v = interp.alloc_value();
-    main::scope_register_dtor(interp.root_scope, (void*)v, &scope_dtor_value);
-    interp.current_scope = saved;
+fn void tcp_handle_finalizer(void* handle) {
+    TcpHandle* th = (TcpHandle*)handle;
+    if (th == null) return;
+    if (th.connected && th.fd >= 0) {
+        c_close_fd(th.fd);
+        th.connected = false;
+        th.fd = -1;
+    }
+}
 
-    v.tag = FFI_HANDLE;
+fn Value* make_tcp_handle(Interp* interp, int fd) {
     TcpHandle* th = (TcpHandle*)mem::malloc(TcpHandle.sizeof);
+    if (th == null) return raise_error(interp, "tcp-connect: out of memory");
     th.fd = fd;
     th.connected = true;
-    v.ffi_val = (FfiHandle*)th;
+    Value* v = make_ffi_handle_ex(interp, (void*)th, "tcp-handle",
+        &tcp_handle_finalizer, true, false);
+    if (v == null) {
+        mem::free(th);
+        return raise_error(interp, "tcp-connect: out of memory");
+    }
     return v;
 }
 
 fn TcpHandle* get_tcp_handle(Value* v) {
     if (v == null || v.tag != FFI_HANDLE) return null;
-    return (TcpHandle*)v.ffi_val;
+    if (v.ffi_val == null) return null;
+    return (TcpHandle*)v.ffi_val.lib_handle;
 }
 
 // ============================================================
@@ -261,6 +270,7 @@ fn Value* prim_tcp_close(Value*[] args, Env* env, Interp* interp) {
     if (th.connected) {
         c_close_fd(th.fd);
         th.connected = false;
+        th.fd = -1;
     }
 
     return make_nil(interp);

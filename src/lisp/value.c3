@@ -375,6 +375,8 @@ struct MacroDef {
     usz captured_count;
 }
 
+alias FfiHandleFinalizer = fn void(void* handle);
+
 /**
  * FfiHandle — Foreign library handle from dlopen().
  */
@@ -382,6 +384,9 @@ struct FfiHandle {
     void*    lib_handle;     // dlopen() result
     char[256] lib_name;      // for display/debugging
     usz      name_len;
+    uint     refcount;       // Shared ownership count for handle wrappers
+    FfiHandleFinalizer finalizer;  // Optional payload cleanup callback
+    bool     free_lib_handle;         // Free lib_handle after finalizer when true
 }
 
 /**
@@ -718,8 +723,7 @@ fn void scope_dtor_value(void* ptr) {
             }
         case FFI_HANDLE:
             if (v.ffi_val != null) {
-                // Note: don't dlclose here — FFI handles are long-lived
-                mem::free(v.ffi_val);
+                ffi_handle_release(v.ffi_val);
                 v.ffi_val = null;
             }
         case COROUTINE:
@@ -924,26 +928,70 @@ fn Value* make_primitive(Interp* interp, char[] name, PrimitiveFn func, int arit
 }
 
 fn Value* make_ffi_handle(Interp* interp, void* handle, char[] name) {
-    // Allocate in root_scope so handle survives REPL line reclamation
-    main::ScopeRegion* saved_scope = interp.current_scope;
-    interp.current_scope = interp.root_scope;
-    Value* v = interp.alloc_value();
-    v.tag = FFI_HANDLE;
-    main::scope_register_dtor(interp.root_scope, (void*)v, &scope_dtor_value);
-    v.ffi_val = (FfiHandle*)mem::malloc(FfiHandle.sizeof);
-    v.ffi_val.lib_handle = handle;
+    // Compatibility helper for global library handles:
+    // root lifetime, no finalizer, don't free dlopen handle.
+    return make_ffi_handle_ex(interp, handle, name, null, false, true);
+}
+
+fn FfiHandle* make_ffi_box(void* handle, char[] name, FfiHandleFinalizer finalizer,
+    bool free_lib_handle) {
+    FfiHandle* box = (FfiHandle*)mem::malloc(FfiHandle.sizeof);
+    if (box == null) return null;
+    box.lib_handle = handle;
+    box.refcount = 1;
+    box.finalizer = finalizer;
+    box.free_lib_handle = free_lib_handle;
+
     usz len = name.len;
     if (len > 255) {
         io::eprintfn("WARNING: FFI handle name truncated from %d to 255 bytes", name.len);
         len = 255;
     }
     for (usz i = 0; i < len; i++) {
-        v.ffi_val.lib_name[i] = name[i];
+        box.lib_name[i] = name[i];
     }
-    v.ffi_val.lib_name[len] = 0;
-    v.ffi_val.name_len = len;
+    box.lib_name[len] = 0;
+    box.name_len = len;
+    return box;
+}
+
+fn void ffi_handle_retain(FfiHandle* box) {
+    if (box == null) return;
+    box.refcount++;
+}
+
+fn void ffi_handle_release(FfiHandle* box) {
+    if (box == null) return;
+    if (box.refcount > 1) {
+        box.refcount--;
+        return;
+    }
+
+    if (box.finalizer != null && box.lib_handle != null) {
+        box.finalizer(box.lib_handle);
+    }
+    if (box.free_lib_handle && box.lib_handle != null) {
+        mem::free(box.lib_handle);
+        box.lib_handle = null;
+    }
+    mem::free(box);
+}
+
+fn Value* make_ffi_handle_ex(Interp* interp, void* handle, char[] name,
+    FfiHandleFinalizer finalizer, bool free_lib_handle, bool root_lifetime = false) {
+    main::ScopeRegion* target_scope = root_lifetime ? interp.root_scope : interp.current_scope;
+    main::ScopeRegion* saved_scope = interp.current_scope;
+    interp.current_scope = target_scope;
+
+    Value* v = interp.alloc_value();
+    v.tag = FFI_HANDLE;
+    main::scope_register_dtor(target_scope, (void*)v, &scope_dtor_value);
+    v.ffi_val = make_ffi_box(handle, name, finalizer, free_lib_handle);
 
     interp.current_scope = saved_scope;
+    if (v.ffi_val == null) {
+        return null;
+    }
     return v;
 }
 

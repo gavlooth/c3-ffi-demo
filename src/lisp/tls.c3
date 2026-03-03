@@ -50,29 +50,36 @@ struct TlsHandle {
 }
 
 fn Value* make_tls_handle_val(Interp* interp, TlsHandle* th) {
-    main::ScopeRegion* saved = interp.current_scope;
-    interp.current_scope = interp.root_scope;
-    Value* v = interp.alloc_value();
-    main::scope_register_dtor(interp.root_scope, (void*)v, &scope_dtor_value);
-    interp.current_scope = saved;
-
-    v.tag = FFI_HANDLE;
-    v.ffi_val = (FfiHandle*)th;
+    Value* v = make_ffi_handle_ex(interp, (void*)th, "tls-handle", &tls_handle_finalizer, true, false);
+    if (v == null) {
+        return raise_error(interp, "tls-connect: out of memory");
+    }
     return v;
 }
 
 fn TlsHandle* get_tls_handle(Value* v) {
     if (v == null || v.tag != FFI_HANDLE) return null;
-    return (TlsHandle*)v.ffi_val;
+    if (v.ffi_val == null) return null;
+    return (TlsHandle*)v.ffi_val.lib_handle;
 }
 
 fn void tls_handle_free(TlsHandle* th) {
     if (th == null) return;
-    if (th.client_ctx != null) mem::free(th.client_ctx);
-    if (th.x509_ctx != null) mem::free(th.x509_ctx);
-    if (th.sslio_ctx != null) mem::free(th.sslio_ctx);
-    if (th.iobuf != null) mem::free(th.iobuf);
-    if (th.fd_ptr != null) mem::free(th.fd_ptr);
+    if (th.client_ctx != null) { mem::free(th.client_ctx); th.client_ctx = null; }
+    if (th.x509_ctx != null) { mem::free(th.x509_ctx); th.x509_ctx = null; }
+    if (th.sslio_ctx != null) { mem::free(th.sslio_ctx); th.sslio_ctx = null; }
+    if (th.iobuf != null) { mem::free(th.iobuf); th.iobuf = null; }
+    if (th.fd_ptr != null) { mem::free(th.fd_ptr); th.fd_ptr = null; }
+}
+
+fn void tls_handle_finalizer(void* handle) {
+    TlsHandle* th = (TlsHandle*)handle;
+    if (th == null) return;
+    if (th.connected && th.sslio_ctx != null) {
+        br_sslio_close(th.sslio_ctx);
+        th.connected = false;
+    }
+    tls_handle_free(th);
 }
 
 // ============================================================

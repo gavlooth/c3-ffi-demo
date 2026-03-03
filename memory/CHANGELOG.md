@@ -1,5 +1,48 @@
 # Changelog
 
+## 2026-03-03: General FFI Handle Ownership via Refcounted Box (`ForeignBox` model)
+
+### Summary
+Introduced a general runtime ownership model for `FFI_HANDLE` values so transient foreign handles can be allocated in normal call scopes and still cross Omni scope/effect boundaries safely. This removes root-scope pinning as a universal requirement and addresses high-intermediate workloads (for example tensor-heavy paths) without changing user-facing syntax.
+
+### Changes
+- **Refcounted FFI box metadata** (`src/lisp/value.c3`):
+  - Extended `FfiHandle` to include:
+    - `refcount`
+    - optional `finalizer`
+    - `free_lib_handle` policy flag
+  - Added helpers:
+    - `make_ffi_box(...)`
+    - `ffi_handle_retain(...)`
+    - `ffi_handle_release(...)`
+    - `make_ffi_handle_ex(...)`
+  - Kept existing `make_ffi_handle(...)` as compatibility wrapper for global library handles.
+- **Scope destructor semantics**:
+  - `scope_dtor_value` for `FFI_HANDLE` now uses `ffi_handle_release(...)` instead of raw `mem::free(...)`.
+  - Enables shared ownership across copied wrappers and prevents double-free/UAF when values cross scope boundaries.
+- **Boundary copy/promotion safety** (`src/lisp/eval.c3`):
+  - `copy_to_parent(...)` now clones `FFI_HANDLE` wrappers when needed and retains the underlying box.
+  - `copy_value_if_owned_by_scope(...)` / `copy_env_value_fast(...)` no longer assume FFI handles are always root-pinned.
+  - `promote_to_escape(...)` now creates ESCAPE-lane wrappers for `FFI_HANDLE` with retain + dtor registration.
+- **Handle producers migrated to boxed/scoped construction**:
+  - TCP handles (`src/lisp/async.c3`) now use `make_ffi_handle_ex(...)` with a TCP finalizer.
+  - TLS handles (`src/lisp/tls.c3`) now use boxed ownership with TLS finalizer; `tls_handle_free(...)` made idempotent.
+  - Atomic handles (`src/lisp/threads.c3`) now use boxed ownership.
+  - Deduce DB/relation handles (`src/lisp/deduce.c3`) now use boxed ownership and pointer extraction via `.ffi_val.lib_handle`.
+  - Deduce unify path (`src/lisp/unify.c3`) updated for boxed pointer extraction.
+- **No surface language changes**:
+  - Effects (`io/*`) and FFI declaration syntax (`define [ffi lib]`, `define [ffi λ ...]`) unchanged.
+  - Type-hint surface (`^Any`, etc.) unchanged; runtime ownership is internal.
+
+### Tests
+- Added atomic boundary/stress regressions (`src/lisp/tests_tests.c3`):
+  - `atomic handle boundary copy`
+  - `atomic transient handle stress`
+- Validation:
+  - `c3c build` ✅
+  - `LD_LIBRARY_PATH=/usr/local/lib ./build/main` ✅
+  - Unified tests: `1141 passed, 0 failed`
+
 ## 2026-03-03: Fiber Cancellation + Scheduler Fairness + Destructuring
 
 ### Summary

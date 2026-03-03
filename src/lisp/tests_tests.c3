@@ -1305,6 +1305,40 @@ fn void run_atomic_tests(Interp* interp, int* pass, int* fail) {
             (*fail)++;
         }
     }
+
+    // Handle created in function scope remains valid at caller boundary.
+    {
+        EvalResult r = run(
+            "(begin "
+            "  (define mk-atomic (lambda (n) (atomic n))) "
+            "  (atomic-read (mk-atomic 7)))",
+            interp);
+        if (!r.error.has_error && is_int(r.value) && r.value.int_val == 7) {
+            io::printn("[PASS] atomic handle boundary copy");
+            (*pass)++;
+        } else {
+            io::printn("[FAIL] atomic handle boundary copy");
+            (*fail)++;
+        }
+    }
+
+    // Stress transient foreign handles in nested scopes (no root pinning required).
+    {
+        EvalResult r = run(
+            "(begin "
+            "  (define build-many (lambda (n) "
+            "    (if (= n 0) 0 (begin (atomic n) (build-many (- n 1)))))) "
+            "  (build-many 128) "
+            "  1)",
+            interp);
+        if (!r.error.has_error && is_int(r.value) && r.value.int_val == 1) {
+            io::printn("[PASS] atomic transient handle stress");
+            (*pass)++;
+        } else {
+            io::printn("[FAIL] atomic transient handle stress");
+            (*fail)++;
+        }
+    }
 }
 
 fn void run_http_tests(Interp* interp, int* pass, int* fail) {

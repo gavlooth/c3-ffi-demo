@@ -1316,8 +1316,21 @@ fn Value* copy_to_parent(Value* v, Interp* interp) {
         case INSTANCE:
         case METHOD_TABLE:
             result = v;  // Value allocated in root_scope; backing data is malloc'd with registered destructors
-        case FFI_HANDLE:
-            result = v;  // FfiHandle is inline in Value; Value allocated in root_scope
+        case FFI_HANDLE: {
+            bool ffi_in_releasing_scope =
+                interp.releasing_scope != null &&
+                main::is_in_scope((void*)v, interp.releasing_scope);
+            if (ffi_in_releasing_scope || !in_target_scope_chain((void*)v, interp)) {
+                result = interp.alloc_value();
+                result.tag = FFI_HANDLE;
+                main::scope_register_dtor(interp.current_scope, (void*)result, &scope_dtor_value);
+                result.ffi_val = v.ffi_val;
+                ffi_handle_retain(result.ffi_val);
+            } else {
+                result = v;
+            }
+            break;
+        }
         case TYPE_INFO:
             result = v;  // type info lives in registry
         case ITERATOR: {
@@ -1438,10 +1451,12 @@ fn Value* copy_value_if_owned_by_scope(Value* v, Interp* interp, main::ScopeRegi
         case ARRAY:
         case INSTANCE:
         case METHOD_TABLE:
-        case FFI_HANDLE:
         case TYPE_INFO:
         case MODULE:
             return v;
+        case FFI_HANDLE:
+            if (in_target_scope_chain((void*)v, interp)) return v;
+            return copy_to_parent_site_ctx(v, interp, site, interp.active_promotion_ctx);
         default:
             return copy_to_parent_site_ctx(v, interp, site, interp.active_promotion_ctx);
     }
@@ -1605,7 +1620,6 @@ fn Value* promote_to_escape(Value* v, Interp* interp) {
         case ARRAY:
         case INSTANCE:
         case METHOD_TABLE:
-        case FFI_HANDLE:
         case TYPE_INFO:
         case MODULE:
             // Wrapper promotion into ESCAPE lane; backing data/ownership remains unchanged.
@@ -1613,6 +1627,13 @@ fn Value* promote_to_escape(Value* v, Interp* interp) {
             result = interp.alloc_value_escape();
             *result = *v;
             result.scope_gen = interp.current_scope.escape_generation;
+        case FFI_HANDLE:
+            if (!promotion_context_consume(ctx, 1)) return v;
+            result = interp.alloc_value_escape();
+            result.tag = FFI_HANDLE;
+            result.ffi_val = v.ffi_val;
+            ffi_handle_retain(result.ffi_val);
+            main::scope_register_dtor_escape(interp.current_scope, (void*)result, &scope_dtor_value);
         default:
             result = v;
     }
@@ -1666,11 +1687,13 @@ fn Value* copy_env_value_fast(Value* v, Interp* interp, PromotionContext* ctx = 
         case ARRAY:
         case INSTANCE:
         case METHOD_TABLE:
-        case FFI_HANDLE:
         case TYPE_INFO:
         case MODULE:
             // Root-lifetime or external-lifetime objects can be shared.
             return v;
+        case FFI_HANDLE:
+            if (in_target_scope_chain((void*)v, interp)) return v;
+            return copy_to_parent_site_ctx(v, interp, COPY_SITE_COPY_ENV_TO_SCOPE, ctx);
         default:
             if (in_target_scope_chain((void*)v, interp)) return v;
             return copy_to_parent_site_ctx(v, interp, COPY_SITE_COPY_ENV_TO_SCOPE, ctx);

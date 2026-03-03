@@ -225,14 +225,13 @@ fn Value* prim_deduce_open(Value*[] args, Env* env, Interp* interp) {
 
     db.open = true;
 
-    // Wrap as FFI_HANDLE
-    ScopeRegion* saved = interp.current_scope;
-    interp.current_scope = interp.root_scope;
-    Value* v = interp.alloc_value();
-    main::scope_register_dtor(interp.root_scope, (void*)v, &scope_dtor_value);
-    interp.current_scope = saved;
-    v.tag = FFI_HANDLE;
-    v.ffi_val = (FfiHandle*)db;
+    // Wrap database pointer as scoped FFI handle
+    Value* v = make_ffi_handle_ex(interp, (void*)db, "deduce-db", null, true, false);
+    if (v == null) {
+        mdb_env_close(db.env);
+        mem::free(db);
+        return raise_error(interp, "deduce-open: out of memory");
+    }
     return v;
 }
 
@@ -250,7 +249,8 @@ fn Value* prim_assert_fact(Value*[] args, Env* env, Interp* interp) {
         // fault: lisp::TYPE_MISMATCH
         return raise_error(interp, "fact!: first argument must be a relation");
     }
-    Relation* rel = (Relation*)rel_val.ffi_val;
+    if (rel_val.ffi_val == null) return raise_error(interp, "fact!: relation handle is closed");
+    Relation* rel = (Relation*)rel_val.ffi_val.lib_handle;
     // fault: lisp::TYPE_MISMATCH
     if (rel.db == null || !rel.db.open) return raise_error(interp, "fact!: database not open");
 
@@ -306,7 +306,8 @@ fn Value* prim_retract_fact(Value*[] args, Env* env, Interp* interp) {
         // fault: lisp::TYPE_MISMATCH
         return raise_error(interp, "retract!: first argument must be a relation");
     }
-    Relation* rel = (Relation*)rel_val.ffi_val;
+    if (rel_val.ffi_val == null) return raise_error(interp, "retract!: relation handle is closed");
+    Relation* rel = (Relation*)rel_val.ffi_val.lib_handle;
     // fault: lisp::TYPE_MISMATCH
     if (rel.db == null || !rel.db.open) return raise_error(interp, "retract!: database not open");
 
@@ -405,7 +406,8 @@ fn Value* prim_define_relation(Value*[] args, Env* env, Interp* interp) {
         // fault: lisp::TYPE_MISMATCH
         return raise_error(interp, "__define-relation: car must be a deduce-open handle");
     }
-    DeduceDb* db = (DeduceDb*)db_val.ffi_val;
+    if (db_val.ffi_val == null) return raise_error(interp, "__define-relation: database handle is closed");
+    DeduceDb* db = (DeduceDb*)db_val.ffi_val.lib_handle;
 
     Value* spec = cdr(pair);
     // fault: lisp::TYPE_MISMATCH
@@ -454,14 +456,11 @@ fn Value* prim_define_relation(Value*[] args, Env* env, Interp* interp) {
 
     mdb_txn_commit(txn);
 
-    // Wrap as FFI_HANDLE
-    ScopeRegion* saved = interp.current_scope;
-    interp.current_scope = interp.root_scope;
-    Value* v = interp.alloc_value();
-    main::scope_register_dtor(interp.root_scope, (void*)v, &scope_dtor_value);
-    interp.current_scope = saved;
-    v.tag = FFI_HANDLE;
-    v.ffi_val = (FfiHandle*)rel;
+    Value* v = make_ffi_handle_ex(interp, (void*)rel, "deduce-relation", null, true, false);
+    if (v == null) {
+        mem::free(rel);
+        return raise_error(interp, "__define-relation: out of memory");
+    }
     return v;
 }
 
@@ -479,7 +478,8 @@ fn Value* prim_deduce_query(Value*[] args, Env* env, Interp* interp) {
         // fault: lisp::TYPE_MISMATCH
         return raise_error(interp, "deduce-query: first argument must be a relation");
     }
-    Relation* rel = (Relation*)rel_val.ffi_val;
+    if (rel_val.ffi_val == null) return raise_error(interp, "deduce-query: relation handle is closed");
+    Relation* rel = (Relation*)rel_val.ffi_val.lib_handle;
 
     Value* filter_fn = args[1];
 
@@ -520,7 +520,8 @@ fn Value* prim_deduce_count(Value*[] args, Env* env, Interp* interp) {
         // fault: lisp::TYPE_MISMATCH
         return raise_error(interp, "deduce-count: first argument must be a relation");
     }
-    Relation* rel = (Relation*)rel_val.ffi_val;
+    if (rel_val.ffi_val == null) return raise_error(interp, "deduce-count: relation handle is closed");
+    Relation* rel = (Relation*)rel_val.ffi_val.lib_handle;
 
     MdbTxn* txn = null;
     int rc = mdb_txn_begin(rel.db.env, null, MDB_RDONLY, &txn);
@@ -553,7 +554,8 @@ fn Value* prim_deduce_scan(Value*[] args, Env* env, Interp* interp) {
         // fault: lisp::TYPE_MISMATCH
         return raise_error(interp, "deduce-scan: first argument must be a relation");
     }
-    Relation* rel = (Relation*)rel_val.ffi_val;
+    if (rel_val.ffi_val == null) return raise_error(interp, "deduce-scan: relation handle is closed");
+    Relation* rel = (Relation*)rel_val.ffi_val.lib_handle;
 
     return relation_scan_all(rel, interp);
 }

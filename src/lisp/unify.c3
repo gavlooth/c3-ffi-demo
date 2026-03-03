@@ -189,7 +189,8 @@ fn Value* prim_deduce_match(Value*[] args, Env* env, Interp* interp) {
     if (rel_val == null || rel_val.tag != FFI_HANDLE) {
         return raise_error(interp, "deduce-match: first argument must be a relation");
     }
-    Relation* rel = (Relation*)rel_val.ffi_val;
+    if (rel_val.ffi_val == null) return raise_error(interp, "deduce-match: relation handle is closed");
+    Relation* rel = (Relation*)rel_val.ffi_val.lib_handle;
 
     Value* pattern = args[1];
     if (!is_cons(pattern)) return raise_error(interp, "deduce-match: pattern must be a list");

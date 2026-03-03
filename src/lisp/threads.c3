@@ -28,20 +28,18 @@ fn Value* prim_atomic(Value*[] args, Env* env, Interp* interp) {
     if (ref == null) return raise_error(interp, "atomic: out of memory");
     ref.value.store(args[0].int_val);
 
-    // Wrap as FFI_HANDLE in root_scope
-    ScopeRegion* saved = interp.current_scope;
-    interp.current_scope = interp.root_scope;
-    Value* v = interp.alloc_value();
-    main::scope_register_dtor(interp.root_scope, (void*)v, &scope_dtor_value);
-    interp.current_scope = saved;
-    v.tag = FFI_HANDLE;
-    v.ffi_val = (FfiHandle*)ref;
+    Value* v = make_ffi_handle_ex(interp, (void*)ref, "atomic-ref", null, true, false);
+    if (v == null) {
+        mem::free(ref);
+        return raise_error(interp, "atomic: out of memory");
+    }
     return v;
 }
 
 fn AtomicRef* get_atomic_ref(Value* v) {
     if (v == null || v.tag != FFI_HANDLE) return null;
-    return (AtomicRef*)v.ffi_val;
+    if (v.ffi_val == null) return null;
+    return (AtomicRef*)v.ffi_val.lib_handle;
 }
 
 fn Value* prim_atomic_add(Value*[] args, Env* env, Interp* interp) {
