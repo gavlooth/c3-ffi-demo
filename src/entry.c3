@@ -4,6 +4,12 @@ import std::io;
 import lisp;
 
 extern fn int system(char* command) @extern("system");
+extern fn char* c_getenv(char* name) @extern("getenv");
+
+fn bool mem_stats_enabled() {
+    char* raw = c_getenv("OMNI_MEM_STATS");
+    return raw != null && raw[0] != 0 && raw[0] != '0';
+}
 
 /**
  * AOT build: compile Lisp source to standalone binary.
@@ -698,6 +704,11 @@ fn int main(int argc, char** argv) {
 
     // Run Lisp interpreter tests
     lisp::run_lisp_tests();
+
+    if (mem_stats_enabled()) {
+        lisp::print_memory_promotion_stats();
+        scope_print_memory_stats();
+    }
 
     thread_registry_shutdown();
 

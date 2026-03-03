@@ -57,6 +57,60 @@ void* g_replxx = null;
 // Global interp for completion callback
 Interp* g_repl_interp = null;
 
+struct CopyToParentStats {
+    usz total_calls;
+    usz fast_reuse_hits;
+    usz defensive_copies;
+
+    usz nil_calls;
+    usz int_calls;
+    usz double_calls;
+    usz string_calls;
+    usz symbol_calls;
+    usz cons_calls;
+    usz closure_calls;
+    usz other_calls;
+}
+
+CopyToParentStats g_copy_to_parent_stats;
+
+fn void copy_to_parent_note_tag(ValueTag tag) @inline {
+    switch (tag) {
+        case NIL:
+            g_copy_to_parent_stats.nil_calls++;
+        case INT:
+            g_copy_to_parent_stats.int_calls++;
+        case DOUBLE:
+            g_copy_to_parent_stats.double_calls++;
+        case STRING:
+            g_copy_to_parent_stats.string_calls++;
+        case SYMBOL:
+            g_copy_to_parent_stats.symbol_calls++;
+        case CONS:
+            g_copy_to_parent_stats.cons_calls++;
+        case CLOSURE:
+            g_copy_to_parent_stats.closure_calls++;
+        default:
+            g_copy_to_parent_stats.other_calls++;
+    }
+}
+
+fn void print_memory_promotion_stats() {
+    io::printn("=== copy_to_parent Stats ===");
+    io::printfn("copy_to_parent calls: %d", (long)g_copy_to_parent_stats.total_calls);
+    io::printfn("copy_to_parent fast reuse hits: %d", (long)g_copy_to_parent_stats.fast_reuse_hits);
+    io::printfn("copy_to_parent defensive copies: %d", (long)g_copy_to_parent_stats.defensive_copies);
+    io::printfn("copy_to_parent by tag: nil=%d int=%d double=%d string=%d symbol=%d cons=%d closure=%d other=%d",
+        (long)g_copy_to_parent_stats.nil_calls,
+        (long)g_copy_to_parent_stats.int_calls,
+        (long)g_copy_to_parent_stats.double_calls,
+        (long)g_copy_to_parent_stats.string_calls,
+        (long)g_copy_to_parent_stats.symbol_calls,
+        (long)g_copy_to_parent_stats.cons_calls,
+        (long)g_copy_to_parent_stats.closure_calls,
+        (long)g_copy_to_parent_stats.other_calls);
+}
+
 // =============================================================================
 // POSIX SIGNAL HANDLING
 // =============================================================================
@@ -1087,6 +1141,8 @@ fn bool in_target_scope_chain(void* ptr, Interp* interp) {
 
 fn Value* copy_to_parent(Value* v, Interp* interp) {
     if (v == null) return null;
+    g_copy_to_parent_stats.total_calls++;
+    copy_to_parent_note_tag(v.tag);
 
     // Scope-aware optimization: if value is NOT in the scope being released,
     // reuse only when it is already in the target scope chain.
@@ -1094,10 +1150,12 @@ fn Value* copy_to_parent(Value* v, Interp* interp) {
     // scope_adopt moves chunks between scopes without updating value stamps.
     if (interp.releasing_scope != null && !main::is_in_scope((void*)v, interp.releasing_scope)) {
         if (in_target_scope_chain((void*)v, interp)) {
+            g_copy_to_parent_stats.fast_reuse_hits++;
             return v;
         }
         // Not in releasing_scope, but also not in a known surviving scope.
         // Copy defensively to avoid dangling pointers from transient env scopes.
+        g_copy_to_parent_stats.defensive_copies++;
     }
 
     // Disable escape-scope during copy operations. copy_to_parent calls make_cons

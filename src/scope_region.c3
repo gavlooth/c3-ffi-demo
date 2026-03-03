@@ -105,6 +105,54 @@ const usz SCOPE_FREELIST_MAX = 64;  // Don't hoard too many recycled scopes
 // Used by Value.scope_gen stamps for O(1) scope membership checks.
 uint g_scope_generation_counter = 0;
 
+struct ScopeTransferStats {
+    usz adopt_calls;
+    usz adopt_temp_chunk_bytes;
+    usz adopt_escape_chunk_bytes;
+    usz adopt_dtors;
+    usz adopt_alloc_bytes;
+
+    usz splice_calls;
+    usz splice_escape_chunk_bytes;
+    usz splice_temp_chunk_bytes_freed;
+    usz splice_temp_dtors_run;
+    usz splice_escape_dtors_transferred;
+}
+
+ScopeTransferStats g_scope_transfer_stats;
+
+fn usz scope_chunk_bytes(ScopeChunk* chunk) @inline {
+    usz total = 0;
+    while (chunk != null) {
+        total += chunk.capacity;
+        chunk = chunk.next;
+    }
+    return total;
+}
+
+fn usz scope_dtor_count(ScopeDtor* dtor) @inline {
+    usz total = 0;
+    while (dtor != null) {
+        total++;
+        dtor = dtor.next;
+    }
+    return total;
+}
+
+fn void scope_print_memory_stats() {
+    io::printn("=== Scope Transfer Stats ===");
+    io::printfn("scope_adopt calls: %d", (long)g_scope_transfer_stats.adopt_calls);
+    io::printfn("scope_adopt temp bytes retained: %d", (long)g_scope_transfer_stats.adopt_temp_chunk_bytes);
+    io::printfn("scope_adopt escape bytes retained: %d", (long)g_scope_transfer_stats.adopt_escape_chunk_bytes);
+    io::printfn("scope_adopt dtor entries moved: %d", (long)g_scope_transfer_stats.adopt_dtors);
+    io::printfn("scope_adopt alloc_bytes merged: %d", (long)g_scope_transfer_stats.adopt_alloc_bytes);
+    io::printfn("scope_splice_escapes calls: %d", (long)g_scope_transfer_stats.splice_calls);
+    io::printfn("scope_splice escape bytes moved: %d", (long)g_scope_transfer_stats.splice_escape_chunk_bytes);
+    io::printfn("scope_splice temp bytes freed: %d", (long)g_scope_transfer_stats.splice_temp_chunk_bytes_freed);
+    io::printfn("scope_splice temp dtors run: %d", (long)g_scope_transfer_stats.splice_temp_dtors_run);
+    io::printfn("scope_splice escape dtors moved: %d", (long)g_scope_transfer_stats.splice_escape_dtors_transferred);
+}
+
 // =============================================================================
 // Chunk allocation
 // =============================================================================
@@ -551,6 +599,12 @@ fn bool is_in_scope(void* ptr, ScopeRegion* scope) {
 fn void scope_splice_escapes(ScopeRegion* parent, ScopeRegion* child) {
     if (child == null || parent == null) return;
 
+    g_scope_transfer_stats.splice_calls++;
+    g_scope_transfer_stats.splice_escape_chunk_bytes += scope_chunk_bytes(child.escape_chunks);
+    g_scope_transfer_stats.splice_temp_chunk_bytes_freed += scope_chunk_bytes(child.chunks);
+    g_scope_transfer_stats.splice_temp_dtors_run += scope_dtor_count(child.dtors);
+    g_scope_transfer_stats.splice_escape_dtors_transferred += scope_dtor_count(child.escape_dtors);
+
     // Move child's ESCAPE dtors to parent's ESCAPE dtor list.
     if (child.escape_dtors != null) {
         ScopeDtor* last = child.escape_dtors;
@@ -606,6 +660,12 @@ fn void scope_splice_escapes(ScopeRegion* parent, ScopeRegion* child) {
 
 fn void scope_adopt(ScopeRegion* parent, ScopeRegion* child) {
     if (child == null || parent == null) return;
+
+    g_scope_transfer_stats.adopt_calls++;
+    g_scope_transfer_stats.adopt_temp_chunk_bytes += scope_chunk_bytes(child.chunks);
+    g_scope_transfer_stats.adopt_escape_chunk_bytes += scope_chunk_bytes(child.escape_chunks);
+    g_scope_transfer_stats.adopt_dtors += scope_dtor_count(child.dtors) + scope_dtor_count(child.escape_dtors);
+    g_scope_transfer_stats.adopt_alloc_bytes += child.alloc_bytes;
 
     // Move child's dtors to parent (prepend child's dtor list to parent's)
     if (child.dtors != null) {
