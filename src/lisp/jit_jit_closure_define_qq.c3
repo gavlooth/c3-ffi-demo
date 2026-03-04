@@ -43,7 +43,7 @@ fn void jit_copy_closure_env_if_needed(Interp* interp, Value* closure, Env* env,
     if (!need_env_copy) return;
     main::ScopeRegion* env_scope = main::scope_create(null);
     interp.current_scope = env_scope;
-    closure.closure_val.env = copy_env_to_scope(env, interp);
+    closure.closure_val.env = boundary_copy_env_to_scope(env, interp);
     closure.closure_val.env_scope = env_scope;
     interp.current_scope = creation_scope;
 }
@@ -239,7 +239,7 @@ fn Value* jit_eval_let_rec(Interp* interp, Expr* expr, Env* env) {
 fn Value* jit_eval_set(Interp* interp, SymbolId name, Value* value, Env* env) {
     // Env bindings (closures, globals) live in root scope; promote child-lifetime
     // values before storing to avoid dangling pointers.
-    Value* stored = promote_to_root_site(value, interp, COPY_SITE_JIT_EVAL_SET);
+    Value* stored = boundary_promote_to_root_site(value, interp, COPY_SITE_JIT_EVAL_SET);
     // Try local env first, then global
     if (catch err = env_set_with_barrier(env, name, stored, interp)) {
         if (interp.global_env == null) return raise_error(interp, "set!: unbound variable");
@@ -291,7 +291,7 @@ fn Value* jit_eval_set_path(Interp* interp, Expr* expr, Value* value, Env* env) 
     // Cons cell mutation
     if (current != null && current.tag == CONS) {
         // Cons payloads are modeled as root/shared values.
-        Value* stored = promote_to_root(value, interp);
+        Value* stored = boundary_promote_to_root(value, interp);
         if ((uint)last_seg == (uint)interp.sym_car) {
             current.cons_val.car = stored;
             return stored;
@@ -383,7 +383,7 @@ fn Value* jit_eval_define_typed_closure(Interp* interp, SymbolId name, Value* st
    @require value != null : "jit_eval_define: null value" *>
 fn Value* jit_eval_define(Interp* interp, SymbolId name, Value* value) {
     // Copy to root scope/region for globals (so value survives scope release)
-    Value* stored_val = promote_to_root_site(value, interp, COPY_SITE_JIT_EVAL_DEFINE);
+    Value* stored_val = boundary_promote_to_root_site(value, interp, COPY_SITE_JIT_EVAL_DEFINE);
 
     // Check for typed closure → method table dispatch
     if (stored_val != null && stored_val.tag == CLOSURE && stored_val.closure_val.has_typed_params) {
@@ -421,7 +421,7 @@ fn Env* jit_env_extend(Interp* interp, Env* env, SymbolId name, Value* value) {
 fn Env* jit_env_extend_root(Interp* interp, Env* env, SymbolId name, Value* value) {
     main::ScopeRegion* saved_scope = interp.current_scope;
     // Promote initial payload before publishing into persistent root env box.
-    Value* promoted = promote_to_root_site(value, interp, COPY_SITE_JIT_ENV_EXTEND_ROOT);
+    Value* promoted = boundary_promote_to_root_site(value, interp, COPY_SITE_JIT_ENV_EXTEND_ROOT);
     interp.current_scope = interp.root_scope;
     Env* box = env.extend(interp, name, promoted);
     box.persistent = true;

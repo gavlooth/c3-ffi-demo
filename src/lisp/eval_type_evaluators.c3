@@ -35,7 +35,7 @@ fn Value* make_instance_in_scope(Interp* interp, main::ScopeRegion* wrapper_scop
     interp.releasing_scope = saved_scope;
     for (usz i = 0; i < field_count && i < MAX_TYPE_FIELDS; i++) {
         if (fields != null && fields[i] != null) {
-            Value* copied = copy_to_parent_site(fields[i], interp, COPY_SITE_GENERIC);
+            Value* copied = boundary_copy_to_parent_site(fields[i], interp, COPY_SITE_GENERIC);
             if (copied != null) inst.fields[i] = *copied;
         }
     }

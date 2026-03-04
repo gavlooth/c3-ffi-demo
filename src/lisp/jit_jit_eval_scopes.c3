@@ -33,6 +33,55 @@ fn bool env_chain_has_binding_in_scope(Env* env, main::ScopeRegion* scope, Env* 
     return false;
 }
 
+fn Value* jit_finalize_scoped_result(
+    Value* result,
+    Value* original_result,
+    Interp* interp,
+    main::ScopeRegion* saved_scope,
+    main::ScopeRegion* active_scope,
+    uint copy_site
+) {
+    PromotionContext boundary_ctx = {};
+    promotion_context_begin(interp, &boundary_ctx, PROMOTION_CTX_BUDGET_RETURN);
+
+    if (active_scope.refcount == 1 && result != null) {
+        if (result.scope_gen != active_scope.escape_generation) {
+            interp.current_scope = active_scope;
+            result = boundary_promote_to_escape(result, interp);
+            interp.current_scope = saved_scope;
+        }
+        if (boundary_ctx.aborted) {
+            result = boundary_copy_from_releasing_scope(
+                original_result,
+                interp,
+                active_scope,
+                copy_site
+            );
+            main::scope_release(active_scope);
+            promotion_context_end(interp, &boundary_ctx);
+            return result;
+        }
+        if (result.scope_gen == active_scope.escape_generation) {
+            boundary_try_scope_splice_escapes(saved_scope, active_scope);
+            promotion_context_end(interp, &boundary_ctx);
+            return result;
+        }
+    }
+
+    if (result != null && !main::is_in_scope((void*)result, active_scope)) {
+        main::scope_release(active_scope);
+        promotion_context_end(interp, &boundary_ctx);
+        return result;
+    }
+
+    if (result != null) {
+        result = boundary_copy_from_releasing_scope(result, interp, active_scope, copy_site);
+    }
+    main::scope_release(active_scope);
+    promotion_context_end(interp, &boundary_ctx);
+    return result;
+}
+
 // JIT-aware eval replacement with trampoline TCO.
 // Compiles sub-expressions with cache, executes with env context.
 // When a tail-call helper sets jit_tco_bounce, loops instead of recursing.
@@ -126,48 +175,14 @@ fn Value* jit_eval_in_single_scope(Expr* body, Env* call_env, Interp* interp) {
     main::ScopeRegion* active_scope = interp.current_scope;
 
     interp.current_scope = saved_scope;
-    PromotionContext boundary_ctx = {};
-    promotion_context_begin(interp, &boundary_ctx, PROMOTION_CTX_BUDGET_RETURN);
-    Value* original_result = result;
-    if (active_scope.refcount == 1 && result != null) {
-        // Try to upgrade TEMP-rooted returns into ESCAPE lane and splice O(1).
-        if (result.scope_gen != active_scope.escape_generation) {
-            interp.current_scope = active_scope;
-            result = promote_to_escape(result, interp);
-            interp.current_scope = saved_scope;
-        }
-        if (boundary_ctx.aborted) {
-            interp.releasing_scope = active_scope;
-            result = copy_value_if_owned_by_scope(original_result, interp, active_scope, COPY_SITE_JIT_SINGLE_SCOPE_RETURN);
-            interp.releasing_scope = null;
-            main::scope_release(active_scope);
-            promotion_context_end(interp, &boundary_ctx);
-            return result;
-        }
-        if (result.scope_gen == active_scope.escape_generation) {
-            main::scope_splice_escapes(saved_scope, active_scope);
-            promotion_context_end(interp, &boundary_ctx);
-            return result;
-        }
-    }
-
-    // Fast-path for non-owned values (already in surviving scope tree).
-    if (result != null && !main::is_in_scope((void*)result, active_scope)) {
-        main::scope_release(active_scope);
-        promotion_context_end(interp, &boundary_ctx);
-        return result;
-    }
-
-    // Fallback: explicit copy + release.
-    interp.releasing_scope = active_scope;
-    if (result != null) {
-        result = copy_value_if_owned_by_scope(result, interp, active_scope, COPY_SITE_JIT_SINGLE_SCOPE_RETURN);
-    }
-    interp.releasing_scope = null;
-    main::scope_release(active_scope);
-    promotion_context_end(interp, &boundary_ctx);
-
-    return result;
+    return jit_finalize_scoped_result(
+        result,
+        result,
+        interp,
+        saved_scope,
+        active_scope,
+        COPY_SITE_JIT_SINGLE_SCOPE_RETURN
+    );
 }
 
 // Scope-per-call wrapper: evaluates closure body in a child scope.
@@ -197,45 +212,14 @@ fn Value* jit_eval_in_call_scope(Expr* body, Env* call_env, Interp* interp, bool
     interp.tco_recycle_scope = saved_recycle;
     interp.escape_env_mode = saved_escape_env;
     interp.current_scope = saved_scope;
-    PromotionContext boundary_ctx = {};
-    promotion_context_begin(interp, &boundary_ctx, PROMOTION_CTX_BUDGET_RETURN);
-    Value* original_result = result;
-    if (active_scope.refcount == 1 && result != null) {
-        if (result.scope_gen != active_scope.escape_generation) {
-            interp.current_scope = active_scope;
-            result = promote_to_escape(result, interp);
-            interp.current_scope = saved_scope;
-        }
-        if (boundary_ctx.aborted) {
-            interp.releasing_scope = active_scope;
-            result = copy_value_if_owned_by_scope(original_result, interp, active_scope, COPY_SITE_JIT_CALL_SCOPE_STEP2);
-            interp.releasing_scope = null;
-            main::scope_release(active_scope);
-            promotion_context_end(interp, &boundary_ctx);
-            return result;
-        }
-        if (result.scope_gen == active_scope.escape_generation) {
-            main::scope_splice_escapes(saved_scope, active_scope);
-            promotion_context_end(interp, &boundary_ctx);
-            return result;
-        }
-    }
-
-    if (result != null && !main::is_in_scope((void*)result, active_scope)) {
-        main::scope_release(active_scope);
-        promotion_context_end(interp, &boundary_ctx);
-        return result;
-    }
-
-    interp.releasing_scope = active_scope;
-    if (result != null) {
-        result = copy_value_if_owned_by_scope(result, interp, active_scope, COPY_SITE_JIT_CALL_SCOPE_STEP2);
-    }
-    interp.releasing_scope = null;
-    main::scope_release(active_scope);
-    promotion_context_end(interp, &boundary_ctx);
-
-    return result;
+    return jit_finalize_scoped_result(
+        result,
+        result,
+        interp,
+        saved_scope,
+        active_scope,
+        COPY_SITE_JIT_CALL_SCOPE_STEP2
+    );
 }
 
 /// Copy env frames from `src` up to (but not including) `stop_at` into current_scope.
@@ -260,7 +244,7 @@ fn Env* copy_tco_env_chain(Env* src, Interp* interp) {
     Env* dst = make_env(interp, parent_copy);
     for (usz i = 0; i < src.binding_count; i++) {
         Value* sv = src.bindings[i].value;
-        Value* v = copy_value_if_owned_by_scope(sv, interp, interp.releasing_scope, COPY_SITE_JIT_TCO_FRAME_COPY);
+        Value* v = boundary_copy_value_if_owned_by_scope(sv, interp, interp.releasing_scope, COPY_SITE_JIT_TCO_FRAME_COPY);
         env_define_with_barrier(dst, src.bindings[i].name, v, interp);
     }
     // Rebuild hash table if source had one

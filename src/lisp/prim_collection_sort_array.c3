@@ -106,7 +106,7 @@ fn Value* prim_array(Value*[] args, Env* env, Interp* interp) {
         Value* v = make_array(interp, count);
         cur = args[0];
         for (usz i = 0; i < count; i++) {
-            v.array_val.items[i] = promote_to_root(cur.cons_val.car, interp);
+            v.array_val.items[i] = boundary_promote_to_root(cur.cons_val.car, interp);
             cur = cur.cons_val.cdr;
         }
         v.array_val.length = count;
@@ -115,7 +115,7 @@ fn Value* prim_array(Value*[] args, Env* env, Interp* interp) {
 
     Value* v = make_array(interp, args.len < 4 ? 4 : args.len);
     for (usz i = 0; i < args.len; i++) {
-        v.array_val.items[i] = promote_to_root(args[i], interp);
+        v.array_val.items[i] = boundary_promote_to_root(args[i], interp);
     }
     v.array_val.length = args.len;
     return v;
@@ -127,7 +127,7 @@ fn Value* prim_array_set(Value*[] args, Env* env, Interp* interp) {
     long alen = (long)args[0].array_val.length;
     if (idx < 0) idx += alen;
     if (idx < 0 || idx >= alen) return raise_error(interp, "array-set!: index out of range");
-    args[0].array_val.items[(usz)idx] = promote_to_root(args[2], interp);
+    args[0].array_val.items[(usz)idx] = boundary_promote_to_root(args[2], interp);
     return make_nil(interp);
 }
 
@@ -178,7 +178,6 @@ fn Value* prim_array_push(Value*[] args, Env* env, Interp* interp) {
         vec.items = new_items;
         vec.capacity = new_cap;
     }
-    vec.items[vec.length++] = promote_to_root(args[1], interp);
+    vec.items[vec.length++] = boundary_promote_to_root(args[1], interp);
     return make_nil(interp);
 }
-

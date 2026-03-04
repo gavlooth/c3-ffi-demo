@@ -213,7 +213,7 @@ fn Value* promote_for_env_target(Env* target, Value* value, Interp* interp) {
 
     // Dual-lane intra-scope target: TEMP -> ESCAPE lane promotion.
     if (target.scope_gen == interp.current_scope.escape_generation) {
-        return promote_to_escape(value, interp);
+        return boundary_promote_to_escape(value, interp);
     }
 
     return value;

@@ -355,7 +355,7 @@ fn EvalResult repl_eval_line(char[] input, Interp* interp) {
 
     EvalResult r = run(input, interp);
     if (!r.error.has_error && r.value != null) {
-        r.value = copy_to_parent_site(r.value, interp, COPY_SITE_REPL_LINE_RESULT);
+        r.value = boundary_copy_to_parent_site(r.value, interp, COPY_SITE_REPL_LINE_RESULT);
     }
     return r;
 }

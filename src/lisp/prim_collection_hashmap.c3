@@ -157,8 +157,8 @@ fn void hashmap_set(HashMap* map, Value* key, Value* value, Interp* interp) {
 
     // Promote key/value to root_scope — hashmap lives in root_scope,
     // so its entries must survive child scope release
-    key = promote_to_root(key, interp);
-    value = promote_to_root(value, interp);
+    key = boundary_promote_to_root(key, interp);
+    value = boundary_promote_to_root(value, interp);
 
     uint h = hash_value(key) & map.mask;
     for (uint i = 0; i < map.capacity; i++) {
@@ -249,4 +249,3 @@ fn Value* prim_dict_set(Value*[] args, Env* env, Interp* interp) {
 // =============================================================================
 // PHASE 1-7 NEW PRIMITIVES
 // =============================================================================
-

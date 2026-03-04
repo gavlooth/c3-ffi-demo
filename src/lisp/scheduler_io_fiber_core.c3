@@ -11,7 +11,7 @@ fn usz scheduler_add_fiber(Value* coroutine, usz parent_id, Interp* interp) {
     scheduler_init();
     if (g_scheduler.fiber_count >= MAX_FIBERS) return MAX_FIBERS;
 
-    coroutine = promote_to_root(coroutine, interp);
+    coroutine = boundary_promote_to_root(coroutine, interp);
     usz id = g_scheduler.fiber_count;
     FiberEntry* f = &g_scheduler.fibers[id];
     f.coroutine = coroutine;
@@ -55,7 +55,7 @@ fn bool scheduler_all_done() @inline {
 fn void scheduler_mark_done(usz fiber_id, Value* result, Interp* interp) {
     FiberEntry* f = &g_scheduler.fibers[fiber_id];
     f.state = FIBER_DONE;
-    f.result = promote_to_root(result, interp);
+    f.result = boundary_promote_to_root(result, interp);
     f.pending_result = null;
     f.awaiting_fiber = false;
     f.await_target = NO_FIBER;
@@ -86,7 +86,7 @@ fn void scheduler_mark_done(usz fiber_id, Value* result, Interp* interp) {
 fn void scheduler_complete_fiber(usz fiber_id, Value* result, Interp* interp) {
     FiberEntry* f = &g_scheduler.fibers[fiber_id];
     if (f.live_children > 0) {
-        f.pending_result = promote_to_root(result, interp);
+        f.pending_result = boundary_promote_to_root(result, interp);
         f.waiting_children = true;
         f.awaiting_fiber = false;
         f.await_target = NO_FIBER;

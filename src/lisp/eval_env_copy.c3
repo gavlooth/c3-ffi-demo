@@ -12,7 +12,7 @@ fn Value* copy_to_scope_site(Value* v, Interp* interp, main::ScopeRegion* target
     main::ScopeRegion* saved_releasing = interp.releasing_scope;
     interp.current_scope = target_scope;
     interp.releasing_scope = saved_scope;
-    Value* result = copy_to_parent_site(v, interp, site);
+    Value* result = boundary_copy_to_parent_site(v, interp, site);
     interp.releasing_scope = saved_releasing;
     interp.current_scope = saved_scope;
     return result;
@@ -43,13 +43,13 @@ fn Value* copy_env_value_fast(Value* v, Interp* interp, PromotionContext* ctx = 
             return v;
         case INSTANCE:
             if (in_target_scope_chain((void*)v, interp)) return v;
-            return copy_to_parent_site_ctx(v, interp, COPY_SITE_COPY_ENV_TO_SCOPE, ctx);
+            return boundary_copy_to_parent_site_ctx(v, interp, COPY_SITE_COPY_ENV_TO_SCOPE, ctx);
         case FFI_HANDLE:
             if (in_target_scope_chain((void*)v, interp)) return v;
-            return copy_to_parent_site_ctx(v, interp, COPY_SITE_COPY_ENV_TO_SCOPE, ctx);
+            return boundary_copy_to_parent_site_ctx(v, interp, COPY_SITE_COPY_ENV_TO_SCOPE, ctx);
         default:
             if (in_target_scope_chain((void*)v, interp)) return v;
-            return copy_to_parent_site_ctx(v, interp, COPY_SITE_COPY_ENV_TO_SCOPE, ctx);
+            return boundary_copy_to_parent_site_ctx(v, interp, COPY_SITE_COPY_ENV_TO_SCOPE, ctx);
     }
 }
 

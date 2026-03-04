@@ -172,8 +172,8 @@ fn Value* make_cons(Interp* interp, Value* car, Value* cdr) @inline {
          (interp.escape_env_mode && cdr.tag == NIL))) {
         Value* v = interp.alloc_value_escape();
         v.tag = CONS;
-        v.cons_val.car = promote_to_escape(car, interp);
-        v.cons_val.cdr = promote_to_escape(cdr, interp);
+        v.cons_val.car = boundary_promote_to_escape(car, interp);
+        v.cons_val.cdr = boundary_promote_to_escape(cdr, interp);
         return v;
     }
 

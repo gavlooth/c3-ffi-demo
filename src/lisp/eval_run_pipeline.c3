@@ -44,26 +44,31 @@ fn Value* run_promote_result(Value* jit_result, Interp* interp, main::ScopeRegio
     if (child_scope.refcount == 1) {
         if (jit_result.scope_gen != child_scope.escape_generation) {
             interp.current_scope = child_scope;
-            jit_result = promote_to_escape(jit_result, interp);
+            jit_result = boundary_promote_to_escape(jit_result, interp);
             interp.current_scope = saved_scope;
         }
         if (boundary_ctx.aborted) {
-            main::ScopeRegion* saved_releasing = interp.releasing_scope;
-            interp.releasing_scope = child_scope;
-            jit_result = copy_value_if_owned_by_scope(original_result, interp, child_scope, COPY_SITE_RUN_JIT_RESULT);
-            interp.releasing_scope = saved_releasing;
+            jit_result = boundary_copy_from_releasing_scope(
+                original_result,
+                interp,
+                child_scope,
+                COPY_SITE_RUN_JIT_RESULT
+            );
         }
         if (!boundary_ctx.aborted && jit_result.scope_gen == child_scope.escape_generation) {
-            main::scope_splice_escapes(saved_scope, child_scope);
-            *child_spliced = true;
+            if (boundary_try_scope_splice_escapes(saved_scope, child_scope)) {
+                *child_spliced = true;
+            }
         }
     }
 
     if (!*child_spliced && main::is_in_scope((void*)jit_result, child_scope)) {
-        main::ScopeRegion* saved_releasing = interp.releasing_scope;
-        interp.releasing_scope = child_scope;
-        jit_result = copy_value_if_owned_by_scope(jit_result, interp, child_scope, COPY_SITE_RUN_JIT_RESULT);
-        interp.releasing_scope = saved_releasing;
+        jit_result = boundary_copy_from_releasing_scope(
+            jit_result,
+            interp,
+            child_scope,
+            COPY_SITE_RUN_JIT_RESULT
+        );
     }
     promotion_context_end(interp, &boundary_ctx);
     return jit_result;

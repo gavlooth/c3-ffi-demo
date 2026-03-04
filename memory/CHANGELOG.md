@@ -1,5 +1,110 @@
 # Changelog
 
+## 2026-03-04: Session 35 - Boundary Facade Expansion (Value/Env Paths)
+
+### Summary
+Continued boundary-surface consolidation by routing remaining non-foundation value/env lifetime transitions through the audited `boundary_*` API, keeping behavior unchanged while shrinking the set of direct transition callers.
+
+### What changed
+- `src/lisp/value_constructors.c3`:
+  - `make_cons` ESCAPE-lane path now uses:
+    - `boundary_promote_to_escape(car, interp)`
+    - `boundary_promote_to_escape(cdr, interp)`
+  - Replaces direct `promote_to_escape` calls in constructor-level business logic.
+- `src/lisp/value_environment.c3`:
+  - `promote_for_env_target` now routes TEMP->ESCAPE barrier promotion through:
+    - `boundary_promote_to_escape(value, interp)`
+- `src/lisp/eval_env_copy.c3`:
+  - `copy_to_scope_site` now uses:
+    - `boundary_copy_to_parent_site(...)`
+  - `copy_env_value_fast` fallback/instance/ffi branches now use:
+    - `boundary_copy_to_parent_site_ctx(...)`
+- `src/lisp/eval_boundary_api.c3`:
+  - Added:
+    - `boundary_copy_from_releasing_scope(v, interp, releasing_scope, site)`
+  - Centralizes `interp.releasing_scope` save/restore around copy fallback paths.
+- `src/lisp/eval_run_pipeline.c3`:
+  - `run_promote_result` now uses `boundary_copy_from_releasing_scope(...)` for both:
+    - promotion-context abort fallback copy
+    - in-scope defensive copy path
+- `src/lisp/jit_jit_eval_scopes.c3`:
+  - `jit_finalize_scoped_result` now uses `boundary_copy_from_releasing_scope(...)` for:
+    - promotion-context abort fallback copy
+    - final in-scope defensive copy
+
+### Boundary surface state
+- After this pass, direct `promote_to_escape` / `copy_to_parent_site(_ctx)` usage is now confined to:
+  - foundational promotion modules (`eval_promotion_*`)
+  - tests
+- Higher-level runtime/value/env business paths use `boundary_*` entry points.
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+- `c3c build --sanitize=address` passes.
+- ASAN run still reproduces the known stack-engine/JIT sanitizer check (`asan_thread.cpp` current-frame magic) in coroutine/JIT path; this signature predates this mechanical boundary-routing change.
+
+## 2026-03-04: Session 34 Start - Audited Boundary Facade + Low-Risk Callsite Routing
+
+### Summary
+Started boundary-surface consolidation by introducing an audited `boundary_*` API layer for promotion/copy/splice transitions and routing a low-risk caller slice through it without changing runtime behavior.
+
+### What changed
+- `src/lisp/eval_boundary_api.c3` (NEW):
+  - Added contracted boundary facade functions:
+    - `boundary_copy_to_parent`
+    - `boundary_copy_to_parent_site`
+    - `boundary_copy_to_parent_site_ctx`
+    - `boundary_promote_to_escape`
+    - `boundary_promote_to_root_site`
+    - `boundary_promote_to_root`
+    - `boundary_copy_value_if_owned_by_scope`
+    - `boundary_copy_env_to_scope`
+  - Added explicit splice gate:
+    - `boundary_try_scope_splice_escapes(parent, child)` with non-self assertion.
+- Low-risk callsite routing (behavior-preserving):
+  - `src/lisp/eval_run_pipeline.c3`:
+    - `promote_to_escape` -> `boundary_promote_to_escape`
+    - `copy_value_if_owned_by_scope` -> `boundary_copy_value_if_owned_by_scope`
+    - `scope_splice_escapes` -> `boundary_try_scope_splice_escapes`
+  - `src/lisp/jit_jit_eval_scopes.c3`:
+    - Same boundary wrapper migration for promote/copy/splice paths.
+  - `src/lisp/eval_repl.c3`:
+    - `copy_to_parent_site` -> `boundary_copy_to_parent_site`
+  - `src/lisp/primitives_iter_coroutine.c3`:
+    - `promote_to_root` -> `boundary_promote_to_root`
+    - `copy_to_parent_site` -> `boundary_copy_to_parent_site`
+  - `src/lisp/scheduler_io_fiber_core.c3`:
+    - `promote_to_root` -> `boundary_promote_to_root`
+  - `src/lisp/jit_jit_closure_define_qq.c3`:
+    - `copy_env_to_scope` -> `boundary_copy_env_to_scope`
+    - `promote_to_root_site` -> `boundary_promote_to_root_site`
+    - `promote_to_root` -> `boundary_promote_to_root`
+  - `src/lisp/prim_collection_hashmap.c3`:
+    - `promote_to_root` -> `boundary_promote_to_root`
+  - `src/lisp/prim_collection_sort_array.c3`:
+    - `promote_to_root` -> `boundary_promote_to_root`
+  - `src/lisp/eval_type_evaluators.c3`:
+    - `copy_to_parent_site` -> `boundary_copy_to_parent_site`
+- Internal simplification (behavior-preserving):
+  - `src/lisp/jit_jit_eval_scopes.c3`:
+    - Extracted shared `jit_finalize_scoped_result(...)` to centralize duplicated scope result finalization logic used by:
+      - `jit_eval_in_single_scope`
+      - `jit_eval_in_call_scope`
+    - This reduces duplicated boundary business logic (promote/copy/splice/fallback sequencing) and narrows bug surface in JIT scope handoff paths.
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+- `c3c build --sanitize=address` passes.
+- `ASAN_OPTIONS=detect_leaks=0,halt_on_error=1,abort_on_error=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Scope Guard Macroization + JIT-First Runtime Policy
 
 ### Summary

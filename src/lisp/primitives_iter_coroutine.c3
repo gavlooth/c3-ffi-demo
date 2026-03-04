@@ -111,7 +111,7 @@ fn Value* prim_coroutine(Value*[] args, Env* env, Interp* interp) {
 
     // Phase 4b: Promote thunk to root_scope so it survives call_scope release.
     // The coroutine may be resumed after the creating scope is freed.
-    thunk = promote_to_root(thunk, interp);
+    thunk = boundary_promote_to_root(thunk, interp);
     if (thunk != null && thunk.tag == CLOSURE) {
         // Precompile coroutine body before first execution on switched stack.
         jit_warm_expr_cache(thunk.closure_val.body, interp);
@@ -197,7 +197,7 @@ fn Value* prim_resume(Value*[] args, Env* env, Interp* interp) {
     // The caller may still hold pointers to previously yielded values, so we must
     // copy each yield value into the caller's scope (current_scope, restored above).
     if (interp.yield_value != null) {
-        return copy_to_parent_site(interp.yield_value, interp, COPY_SITE_PRIM_RESUME);
+        return boundary_copy_to_parent_site(interp.yield_value, interp, COPY_SITE_PRIM_RESUME);
     }
     return make_nil(interp);
 }
