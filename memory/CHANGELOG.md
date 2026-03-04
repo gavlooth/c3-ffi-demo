@@ -1,5 +1,46 @@
 # Changelog
 
+## 2026-03-04: Session 36 - Scoped Copy Boundary Consolidation
+
+### Summary
+Continued ownership-boundary hardening by centralizing scoped copy state transitions (`current_scope` + `releasing_scope`) into the audited boundary surface and removing duplicated manual choreography from runtime business paths.
+
+### What changed
+- `src/lisp/eval_boundary_api.c3`:
+  - Added:
+    - `boundary_copy_to_scope_site(v, interp, target_scope, releasing_scope, site)`
+  - This helper performs:
+    - save/restore `interp.current_scope`
+    - save/restore `interp.releasing_scope`
+    - scoped `copy_to_parent_site` through the boundary API
+- `src/lisp/eval_env_copy.c3`:
+  - `copy_to_scope_site(...)` now delegates to:
+    - `boundary_copy_to_scope_site(...)`
+  - Eliminates duplicated local scope/releasing save/restore implementation in env-copy path.
+- `src/lisp/eval_type_evaluators.c3`:
+  - `make_instance_in_scope(...)` field copy loop now uses:
+    - `boundary_copy_to_scope_site(field, ..., owner_scope, saved_scope, COPY_SITE_GENERIC)`
+  - Removed direct `releasing_scope` manipulation around instance field copy.
+- Previously added Session 35 helper remains in use:
+  - `boundary_copy_from_releasing_scope(...)` in:
+    - `eval_run_pipeline.c3`
+    - `jit_jit_eval_scopes.c3`
+
+### Boundary surface state
+- Non-foundation runtime paths now consistently route both:
+  - releasing-scope fallback copy behavior
+  - scoped copy-to-target behavior
+  through `boundary_*` helpers.
+- Direct manual scope/releasing choreography is reduced further and concentrated in foundation modules.
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+- `c3c build --sanitize=address` passes.
+- ASAN run still reproduces the known pre-existing stack-engine/JIT current-frame magic check (`asan_thread.cpp`) in coroutine/JIT path; no new lifetime regression signature introduced by this session.
+
 ## 2026-03-04: Session 35 - Boundary Facade Expansion (Value/Env Paths)
 
 ### Summary

@@ -30,17 +30,19 @@ fn Value* make_instance_in_scope(Interp* interp, main::ScopeRegion* wrapper_scop
 
     // Copy field payloads into owner_scope so Instance never points into caller scope.
     main::ScopeRegion* saved_scope = interp.current_scope;
-    main::ScopeRegion* saved_releasing = interp.releasing_scope;
-    interp.current_scope = owner_scope;
-    interp.releasing_scope = saved_scope;
     for (usz i = 0; i < field_count && i < MAX_TYPE_FIELDS; i++) {
         if (fields != null && fields[i] != null) {
-            Value* copied = boundary_copy_to_parent_site(fields[i], interp, COPY_SITE_GENERIC);
+            Value* copied = boundary_copy_to_scope_site(
+                fields[i],
+                interp,
+                owner_scope,
+                saved_scope,
+                COPY_SITE_GENERIC
+            );
             if (copied != null) inst.fields[i] = *copied;
         }
     }
     interp.current_scope = wrapper_scope;
-    interp.releasing_scope = saved_releasing;
 
     Value* v = interp.alloc_value();
     main::scope_register_dtor(wrapper_scope, (void*)v, &scope_dtor_value);

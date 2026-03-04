@@ -28,6 +28,27 @@ fn Value* boundary_copy_to_parent_site_ctx(Value* v, Interp* interp, uint site, 
 }
 
 <*
+@require interp != null : "boundary_copy_to_scope_site: null interp"
+*>
+fn Value* boundary_copy_to_scope_site(
+    Value* v,
+    Interp* interp,
+    main::ScopeRegion* target_scope,
+    main::ScopeRegion* releasing_scope,
+    uint site
+) @inline {
+    if (v == null || target_scope == null) return v;
+    main::ScopeRegion* saved_scope = interp.current_scope;
+    main::ScopeRegion* saved_releasing = interp.releasing_scope;
+    interp.current_scope = target_scope;
+    interp.releasing_scope = releasing_scope;
+    Value* copied = boundary_copy_to_parent_site(v, interp, site);
+    interp.releasing_scope = saved_releasing;
+    interp.current_scope = saved_scope;
+    return copied;
+}
+
+<*
 @require interp != null : "boundary_promote_to_escape: null interp"
 *>
 fn Value* boundary_promote_to_escape(Value* v, Interp* interp) @inline {
