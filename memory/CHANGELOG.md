@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-03-04: Session 60 - Decompose Thread-Join Validation Paths
+
+### Summary
+Extracted shared thread-join context validation and timeout-pair parsing helpers to reduce duplication in scheduler join primitives while preserving error behavior.
+
+### What changed
+- `src/lisp/scheduler_primitives.c3`:
+  - Added:
+    - `scheduler_validate_thread_join_context(op_name, interp)`
+    - `scheduler_parse_thread_join_timeout_pair(pair, task_id_out, timeout_ms_out, interp)`
+  - `prim_thread_join(...)` now uses shared join-context validation helper.
+  - `prim_thread_join_timeout(...)` now uses:
+    - shared join-context validation helper
+    - shared timeout-pair parser helper
+  - Existing messages preserved for:
+    - mutex unavailable
+    - in-fiber prohibition
+    - malformed timeout pair
+    - invalid timeout value
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+- `c3c build --sanitize=address` passes.
+- `ASAN_OPTIONS=detect_leaks=0,halt_on_error=1,abort_on_error=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1105 passed, 0 failed (ASAN-mode skips active)
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 59 - Decompose Scheduler Run-Loop Step Logic
 
 ### Summary

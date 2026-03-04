@@ -114,15 +114,42 @@ fn Value* scheduler_thread_join_impl(long raw_id, long timeout_ms, Interp* inter
     }
 }
 
+fn Value* scheduler_validate_thread_join_context(char[] op_name, Interp* interp) {
+    if (!g_scheduler.thread_task_mu_ready) {
+        char[96] ebuf;
+        char[] msg = io::bprintf(&ebuf, "%s: task mutex unavailable", (ZString)op_name)!!;
+        return raise_error(interp, msg);
+    }
+    if (scheduler_is_running_fiber_context()) {
+        char[96] ebuf;
+        char[] msg = io::bprintf(&ebuf, "%s: not allowed inside a running fiber", (ZString)op_name)!!;
+        return raise_error(interp, msg);
+    }
+    return null;
+}
+
+fn Value* scheduler_parse_thread_join_timeout_pair(Value* pair, long* task_id_out, long* timeout_ms_out, Interp* interp) {
+    Value* task_id = pair.cons_val.car;
+    Value* timeout_val = pair.cons_val.cdr;
+    if (!is_int(task_id) || !is_int(timeout_val)) {
+        return raise_error(interp, "thread-join-timeout: expected integer task-id and timeout-ms");
+    }
+    long timeout_ms = timeout_val.int_val;
+    if (timeout_ms < 0) {
+        return raise_error(interp, "thread-join-timeout: timeout-ms must be >= 0");
+    }
+    *task_id_out = task_id.int_val;
+    *timeout_ms_out = timeout_ms;
+    return null;
+}
+
 fn Value* prim_thread_join(Value*[] args, Env* env, Interp* interp) {
     (void)env;
     scheduler_init();
-    if (!g_scheduler.thread_task_mu_ready) return raise_error(interp, "thread-join: task mutex unavailable");
+    Value* context_err = scheduler_validate_thread_join_context("thread-join", interp);
+    if (context_err != null) return context_err;
     if (args.len < 1 || !is_int(args[0])) {
         return raise_error(interp, "thread-join: expected task-id integer");
-    }
-    if (scheduler_is_running_fiber_context()) {
-        return raise_error(interp, "thread-join: not allowed inside a running fiber");
     }
 
     return scheduler_thread_join_impl(args[0].int_val, -1, interp);
@@ -131,26 +158,17 @@ fn Value* prim_thread_join(Value*[] args, Env* env, Interp* interp) {
 fn Value* prim_thread_join_timeout(Value*[] args, Env* env, Interp* interp) {
     (void)env;
     scheduler_init();
-    if (!g_scheduler.thread_task_mu_ready) return raise_error(interp, "thread-join-timeout: task mutex unavailable");
+    Value* context_err = scheduler_validate_thread_join_context("thread-join-timeout", interp);
+    if (context_err != null) return context_err;
     if (args.len < 1 || !is_cons(args[0])) {
         return raise_error(interp, "thread-join-timeout: expected (task-id . timeout-ms)");
     }
-    if (scheduler_is_running_fiber_context()) {
-        return raise_error(interp, "thread-join-timeout: not allowed inside a running fiber");
-    }
 
-    Value* pair = args[0];
-    Value* task_id = pair.cons_val.car;
-    Value* timeout_val = pair.cons_val.cdr;
-    if (!is_int(task_id) || !is_int(timeout_val)) {
-        return raise_error(interp, "thread-join-timeout: expected integer task-id and timeout-ms");
-    }
-
-    long timeout_ms = timeout_val.int_val;
-    if (timeout_ms < 0) {
-        return raise_error(interp, "thread-join-timeout: timeout-ms must be >= 0");
-    }
-    return scheduler_thread_join_impl(task_id.int_val, timeout_ms, interp);
+    long task_id = 0;
+    long timeout_ms = 0;
+    Value* parse_err = scheduler_parse_thread_join_timeout_pair(args[0], &task_id, &timeout_ms, interp);
+    if (parse_err != null) return parse_err;
+    return scheduler_thread_join_impl(task_id, timeout_ms, interp);
 }
 
 fn Value* prim_thread_cancel(Value*[] args, Env* env, Interp* interp) {
