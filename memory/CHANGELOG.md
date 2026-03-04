@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-03-04: Session 72 - Share Iterator Argument Validation
+
+### Summary
+Extracted shared iterator argument validation used by `next`, `collect`, and `to-array`, removing repeated type/arity checks while preserving per-primitive error messages.
+
+### What changed
+- `src/lisp/primitives_iter_coroutine.c3`:
+  - Added:
+    - `iterator_require_arg(args, expected_msg, iterator_out, interp)`
+  - Refactored:
+    - `prim_next(...)` now validates via helper
+    - `prim_collect(...)` now validates via helper
+    - `prim_to_array(...)` now validates via helper
+  - Preserved:
+    - same error strings (`next|collect|to-array: expected iterator`)
+    - same iterator execution/consumption semantics
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+- `c3c build --sanitize=address` passes.
+- `ASAN_OPTIONS=detect_leaks=0,halt_on_error=1,abort_on_error=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1105 passed, 0 failed (ASAN-mode skips active)
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 71 - Consolidate Iterator Consumption Loop
 
 ### Summary

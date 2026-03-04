@@ -20,11 +20,19 @@ fn Value* prim_make_iterator(Value*[] args, Env* env, Interp* interp) {
 }
 
 fn Value* prim_next(Value*[] args, Env* env, Interp* interp) {
-    if (args.len < 1 || args[0].tag != ITERATOR) {
-        return raise_error(interp, "next: expected iterator");
-    }
+    Value* iterator = null;
+    Value* parse_err = iterator_require_arg(args, "next: expected iterator", &iterator, interp);
+    if (parse_err != null) return parse_err;
     // Call the thunk closure — iterator_val is a Value* (CLOSURE)
-    return jit_apply_value(args[0].iterator_val, make_nil(interp), interp);
+    return jit_apply_value(iterator.iterator_val, make_nil(interp), interp);
+}
+
+fn Value* iterator_require_arg(Value*[] args, char[] expected_msg, Value** iterator_out, Interp* interp) {
+    if (args.len < 1 || args[0].tag != ITERATOR) {
+        return raise_error(interp, expected_msg);
+    }
+    *iterator_out = args[0];
+    return null;
 }
 
 fn Value* iterator_consume_items(Value* iterator, Value** items, usz* count_out, Interp* interp) {
@@ -48,14 +56,14 @@ fn Value* iterator_consume_items(Value* iterator, Value** items, usz* count_out,
 }
 
 fn Value* prim_collect(Value*[] args, Env* env, Interp* interp) {
-    if (args.len < 1 || args[0].tag != ITERATOR) {
-        return raise_error(interp, "collect: expected iterator");
-    }
+    Value* iterator = null;
+    Value* parse_err = iterator_require_arg(args, "collect: expected iterator", &iterator, interp);
+    if (parse_err != null) return parse_err;
     // Consume iterator into a list
     // Collect into stack buffer first, then build list in reverse
     Value*[ITER_BUFFER_MAX] items;
     usz count = 0;
-    Value* consume_err = iterator_consume_items(args[0], &items[0], &count, interp);
+    Value* consume_err = iterator_consume_items(iterator, &items[0], &count, interp);
     if (consume_err != null) return consume_err;
 
     // Build list in reverse
@@ -67,13 +75,13 @@ fn Value* prim_collect(Value*[] args, Env* env, Interp* interp) {
 }
 
 fn Value* prim_to_array(Value*[] args, Env* env, Interp* interp) {
-    if (args.len < 1 || args[0].tag != ITERATOR) {
-        return raise_error(interp, "to-array: expected iterator");
-    }
+    Value* iterator = null;
+    Value* parse_err = iterator_require_arg(args, "to-array: expected iterator", &iterator, interp);
+    if (parse_err != null) return parse_err;
     // Consume iterator into an array
     Value*[ITER_BUFFER_MAX] items;
     usz count = 0;
-    Value* consume_err = iterator_consume_items(args[0], &items[0], &count, interp);
+    Value* consume_err = iterator_consume_items(iterator, &items[0], &count, interp);
     if (consume_err != null) return consume_err;
 
     Value* arr = make_array(interp, count);
