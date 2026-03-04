@@ -97,6 +97,51 @@ fn Env* jit_copy_tco_env_chain_for_recycle(
     return copied;
 }
 
+fn JitFn jit_lookup_or_compile(Expr* expr, Interp* interp) {
+    JitFn cached = jit_cache_lookup(expr);
+    if (cached != null) return cached;
+    cached = jit_compile(expr, interp);
+    if (cached == null) return null;
+    jit_cache_store(expr, cached);
+    return cached;
+}
+
+fn Value* jit_prepare_tco_recycle(
+    Env** env_io,
+    Env* saved_env,
+    Interp* interp
+) {
+    main::ScopeRegion* cs = interp.current_scope;
+    if (cs != interp.tco_recycle_scope || cs.refcount != 1) return null;
+
+    bool chain_touches_releasing_scope =
+        env_chain_contains_scope_gen(*env_io, cs.generation, interp.global_env);
+    bool bindings_touch_releasing_scope =
+        env_chain_has_binding_in_scope(*env_io, cs, interp.global_env);
+
+    if (!chain_touches_releasing_scope &&
+        !bindings_touch_releasing_scope) {
+        // Fast path: loop env graph is detached from recyclable TEMP lane.
+        // Recycle TEMP lane in-place and keep env as-is.
+        main::scope_reset_temp_lane(cs);
+        interp.current_scope = cs;
+        interp.tco_recycle_scope = cs;
+        return null;
+    }
+
+    // Fallback: allocate fresh call_scope and copy full env chain.
+    main::ScopeRegion* fresh = main::scope_create(cs.parent);
+    if (fresh == null) {
+        interp.jit_env = saved_env;
+        return raise_error(interp, "jit: failed to allocate TCO recycle scope");
+    }
+    interp.current_scope = fresh;
+    interp.tco_recycle_scope = fresh;  // Update: fresh is now the recyclable scope
+    *env_io = jit_copy_tco_env_chain_for_recycle(*env_io, interp, cs);
+    main::scope_release(cs);
+    return null;
+}
+
 // JIT-aware eval replacement with trampoline TCO.
 // Compiles sub-expressions with cache, executes with env context.
 // When a tail-call helper sets jit_tco_bounce, loops instead of recursing.
@@ -110,25 +155,19 @@ fn Value* jit_eval(Expr* expr, Env* env, Interp* interp) {
             return make_nil(interp);
         }
 
-        // 1. Check cache
-        JitFn cached = jit_cache_lookup(expr);
+        JitFn cached = jit_lookup_or_compile(expr, interp);
         if (cached == null) {
-            // 2. Compile
-            cached = jit_compile(expr, interp);
-            if (cached == null) {
-                // JIT can't compile this expression
-                interp.jit_env = saved_env;
-                return raise_error(interp, "JIT compilation failed");
-            }
-            jit_cache_store(expr, cached);
+            // JIT can't compile this expression
+            interp.jit_env = saved_env;
+            return raise_error(interp, "JIT compilation failed");
         }
 
-        // 3. Execute with env context
+        // Execute with env context.
         interp.jit_env = env;
         interp.flags.jit_tco_bounce = false;
         Value* result = cached(interp);
 
-        // 4. Check for TCO bounce
+        // Check for TCO bounce.
         if (interp.flags.jit_tco_bounce) {
             // Tail call — loop with new expr/env instead of recursing
             expr = interp.jit_tco_expr;
@@ -140,32 +179,9 @@ fn Value* jit_eval(Expr* expr, Env* env, Interp* interp) {
             // Guards: scope is marked recyclable, nothing escaped (RC=1).
             // Phase 4b: copy_tco_env_chain copies the FULL chain to global_env so the
             // fresh scope is independent of any env_scope freed during scope_release.
-            main::ScopeRegion* cs = interp.current_scope;
-            if (cs == interp.tco_recycle_scope && cs.refcount == 1) {
-                bool chain_touches_releasing_scope =
-                    env_chain_contains_scope_gen(env, cs.generation, interp.global_env);
-                bool bindings_touch_releasing_scope =
-                    env_chain_has_binding_in_scope(env, cs, interp.global_env);
-
-                if (!chain_touches_releasing_scope &&
-                    !bindings_touch_releasing_scope) {
-                    // Fast path: loop env graph is detached from recyclable TEMP lane.
-                    // Recycle TEMP lane in-place and keep env as-is.
-                    main::scope_reset_temp_lane(cs);
-                    interp.current_scope = cs;
-                    interp.tco_recycle_scope = cs;
-                } else {
-                    // Fallback: allocate fresh call_scope and copy full env chain.
-                    main::ScopeRegion* fresh = main::scope_create(cs.parent);
-                    if (fresh == null) {
-                        interp.jit_env = saved_env;
-                        return raise_error(interp, "jit: failed to allocate TCO recycle scope");
-                    }
-                    interp.current_scope = fresh;
-                    interp.tco_recycle_scope = fresh;  // Update: fresh is now the recyclable scope
-                    env = jit_copy_tco_env_chain_for_recycle(env, interp, cs);
-                    main::scope_release(cs);
-                }
+            Value* recycle_err = jit_prepare_tco_recycle(&env, saved_env, interp);
+            if (recycle_err != null) {
+                return recycle_err;
             }
 
             continue;

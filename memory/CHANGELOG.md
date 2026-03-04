@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-03-04: Session 81 - Split JIT Eval Cache/TCO Scope Helpers
+
+### Summary
+Refactored `jit_eval(...)` to extract cache-or-compile lookup and TCO recycle-scope preparation into dedicated helpers, keeping JIT trampoline behavior and lifetime boundaries unchanged.
+
+### What changed
+- `src/lisp/jit_jit_eval_scopes.c3`:
+  - Added:
+    - `jit_lookup_or_compile(expr, interp)`
+    - `jit_prepare_tco_recycle(env_io, saved_env, interp)`
+  - Refactored:
+    - `jit_eval(...)` now delegates cache/compile and TCO recycle preparation logic to these helpers
+  - Preserved:
+    - `jit_env` save/restore behavior on all return paths
+    - JIT compilation failure behavior (`"JIT compilation failed"`)
+    - TCO recycle fast-path/fallback semantics and error behavior on scope-allocation failure
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 80 - Split Quasiquote Datum Parse Helpers
 
 ### Summary
