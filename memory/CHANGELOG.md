@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-03-04: Session 90 - Split Mutable-Capture Prescan Helpers
+
+### Summary
+Refactored `prescan_mutable_captures(...)` by extracting dedup/scan helpers for let nodes and repeated child-list traversal, preserving mutable-capture discovery behavior.
+
+### What changed
+- `src/lisp/compiler_mutable_capture_prescan.c3`:
+  - Added:
+    - `Compiler.mutable_capture_contains(sym)`
+    - `Compiler.add_mutable_capture_if_absent(sym)`
+    - `Compiler.prescan_let_expr(expr)`
+    - `Compiler.prescan_expr_list(exprs, count)`
+    - `Compiler.prescan_match_clause_results(expr)`
+    - `Compiler.prescan_handle_clause_bodies(expr)`
+  - Refactored:
+    - `Compiler.prescan_mutable_captures(...)` now delegates repeated loops and let-specific logic to helpers above
+  - Preserved:
+    - mutable-capture detection criteria (`is_mutable_capture(let_name, let_body)`)
+    - recursive traversal coverage across expression variants
+    - dedup semantics for `mutable_captures`
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 89 - Split Deduce Relation Define Pipeline
 
 ### Summary

@@ -12,23 +12,52 @@ import main;
  * Must be called before scan_lambdas so that lambda scanning can exclude
  * mutable-captured variables from closure struct captures.
  */
+fn bool Compiler.mutable_capture_contains(Compiler* self, SymbolId sym) {
+    foreach (mc : self.mutable_captures) {
+        if ((uint)mc == (uint)sym) return true;
+    }
+    return false;
+}
+
+fn void Compiler.add_mutable_capture_if_absent(Compiler* self, SymbolId sym) {
+    if (self.mutable_capture_contains(sym)) return;
+    self.mutable_captures.push(sym);
+}
+
+fn void Compiler.prescan_let_expr(Compiler* self, Expr* expr) {
+    // Check if this let-bound variable is mutable-captured.
+    if (self.is_mutable_capture(expr.let_expr.name, expr.let_expr.body)) {
+        self.add_mutable_capture_if_absent(expr.let_expr.name);
+    }
+    self.prescan_mutable_captures(expr.let_expr.init);
+    self.prescan_mutable_captures(expr.let_expr.body);
+}
+
+fn void Compiler.prescan_expr_list(Compiler* self, Expr** exprs, usz count) {
+    for (usz i = 0; i < count; i++) {
+        self.prescan_mutable_captures(exprs[i]);
+    }
+}
+
+fn void Compiler.prescan_match_clause_results(Compiler* self, Expr* expr) {
+    self.prescan_mutable_captures(expr.match.scrutinee);
+    for (usz i = 0; i < expr.match.clause_count; i++) {
+        self.prescan_mutable_captures(expr.match.clauses[i].result);
+    }
+}
+
+fn void Compiler.prescan_handle_clause_bodies(Compiler* self, Expr* expr) {
+    self.prescan_mutable_captures(expr.handle.body);
+    for (usz i = 0; i < expr.handle.clause_count; i++) {
+        self.prescan_mutable_captures(expr.handle.clauses[i].handler_body);
+    }
+}
+
 fn void Compiler.prescan_mutable_captures(Compiler* self, Expr* expr) {
     if (expr == null) return;
     switch (expr.tag) {
         case E_LET:
-            // Check if this let-bound variable is mutable-captured
-            if (self.is_mutable_capture(expr.let_expr.name, expr.let_expr.body)) {
-                // Add to mutable captures if not already present
-                bool already = false;
-                foreach (mc : self.mutable_captures) {
-                    if ((uint)mc == (uint)expr.let_expr.name) { already = true; break; }
-                }
-                if (!already) {
-                    self.mutable_captures.push(expr.let_expr.name);
-                }
-            }
-            self.prescan_mutable_captures(expr.let_expr.init);
-            self.prescan_mutable_captures(expr.let_expr.body);
+            self.prescan_let_expr(expr);
         case E_LAMBDA:
             self.prescan_mutable_captures(expr.lambda.body);
         case E_APP:
@@ -41,14 +70,10 @@ fn void Compiler.prescan_mutable_captures(Compiler* self, Expr* expr) {
         case E_DEFINE:
             self.prescan_mutable_captures(expr.define.value);
         case E_BEGIN:
-            for (usz i = 0; i < expr.begin.expr_count; i++) {
-                self.prescan_mutable_captures(expr.begin.exprs[i]);
-            }
+            self.prescan_expr_list(expr.begin.exprs, expr.begin.expr_count);
         case E_CALL:
             self.prescan_mutable_captures(expr.call.func);
-            for (usz i = 0; i < expr.call.arg_count; i++) {
-                self.prescan_mutable_captures(expr.call.args[i]);
-            }
+            self.prescan_expr_list(expr.call.args, expr.call.arg_count);
         case E_AND:
             self.prescan_mutable_captures(expr.and_expr.left);
             self.prescan_mutable_captures(expr.and_expr.right);
@@ -56,10 +81,7 @@ fn void Compiler.prescan_mutable_captures(Compiler* self, Expr* expr) {
             self.prescan_mutable_captures(expr.or_expr.left);
             self.prescan_mutable_captures(expr.or_expr.right);
         case E_MATCH:
-            self.prescan_mutable_captures(expr.match.scrutinee);
-            for (usz i = 0; i < expr.match.clause_count; i++) {
-                self.prescan_mutable_captures(expr.match.clauses[i].result);
-            }
+            self.prescan_match_clause_results(expr);
         case E_SET:
             self.prescan_mutable_captures(expr.set_expr.value);
         case E_RESET:
@@ -67,10 +89,7 @@ fn void Compiler.prescan_mutable_captures(Compiler* self, Expr* expr) {
         case E_SHIFT:
             self.prescan_mutable_captures(expr.shift.body);
         case E_HANDLE:
-            self.prescan_mutable_captures(expr.handle.body);
-            for (usz i = 0; i < expr.handle.clause_count; i++) {
-                self.prescan_mutable_captures(expr.handle.clauses[i].handler_body);
-            }
+            self.prescan_handle_clause_bodies(expr);
         case E_PERFORM:
             self.prescan_mutable_captures(expr.perform.arg);
         case E_RESOLVE:
@@ -79,4 +98,3 @@ fn void Compiler.prescan_mutable_captures(Compiler* self, Expr* expr) {
             return;
     }
 }
-
