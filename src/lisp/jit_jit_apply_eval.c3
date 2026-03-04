@@ -3,47 +3,51 @@ module lisp;
 /// Recursively check if an Expr tree contains E_SHIFT.
 /// Used to detect named-let bodies that capture continuations,
 /// which need normal env chain copying (can't use escape-scope env).
+fn bool expr_slice_contains_shift(Expr** exprs, usz count) {
+    for (usz i = 0; i < count; i++) {
+        if (expr_contains_shift(exprs[i])) return true;
+    }
+    return false;
+}
+
+fn bool match_results_contain_shift(MatchClause* clauses, usz clause_count) {
+    for (usz i = 0; i < clause_count; i++) {
+        if (expr_contains_shift(clauses[i].result)) return true;
+    }
+    return false;
+}
+
+fn bool expr_contains_shift_binary(Expr* left, Expr* right) {
+    return expr_contains_shift(left) || expr_contains_shift(right);
+}
+
 fn bool expr_contains_shift(Expr* e) {
     if (e == null) return false;
     if (e.tag == E_SHIFT) return true;
     switch (e.tag) {
         case E_IF:
             return expr_contains_shift(e.if_expr.test) ||
-                   expr_contains_shift(e.if_expr.then_branch) ||
-                   expr_contains_shift(e.if_expr.else_branch);
+                expr_contains_shift_binary(e.if_expr.then_branch, e.if_expr.else_branch);
         case E_LET:
-            return expr_contains_shift(e.let_expr.init) ||
-                   expr_contains_shift(e.let_expr.body);
+            return expr_contains_shift_binary(e.let_expr.init, e.let_expr.body);
         case E_LAMBDA:
             // Lambda creates a closure boundary — shift inside captures
             // the lambda's context, not the named-let's. Safe to skip.
             return false;
         case E_BEGIN:
-            for (usz i = 0; i < e.begin.expr_count; i++) {
-                if (expr_contains_shift(e.begin.exprs[i])) return true;
-            }
-            return false;
+            return expr_slice_contains_shift(e.begin.exprs, e.begin.expr_count);
         case E_CALL:
             if (expr_contains_shift(e.call.func)) return true;
-            for (usz i = 0; i < e.call.arg_count; i++) {
-                if (expr_contains_shift(e.call.args[i])) return true;
-            }
-            return false;
+            return expr_slice_contains_shift(e.call.args, e.call.arg_count);
         case E_APP:
-            return expr_contains_shift(e.app.func) ||
-                   expr_contains_shift(e.app.arg);
+            return expr_contains_shift_binary(e.app.func, e.app.arg);
         case E_MATCH:
             if (expr_contains_shift(e.match.scrutinee)) return true;
-            for (usz i = 0; i < e.match.clause_count; i++) {
-                if (expr_contains_shift(e.match.clauses[i].result)) return true;
-            }
-            return false;
+            return match_results_contain_shift(e.match.clauses, e.match.clause_count);
         case E_AND:
-            return expr_contains_shift(e.and_expr.left) ||
-                   expr_contains_shift(e.and_expr.right);
+            return expr_contains_shift_binary(e.and_expr.left, e.and_expr.right);
         case E_OR:
-            return expr_contains_shift(e.or_expr.left) ||
-                   expr_contains_shift(e.or_expr.right);
+            return expr_contains_shift_binary(e.or_expr.left, e.or_expr.right);
         case E_SET:
             return expr_contains_shift(e.set_expr.value);
         case E_DEFINE:

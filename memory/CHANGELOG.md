@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-03-04: Session 92 - Split JIT Shift-Detection Traversal Helpers
+
+### Summary
+Refactored `expr_contains_shift(...)` by extracting shared traversal helpers for expression slices, match-clause results, and binary expression branches, preserving shift-detection semantics.
+
+### What changed
+- `src/lisp/jit_jit_apply_eval.c3`:
+  - Added:
+    - `expr_slice_contains_shift(exprs, count)`
+    - `match_results_contain_shift(clauses, clause_count)`
+    - `expr_contains_shift_binary(left, right)`
+  - Refactored:
+    - `expr_contains_shift(...)` now delegates repeated loop/branch patterns to the helpers above
+  - Preserved:
+    - `E_SHIFT` direct detection
+    - lambda/reset/handle boundary behavior (`false` in those delimited cases)
+    - recursive traversal coverage for `if/let/begin/call/app/match/and/or/...`
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 91 - Split JIT Index Dispatch Helpers
 
 ### Summary
