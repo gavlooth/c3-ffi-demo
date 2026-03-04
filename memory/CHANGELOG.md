@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-03-04: Session 101 - Split Parser Deftype Header/Field Helpers
+
+### Summary
+Refactored `Parser.parse_deftype(...)` into focused helpers for header parsing and field append logic, preserving accepted syntax and existing error messages.
+
+### What changed
+- `src/lisp/parser_type_defs.c3`:
+  - Added:
+    - `Parser.init_deftype_expr(e)`
+    - `Parser.parse_deftype_name_compound(e)`
+    - `Parser.parse_deftype_name(e)`
+    - `Parser.parse_deftype_typed_field(e)`
+    - `Parser.parse_deftype_bare_field(e)`
+  - Refactored:
+    - `Parser.parse_deftype(...)` now delegates name/header and typed/bare field loops to the helpers above
+  - Preserved:
+    - simple and parenthesized type-name forms
+    - typed field and bare symbol field parsing behavior
+    - error strings:
+      - `expected type name`
+      - `expected type name after [type]`
+      - `expected field name`
+      - `too many type fields`
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1144 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 100 - Split Parser Export-From Helpers
 
 ### Summary

@@ -4,55 +4,91 @@ module lisp;
  * Parse type definition: (define [type] Name (^Type field) ...)
  * or with parent: (define [type] (Name Parent) (^Type field) ...)
  */
-fn Expr* Parser.parse_deftype(Parser* self, Expr* e) {
+fn void Parser.init_deftype_expr(Parser* self, Expr* e) {
     e.tag = E_DEFTYPE;
     e.deftype = mem::malloc(ExprDefType.sizeof);
     e.deftype.has_parent = false;
     e.deftype.field_count = 0;
     e.deftype.type_param_count = 0;
     e.deftype.parent = 0;
+}
 
-    // Name can be simple: Name or parenthesized: (Name Parent?) or (Name TypeParam...)
-    // All extra symbols collected as type_params — disambiguate parent vs type-param at eval time
-    if (self.lexer.current.type == T_LPAREN) {
-        self.lexer.advance();  // consume (
-        if (self.lexer.current.type != T_SYMBOL) { self.set_error("expected type name"); return null; }
-        e.deftype.name = self.get_current_symbol();
-        self.lexer.advance();
-        while (self.lexer.current.type == T_SYMBOL && e.deftype.type_param_count < MAX_TYPE_PARAMS) {
-            e.deftype.type_params[e.deftype.type_param_count] = self.get_current_symbol();
-            e.deftype.type_param_count++;
-            self.lexer.advance();
-        }
-        self.expect(T_RPAREN, ")");
-    } else if (self.lexer.current.type == T_SYMBOL) {
-        e.deftype.name = self.get_current_symbol();
-        self.lexer.advance();
-    } else {
-        self.set_error("expected type name after [type]");
-        return null;
+fn bool Parser.parse_deftype_name_compound(Parser* self, Expr* e) {
+    self.lexer.advance();  // consume (
+    if (self.lexer.current.type != T_SYMBOL) {
+        self.set_error("expected type name");
+        return false;
     }
+    e.deftype.name = self.get_current_symbol();
+    self.lexer.advance();
+    while (self.lexer.current.type == T_SYMBOL && e.deftype.type_param_count < MAX_TYPE_PARAMS) {
+        e.deftype.type_params[e.deftype.type_param_count] = self.get_current_symbol();
+        e.deftype.type_param_count++;
+        self.lexer.advance();
+    }
+    self.expect(T_RPAREN, ")");
+    return !self.has_error;
+}
+
+fn bool Parser.parse_deftype_name(Parser* self, Expr* e) {
+    // Name can be simple: Name or parenthesized: (Name Parent?) or (Name TypeParam...)
+    // All extra symbols collected as type_params — disambiguate parent vs type-param at eval time.
+    if (self.lexer.current.type == T_LPAREN) {
+        return self.parse_deftype_name_compound(e);
+    }
+    if (self.lexer.current.type == T_SYMBOL) {
+        e.deftype.name = self.get_current_symbol();
+        self.lexer.advance();
+        return true;
+    }
+    self.set_error("expected type name after [type]");
+    return false;
+}
+
+fn bool Parser.parse_deftype_typed_field(Parser* self, Expr* e) {
+    if (e.deftype.field_count >= MAX_TYPE_FIELDS) {
+        self.set_error("too many type fields");
+        return false;
+    }
+    self.lexer.advance();  // consume (
+    TypeAnnotation ann = self.parse_type_annotation();
+    if (self.lexer.current.type != T_SYMBOL) {
+        self.set_error("expected field name");
+        return false;
+    }
+    e.deftype.fields[e.deftype.field_count].name = self.get_current_symbol();
+    e.deftype.fields[e.deftype.field_count].type_ann = ann;
+    e.deftype.field_count++;
+    self.lexer.advance();
+    self.expect(T_RPAREN, ")");
+    return !self.has_error;
+}
+
+fn bool Parser.parse_deftype_bare_field(Parser* self, Expr* e) {
+    if (e.deftype.field_count >= MAX_TYPE_FIELDS) {
+        self.set_error("too many type fields");
+        return false;
+    }
+    e.deftype.fields[e.deftype.field_count].name = self.get_current_symbol();
+    e.deftype.fields[e.deftype.field_count].type_ann.has_annotation = false;
+    e.deftype.field_count++;
+    self.lexer.advance();
+    return true;
+}
+
+fn Expr* Parser.parse_deftype(Parser* self, Expr* e) {
+    self.init_deftype_expr(e);
+
+    if (!self.parse_deftype_name(e)) return null;
 
     // Parse fields: (^Type field) or just field
     while (self.lexer.current.type == T_LPAREN && !self.has_error) {
-        if (e.deftype.field_count >= MAX_TYPE_FIELDS) { self.set_error("too many type fields"); return null; }
-        self.lexer.advance();  // consume (
-        TypeAnnotation ann = self.parse_type_annotation();
-        if (self.lexer.current.type != T_SYMBOL) { self.set_error("expected field name"); return null; }
-        e.deftype.fields[e.deftype.field_count].name = self.get_current_symbol();
-        e.deftype.fields[e.deftype.field_count].type_ann = ann;
-        e.deftype.field_count++;
-        self.lexer.advance();
-        self.expect(T_RPAREN, ")");
+        if (!self.parse_deftype_typed_field(e)) return null;
     }
 
     // Also allow bare symbol fields (untyped)
     while (self.lexer.current.type == T_SYMBOL && !self.has_error) {
-        if (e.deftype.field_count >= MAX_TYPE_FIELDS) { self.set_error("too many type fields"); return null; }
-        e.deftype.fields[e.deftype.field_count].name = self.get_current_symbol();
-        e.deftype.fields[e.deftype.field_count].type_ann.has_annotation = false;
-        e.deftype.field_count++;
-        self.lexer.advance();
+        if (!self.parse_deftype_bare_field(e)) return null;
     }
 
     self.expect(T_RPAREN, ")");  // close define
