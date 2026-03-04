@@ -421,13 +421,10 @@ fn Env* jit_env_extend(Interp* interp, Env* env, SymbolId name, Value* value) {
 // the enclosing JIT scope share the same mutable box.
 <* @require interp != null : "jit_env_extend_root: null interp" *>
 fn Env* jit_env_extend_root(Interp* interp, Env* env, SymbolId name, Value* value) {
-    main::ScopeRegion* saved_scope = interp.current_scope;
     // Promote initial payload before publishing into persistent root env box.
     Value* promoted = boundary_promote_to_root_site(value, interp, COPY_SITE_JIT_ENV_EXTEND_ROOT);
-    interp.current_scope = interp.root_scope;
-    Env* box = env.extend(interp, name, promoted);
+    Env* box = boundary_env_extend_in_root(interp, env, name, promoted);
     box.persistent = true;
-    interp.current_scope = saved_scope;
     return box;
 }
 

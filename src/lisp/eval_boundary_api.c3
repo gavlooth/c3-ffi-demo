@@ -90,6 +90,33 @@ fn Env* boundary_make_env_in_root(Interp* interp, Env* parent) @inline {
 }
 
 <*
+@require interp != null : "boundary_env_extend_in_scope: null interp"
+@require target_scope != null : "boundary_env_extend_in_scope: null target_scope"
+@require env != null : "boundary_env_extend_in_scope: null env"
+*>
+fn Env* boundary_env_extend_in_scope(
+    Interp* interp,
+    main::ScopeRegion* target_scope,
+    Env* env,
+    SymbolId name,
+    Value* value
+) @inline {
+    main::ScopeRegion* saved_scope = interp.current_scope;
+    interp.current_scope = target_scope;
+    Env* out = env.extend(interp, name, value);
+    interp.current_scope = saved_scope;
+    return out;
+}
+
+<*
+@require interp != null : "boundary_env_extend_in_root: null interp"
+@require env != null : "boundary_env_extend_in_root: null env"
+*>
+fn Env* boundary_env_extend_in_root(Interp* interp, Env* env, SymbolId name, Value* value) @inline {
+    return boundary_env_extend_in_scope(interp, interp.root_scope, env, name, value);
+}
+
+<*
 @require interp != null : "boundary_promote_to_escape: null interp"
 *>
 fn Value* boundary_promote_to_escape(Value* v, Interp* interp) @inline {

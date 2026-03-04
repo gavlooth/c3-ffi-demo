@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-03-04: Session 43 - Root Env-Extend Boundary Helper
+
+### Summary
+Consolidated root-scope env extension into boundary helpers and removed direct `current_scope` mutation from the JIT root-env extension path.
+
+### What changed
+- `src/lisp/eval_boundary_api.c3`:
+  - Added:
+    - `boundary_env_extend_in_scope(interp, target_scope, env, name, value)`
+    - `boundary_env_extend_in_root(interp, env, name, value)`
+- `src/lisp/jit_jit_closure_define_qq.c3`:
+  - `jit_env_extend_root(...)` now uses:
+    - `boundary_env_extend_in_root(...)`
+  - Removed manual `current_scope` save/switch/restore logic from this path.
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+- `c3c build --sanitize=address` passes.
+- `ASAN_OPTIONS=detect_leaks=0,halt_on_error=1,abort_on_error=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1105 passed, 0 failed (ASAN-mode skips active)
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 42 - Module Env Root Allocation via Boundary Helper
 
 ### Summary
