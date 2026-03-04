@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-03-04: Session 98 - Split Parser Module-Decl Allocation/Append Helpers
+
+### Summary
+Refactored `Parser.parse_module(...)` into focused helpers for module allocation, export-header parsing, capacity growth, and append operations while preserving parse flow and error messages.
+
+### What changed
+- `src/lisp/parser_module_decl.c3`:
+  - Added:
+    - `parser_module_ensure_export_capacity(module_expr)`
+    - `parser_module_ensure_body_capacity(module_expr)`
+    - `Parser.alloc_module_expr(name)`
+    - `Parser.parse_module_export_keyword()`
+    - `Parser.module_append_export(module_expr)`
+    - `Parser.module_append_body_expr(module_expr)`
+  - Refactored:
+    - `Parser.parse_module(...)` now delegates allocation, export parsing, and body append/capacity paths to helpers above
+  - Preserved:
+    - required `(export ...)` contract and existing error strings
+    - export/body growth semantics and append order
+    - closing-paren expectations for export list and module
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 97 - Split Lexer Advance Literal/Symbol Helpers
 
 ### Summary
