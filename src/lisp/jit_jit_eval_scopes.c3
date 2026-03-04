@@ -46,9 +46,9 @@ fn Value* jit_finalize_scoped_result(
 
     if (active_scope.refcount == 1 && result != null) {
         if (result.scope_gen != active_scope.escape_generation) {
-            interp.current_scope = active_scope;
+            main::ScopeRegion* promote_saved_scope = boundary_enter_scope(interp, active_scope);
             result = boundary_promote_to_escape(result, interp);
-            interp.current_scope = saved_scope;
+            boundary_leave_scope(interp, promote_saved_scope);
         }
         if (boundary_ctx.aborted) {
             result = boundary_copy_from_releasing_scope(
@@ -157,6 +157,10 @@ fn Value* jit_eval(Expr* expr, Env* env, Interp* interp) {
                 } else {
                     // Fallback: allocate fresh call_scope and copy full env chain.
                     main::ScopeRegion* fresh = main::scope_create(cs.parent);
+                    if (fresh == null) {
+                        interp.jit_env = saved_env;
+                        return raise_error(interp, "jit: failed to allocate TCO recycle scope");
+                    }
                     interp.current_scope = fresh;
                     interp.tco_recycle_scope = fresh;  // Update: fresh is now the recyclable scope
                     env = jit_copy_tco_env_chain_for_recycle(env, interp, cs);
@@ -176,9 +180,11 @@ fn Value* jit_eval(Expr* expr, Env* env, Interp* interp) {
 // Used for non-loop function calls. No TCO recycle scope is set.
 // Avoids the overhead of two scopes (result_scope + call_scope).
 fn Value* jit_eval_in_single_scope(Expr* body, Env* call_env, Interp* interp) {
-    main::ScopeRegion* saved_scope = interp.current_scope;
-    main::ScopeRegion* call_scope = main::scope_create(saved_scope);
-    interp.current_scope = call_scope;
+    main::ScopeRegion* saved_scope = null;
+    main::ScopeRegion* call_scope = boundary_push_child_scope(interp, &saved_scope);
+    if (call_scope == null) {
+        return raise_error(interp, "jit: failed to allocate call scope");
+    }
 
     Value* result = jit_eval(body, call_env, interp);
 
@@ -198,11 +204,13 @@ fn Value* jit_eval_in_single_scope(Expr* body, Env* call_env, Interp* interp) {
 // Scope-per-call wrapper: evaluates closure body in a child scope.
 // Unified lane model: one scope per call with TEMP+ESCAPE lanes.
 fn Value* jit_eval_in_call_scope(Expr* body, Env* call_env, Interp* interp, bool enable_escape_env) {
-    main::ScopeRegion* saved_scope = interp.current_scope;
+    main::ScopeRegion* saved_scope = null;
 
     // Unified one-scope lane model: TEMP recycles, ESCAPE splices.
-    main::ScopeRegion* call_scope = main::scope_create(saved_scope);
-    interp.current_scope = call_scope;
+    main::ScopeRegion* call_scope = boundary_push_child_scope(interp, &saved_scope);
+    if (call_scope == null) {
+        return raise_error(interp, "jit: failed to allocate call scope");
+    }
 
     bool saved_escape_env = interp.escape_env_mode;
     if (enable_escape_env) {

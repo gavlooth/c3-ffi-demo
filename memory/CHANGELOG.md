@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-03-04: Session 51 - JIT Scoped-Eval Boundary Hardening
+
+### Summary
+Reduced manual scope mutation in JIT scoped-eval paths by reusing boundary helpers and added explicit allocation-failure guards for recyclable call-scope creation.
+
+### What changed
+- `src/lisp/jit_jit_eval_scopes.c3`:
+  - `jit_finalize_scoped_result(...)`:
+    - replaced direct `current_scope` save/switch/restore around `boundary_promote_to_escape(...)` with:
+      - `boundary_enter_scope(...)`
+      - `boundary_leave_scope(...)`
+  - `jit_eval_in_single_scope(...)`:
+    - switched child-scope setup to:
+      - `boundary_push_child_scope(...)`
+    - added explicit error return when scope allocation fails
+  - `jit_eval_in_call_scope(...)`:
+    - switched child-scope setup to:
+      - `boundary_push_child_scope(...)`
+    - added explicit error return when scope allocation fails
+  - `jit_eval(...)` TCO fallback:
+    - added null-check for fresh recycle scope allocation
+    - returns explicit runtime error instead of proceeding with null scope
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+- `c3c build --sanitize=address` passes.
+- `ASAN_OPTIONS=detect_leaks=0,halt_on_error=1,abort_on_error=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1105 passed, 0 failed (ASAN-mode skips active)
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 50 - Child-Scope Boundary Push/Pop
 
 ### Summary
