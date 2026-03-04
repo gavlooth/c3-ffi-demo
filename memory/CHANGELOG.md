@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-03-04: Session 40 - Additional Root Wrapper Sites Migrated
+
+### Summary
+Continued root-lifetime boundary cleanup by migrating additional wrapper allocation sites from manual root-scope switching to boundary allocator helpers.
+
+### What changed
+- `src/lisp/prim_collection_hashmap.c3`:
+  - `make_hashmap(...)` now allocates wrapper via:
+    - `boundary_alloc_value_in_root(interp, true)`
+- `src/lisp/eval_init_primitives.c3`:
+  - `register_dispatched_prim(...)` now allocates method-table wrapper via:
+    - `boundary_alloc_value_in_root(interp, true)`
+  - Removed local root-scope save/restore block.
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+- `c3c build --sanitize=address` passes.
+- `ASAN_OPTIONS=detect_leaks=0,halt_on_error=1,abort_on_error=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1105 passed, 0 failed (ASAN-mode skips active)
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 39 - Value Constructor Root/Scoped Allocation Cleanup
 
 ### Summary

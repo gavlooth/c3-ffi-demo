@@ -306,11 +306,7 @@ fn void register_dispatched_prim(Interp* interp, char[] name, PrimitiveFn func, 
     mt.capacity = METHOD_INITIAL_CAPACITY;
     mt.fallback = prim;
 
-    main::ScopeRegion* saved_scope = interp.current_scope;
-    interp.current_scope = interp.root_scope;
-    Value* mt_val = interp.alloc_value();
-    main::scope_register_dtor(interp.root_scope, (void*)mt_val, &scope_dtor_value);
-    interp.current_scope = saved_scope;
+    Value* mt_val = boundary_alloc_value_in_root(interp, true);
     mt_val.tag = METHOD_TABLE;
     mt_val.method_table_val = mt;
 

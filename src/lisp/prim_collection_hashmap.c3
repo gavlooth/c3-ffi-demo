@@ -212,14 +212,10 @@ fn bool hashmap_remove(HashMap* map, Value* key) {
 }
 
 fn Value* make_hashmap(Interp* interp, uint capacity) {
-    // Allocate value in root_scope so it persists
-    main::ScopeRegion* saved_scope = interp.current_scope;
-    interp.current_scope = interp.root_scope;
-    Value* v = interp.alloc_value();
+    // Allocate value in root_scope so it persists.
+    Value* v = boundary_alloc_value_in_root(interp, true);
     v.tag = HASHMAP;
-    main::scope_register_dtor(interp.root_scope, (void*)v, &scope_dtor_value);
     v.hashmap_val = hashmap_new(capacity, interp);
-    interp.current_scope = saved_scope;
     return v;
 }
 
