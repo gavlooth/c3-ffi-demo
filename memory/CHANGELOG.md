@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-03-04: Session 83 - Split JIT Handle Control-Flow Helpers
+
+### Summary
+Refactored `jit_handle_impl(...)` by extracting body-switch, signal-dispatch loop, and no-signal finalization helpers, reducing function size and preserving handle/signal behavior.
+
+### What changed
+- `src/lisp/jit_jit_handle_signal.c3`:
+  - Added:
+    - `jit_handle_switch_to_body(ctx, interp)`
+    - `jit_handle_dispatch_signals(state, expr, env, interp, ctx, out_result)`
+    - `jit_handle_finish_no_signal(expr, env, interp, ctx)`
+  - Refactored:
+    - `jit_handle_impl(...)` now composes the helper phases above
+  - Preserved:
+    - stack-context switch/restore behavior and stack-overflow error path
+    - signal dispatch loop semantics (resume-completed, re-signal, abort/unmatched return)
+    - pending-raise handling on normal completion
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 82 - Split Native Effect Emission Helpers
 
 ### Summary

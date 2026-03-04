@@ -297,6 +297,55 @@ fn bool jit_handle_copy_clauses(EffectHandler* h, Expr* expr) {
     return true;
 }
 
+fn EvalResult jit_handle_switch_to_body(main::StackCtx* ctx, Interp* interp) {
+    SavedInterpState saved;
+    save_interp_state(interp, &saved);
+
+    main::StackContext parent_ctx;
+    main::stack_ctx_switch_to(ctx, &parent_ctx);
+    preserve_raise_across_restore(interp, &saved);
+
+    if (ctx.status == main::StackCtxStatus.CTX_DEAD) {
+        return eval_error("stack overflow in handle body");
+    }
+    return eval_ok(null);
+}
+
+fn bool jit_handle_dispatch_signals(
+    HandleEffectState* state,
+    Expr* expr,
+    Env* env,
+    Interp* interp,
+    main::StackCtx* ctx,
+    EvalResult* out_result
+) {
+    while (state.signaled) {
+        Value* handler_v = jit_handle_dispatch_signal(state, expr, env, interp, ctx);
+
+        // resolve was called, body completed
+        if (ctx.status == main::StackCtxStatus.CTX_COMPLETED) {
+            *out_result = value_to_eval_result((Value*)ctx.result);
+            return true;
+        }
+
+        // Body hit another signal after being resumed — loop to dispatch.
+        if (state.signaled) {
+            continue;
+        }
+
+        // Abort or unmatched clause: context still suspended, return handler result.
+        *out_result = value_to_eval_result(handler_v);
+        return true;
+    }
+    return false;
+}
+
+fn EvalResult jit_handle_finish_no_signal(Expr* expr, Env* env, Interp* interp, main::StackCtx* ctx) {
+    Value* raise_v = dispatch_pending_raise(expr, env, interp);
+    if (raise_v != null) return value_to_eval_result(raise_v);
+    return value_to_eval_result((Value*)ctx.result);
+}
+
 fn EvalResult jit_handle_impl(Expr* expr, Env* env, Interp* interp) {
     jit_handle_warm_clauses(expr, interp);
 
@@ -326,42 +375,14 @@ fn EvalResult jit_handle_impl(Expr* expr, Env* env, Interp* interp) {
     state.handler_copy = *h;
     state.handler_idx = my_idx;
 
-    SavedInterpState saved;
-    save_interp_state(interp, &saved);
+    EvalResult run_result = jit_handle_switch_to_body(ctx, interp);
+    if (run_result.error.has_error) return run_result;
 
-    main::StackContext parent_ctx;
-    main::stack_ctx_switch_to(ctx, &parent_ctx);
-    preserve_raise_across_restore(interp, &saved);
-
-    if (ctx.status == main::StackCtxStatus.CTX_DEAD) {
-        return eval_error("stack overflow in handle body");
+    EvalResult dispatch_result;
+    if (jit_handle_dispatch_signals(&state, expr, env, interp, ctx, &dispatch_result)) {
+        return dispatch_result;
     }
-
-    Value* last_handler_v = null;
-    while (state.signaled) {
-        last_handler_v = jit_handle_dispatch_signal(&state, expr, env, interp, ctx);
-
-        // resolve was called, body completed
-        if (ctx.status == main::StackCtxStatus.CTX_COMPLETED) {
-            interp.handler_count = my_idx;
-            return value_to_eval_result((Value*)ctx.result);
-        }
-
-        // Body hit another signal after being resumed — loop to dispatch
-        if (state.signaled) {
-            continue;
-        }
-
-        // Abort or unmatched clause: context still suspended, return handler result
-        interp.handler_count = my_idx;
-        return value_to_eval_result(last_handler_v);
-    }
-
-    // Normal completion (no signal)
-    interp.handler_count = my_idx;
-    Value* raise_v = dispatch_pending_raise(expr, env, interp);
-    if (raise_v != null) return value_to_eval_result(raise_v);
-    return value_to_eval_result((Value*)ctx.result);
+    return jit_handle_finish_no_signal(expr, env, interp, ctx);
 }
 
 // =============================================================================
