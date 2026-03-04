@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-03-04: Session 79 - Split Shorthand-Define Parse Pipeline
+
+### Summary
+Refactored `Parser.parse_shorthand_define(...)` into focused helpers for optional rest-parameter parsing, body parsing/destructuring, and lambda construction, preserving shorthand-define behavior.
+
+### What changed
+- `src/lisp/parser_define_core.c3`:
+  - Added:
+    - `Parser.parse_shorthand_rest_param(has_rest_out, rest_param_out)`
+    - `Parser.parse_shorthand_define_body(e, destr_patterns, destr_param_names, destr_count)`
+    - `Parser.build_shorthand_define_lambda(e, params, define_param_anns, define_has_typed, define_has_rest, define_rest_param, body)`
+  - Refactored:
+    - `Parser.parse_shorthand_define(...)` now composes those helpers
+  - Preserved:
+    - same error text for missing shorthand function name
+    - same error text for invalid `..` rest param syntax
+    - same shorthand desugaring to `(define name (lambda ...))`
+
+### Verification
+- `c3c build` passes.
+- `ASAN_OPTIONS=detect_leaks=0,halt_on_error=1,abort_on_error=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1105 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+- `c3c build --sanitize=address` passes.
+- `ASAN_OPTIONS=detect_leaks=0,halt_on_error=1,abort_on_error=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1105 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 78 - Split Named-Let Parse/Build Phases
 
 ### Summary
