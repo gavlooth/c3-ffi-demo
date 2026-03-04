@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-03-04: Session 54 - Type Constructor Allocation Failure Hardening
+
+### Summary
+Hardened type/union constructor runtime paths against allocation failure to avoid null dereference and silent invalid global bindings.
+
+### What changed
+- `src/lisp/eval_type_evaluators.c3`:
+  - `make_instance_in_scope(...)`:
+    - checks wrapper allocation result from `boundary_alloc_value_in_scope(...)`
+    - releases `owner_scope` and returns `null` on wrapper allocation failure
+  - `prim_type_constructor(...)`:
+    - checks `make_instance(...)` result for null
+    - returns explicit runtime error on allocation failure
+  - `eval_defunion(...)` (nullary variants):
+    - checks `make_instance_root(...)` result
+    - returns explicit `eval_error(...)` when constant instance allocation fails
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+- `c3c build --sanitize=address` passes.
+- `ASAN_OPTIONS=detect_leaks=0,halt_on_error=1,abort_on_error=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1105 passed, 0 failed (ASAN-mode skips active)
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 53 - Run Result Promotion Boundary Scope Discipline
 
 ### Summary

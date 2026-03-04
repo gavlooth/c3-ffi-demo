@@ -43,6 +43,10 @@ fn Value* make_instance_in_scope(Interp* interp, main::ScopeRegion* wrapper_scop
         }
     }
     Value* v = boundary_alloc_value_in_scope(interp, wrapper_scope, true);
+    if (v == null) {
+        main::scope_release(owner_scope);
+        return null;
+    }
     v.tag = INSTANCE;
     v.instance_val = inst;
     return v;
@@ -260,6 +264,9 @@ fn Value* prim_type_constructor(Value*[] args, Env* env, Interp* interp) {
         fields[i] = args[i];
     }
     Value* result = make_instance(interp, type_id, &fields, args.len);
+    if (result == null) {
+        return make_error(interp, "type constructor: failed to allocate instance");
+    }
 
     if (ti.type_param_count > 0 && result.instance_val != null) {
         Instance* inst = result.instance_val;
@@ -348,6 +355,12 @@ fn EvalResult eval_defunion(Expr* expr, Env* env, Interp* interp) {
         if (variant.field_count == 0) {
             // Nullary variant: define as a constant instance in root_scope
             Value* inst = make_instance_root(interp, var_id, null, 0);
+            if (inst == null) {
+                char[256] ebuf;
+                char[] msg = io::bprintf(&ebuf, "failed to allocate union variant '%s'",
+                    (ZString)interp.symbols.get_name(variant.name))!!;
+                return eval_error(msg);
+            }
             env_define_with_barrier(interp.global_env, variant.name, inst, interp);
         } else {
             // Variant with fields: define as constructor primitive (make_primitive uses root_scope)
