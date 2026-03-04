@@ -81,12 +81,8 @@ fn bool is_array(Value* v) @inline {
 }
 
 fn Value* make_array(Interp* interp, usz capacity) {
-    // Allocate Value in root_scope so it persists across scope releases
-    main::ScopeRegion* saved_scope = interp.current_scope;
-    interp.current_scope = interp.root_scope;
-    Value* v = interp.alloc_value();
-    main::scope_register_dtor(interp.root_scope, (void*)v, &scope_dtor_value);
-    interp.current_scope = saved_scope;
+    // Allocate Value in root_scope so it persists across scope releases.
+    Value* v = boundary_alloc_value_in_root(interp, true);
     v.tag = ARRAY;
     Array* arr = (Array*)mem::malloc(Array.sizeof);
     arr.capacity = capacity < 4 ? 4 : capacity;
@@ -98,11 +94,8 @@ fn Value* make_array(Interp* interp, usz capacity) {
 }
 
 fn Value* make_module(Interp* interp, Module* mod) {
-    // Allocate Value in root_scope so it persists across scope releases
-    main::ScopeRegion* saved_scope = interp.current_scope;
-    interp.current_scope = interp.root_scope;
-    Value* v = interp.alloc_value();
-    interp.current_scope = saved_scope;
+    // Allocate Value in root_scope so it persists across scope releases.
+    Value* v = boundary_alloc_value_in_root(interp);
     v.tag = MODULE;
     v.module_val = mod;
     return v;
@@ -117,11 +110,7 @@ fn Value* make_iterator(Interp* interp, Value* thunk) {
 
 fn Value* make_coroutine(Interp* interp, main::StackCtx* ctx) {
     // Allocate coroutine wrapper in root_scope so abandonment still runs a dtor.
-    main::ScopeRegion* saved_scope = interp.current_scope;
-    interp.current_scope = interp.root_scope;
-    Value* v = interp.alloc_value();
-    main::scope_register_dtor(interp.root_scope, (void*)v, &scope_dtor_value);
-    interp.current_scope = saved_scope;
+    Value* v = boundary_alloc_value_in_root(interp, true);
 
     v.tag = COROUTINE;
     v.coroutine_val = ctx;

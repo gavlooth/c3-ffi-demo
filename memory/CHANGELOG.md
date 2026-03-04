@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-03-04: Session 38 - Root-Scope Value Allocation via Boundary Helpers
+
+### Summary
+Reduced repeated root-scope scope-switch choreography by introducing boundary allocation helpers and migrating core wrapper constructors to use them.
+
+### What changed
+- `src/lisp/eval_boundary_api.c3`:
+  - Added:
+    - `boundary_alloc_value_in_scope(interp, target_scope, register_dtor = false)`
+    - `boundary_alloc_value_in_root(interp, register_dtor = false)`
+  - Helpers centralize save/restore of `interp.current_scope` for value-wrapper allocation in target/root scope.
+- `src/lisp/value_predicates_accessors_core.c3`:
+  - Migrated constructors:
+    - `make_array(...)`
+    - `make_module(...)`
+    - `make_coroutine(...)`
+  - Replaced inline root-scope switching with boundary allocator calls.
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 37 - Remove Local Scoped-Copy Shim + TCO Recycle Guard Helper
 
 ### Summary

@@ -49,6 +49,28 @@ fn Value* boundary_copy_to_scope_site(
 }
 
 <*
+@require interp != null : "boundary_alloc_value_in_scope: null interp"
+@require target_scope != null : "boundary_alloc_value_in_scope: null target_scope"
+*>
+fn Value* boundary_alloc_value_in_scope(Interp* interp, main::ScopeRegion* target_scope, bool register_dtor = false) @inline {
+    main::ScopeRegion* saved_scope = interp.current_scope;
+    interp.current_scope = target_scope;
+    Value* v = interp.alloc_value();
+    if (register_dtor) {
+        main::scope_register_dtor(target_scope, (void*)v, &scope_dtor_value);
+    }
+    interp.current_scope = saved_scope;
+    return v;
+}
+
+<*
+@require interp != null : "boundary_alloc_value_in_root: null interp"
+*>
+fn Value* boundary_alloc_value_in_root(Interp* interp, bool register_dtor = false) @inline {
+    return boundary_alloc_value_in_scope(interp, interp.root_scope, register_dtor);
+}
+
+<*
 @require interp != null : "boundary_promote_to_escape: null interp"
 *>
 fn Value* boundary_promote_to_escape(Value* v, Interp* interp) @inline {
