@@ -145,6 +145,61 @@ fn void scheduler_uv_poll_cb(void* handle, int status, int events) {
     }
 }
 
+fn void scheduler_handle_invalid_wakeup(WakeupEvent ev) {
+    if (ev.type == WAKEUP_OFFLOAD_READY && ev.payload != null) {
+        scheduler_free_offload_completion(ev.payload);
+    }
+}
+
+fn void scheduler_handle_wakeup_timer_expired(usz fid) {
+    PendingTcpRead* op = &g_scheduler.pending_reads[fid];
+    if (!op.active || op.completed) return;
+    op.timed_out = true;
+    op.completed = true;
+    scheduler_complete_pending_tcp_read(fid);
+}
+
+fn void scheduler_handle_wakeup_poll_error(usz fid, int status) {
+    PendingTcpRead* op = &g_scheduler.pending_reads[fid];
+    if (!op.active || op.completed) return;
+    op.error_code = status;
+    op.completed = true;
+    scheduler_complete_pending_tcp_read(fid);
+}
+
+fn void scheduler_handle_wakeup_poll_readable(usz fid) {
+    PendingTcpRead* op = &g_scheduler.pending_reads[fid];
+    if (!op.active || op.completed) return;
+
+    long n = c_recv(op.fd, op.buffer, op.max_bytes, MSG_DONTWAIT);
+    if (n >= 0) {
+        op.nread = n;
+        op.completed = true;
+    } else {
+        int err = 0;
+        int* err_ptr = c_errno_location();
+        if (err_ptr != null) err = *err_ptr;
+        if (err != ERRNO_EAGAIN && err != ERRNO_EWOULDBLOCK) {
+            op.error_code = err;
+            op.completed = true;
+        }
+    }
+
+    if (op.completed) scheduler_complete_pending_tcp_read(fid);
+}
+
+fn void scheduler_handle_wakeup_offload_ready(usz fid, void* payload) {
+    PendingOffload* off = &g_scheduler.pending_offloads[fid];
+    if (!off.active || off.completed) {
+        scheduler_free_offload_completion(payload);
+        return;
+    }
+
+    off.completion = payload;
+    off.completed = true;
+    scheduler_complete_pending_offload(fid);
+}
+
 fn void drain_wakeups() {
     usz tail = g_scheduler.wakeup_tail.load();
     while (true) {
@@ -160,51 +215,19 @@ fn void drain_wakeups() {
 
         usz fid = ev.fiber_id;
         if (fid >= g_scheduler.fiber_count) {
-            if (ev.type == WAKEUP_OFFLOAD_READY && ev.payload != null) {
-                scheduler_free_offload_completion(ev.payload);
-            }
+            scheduler_handle_invalid_wakeup(ev);
             continue;
         }
 
         switch (ev.type) {
             case WAKEUP_TIMER_EXPIRED:
-                PendingTcpRead* op = &g_scheduler.pending_reads[fid];
-                if (!op.active || op.completed) continue;
-                op.timed_out = true;
-                op.completed = true;
-                scheduler_complete_pending_tcp_read(fid);
+                scheduler_handle_wakeup_timer_expired(fid);
             case WAKEUP_POLL_ERROR:
-                PendingTcpRead* op = &g_scheduler.pending_reads[fid];
-                if (!op.active || op.completed) continue;
-                op.error_code = ev.status;
-                op.completed = true;
-                scheduler_complete_pending_tcp_read(fid);
+                scheduler_handle_wakeup_poll_error(fid, ev.status);
             case WAKEUP_POLL_READABLE:
-                PendingTcpRead* op = &g_scheduler.pending_reads[fid];
-                if (!op.active || op.completed) continue;
-                long n = c_recv(op.fd, op.buffer, op.max_bytes, MSG_DONTWAIT);
-                if (n >= 0) {
-                    op.nread = n;
-                    op.completed = true;
-                } else {
-                    int err = 0;
-                    int* err_ptr = c_errno_location();
-                    if (err_ptr != null) err = *err_ptr;
-                    if (err != ERRNO_EAGAIN && err != ERRNO_EWOULDBLOCK) {
-                        op.error_code = err;
-                        op.completed = true;
-                    }
-                }
-                if (op.completed) scheduler_complete_pending_tcp_read(fid);
+                scheduler_handle_wakeup_poll_readable(fid);
             case WAKEUP_OFFLOAD_READY:
-                PendingOffload* off = &g_scheduler.pending_offloads[fid];
-                if (!off.active || off.completed) {
-                    scheduler_free_offload_completion(ev.payload);
-                    continue;
-                }
-                off.completion = ev.payload;
-                off.completed = true;
-                scheduler_complete_pending_offload(fid);
+                scheduler_handle_wakeup_offload_ready(fid, ev.payload);
         }
     }
     g_scheduler.wakeup_tail.store(tail);

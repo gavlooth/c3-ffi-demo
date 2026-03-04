@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-03-04: Session 67 - Decompose Wakeup Drain Event Handlers
+
+### Summary
+Refactored `drain_wakeups()` by extracting per-event handlers (timer, poll-error, poll-readable, offload-ready) and invalid-fiber cleanup, reducing branching complexity while preserving behavior.
+
+### What changed
+- `src/lisp/scheduler_wakeup_io.c3`:
+  - Added helpers:
+    - `scheduler_handle_invalid_wakeup(ev)`
+    - `scheduler_handle_wakeup_timer_expired(fid)`
+    - `scheduler_handle_wakeup_poll_error(fid, status)`
+    - `scheduler_handle_wakeup_poll_readable(fid)`
+    - `scheduler_handle_wakeup_offload_ready(fid, payload)`
+  - `drain_wakeups()` now dispatches to helpers instead of inlining all state transitions.
+  - Preserved:
+    - offload completion cleanup when wakeup targets invalid/inactive fiber
+    - TCP read completion and error semantics
+    - wakeup tail/head draining behavior
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+- `c3c build --sanitize=address` passes.
+- `ASAN_OPTIONS=detect_leaks=0,halt_on_error=1,abort_on_error=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1105 passed, 0 failed (ASAN-mode skips active)
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 66 - Share Thread Task-ID Validation
 
 ### Summary
