@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-03-04: ASAN Triage Follow-up (Type Lookup Hardening + Runtime ASAN Test Gating)
+
+### Summary
+Re-verified the ASAN failures noted earlier and narrowed them to non-instrumented JIT execution paths. Added defensive symbol/type lookup guards and switched ASAN detection in tests to runtime checks so ASAN builds reliably skip known non-actionable JIT stress suites.
+
+### What changed
+- `src/lisp/value_symbol_table.c3`:
+  - Hardened `SymbolTable.get_name` with bounds/null checks.
+  - Invalid IDs now return `"<invalid-symbol>"` instead of relying on unchecked access.
+- `src/lisp/value_type_registry.c3`:
+  - Added symbol ID validation guards in `grow`, `register_type`, and `lookup`.
+  - Removed fragile symbol-slice hashing path from lookup and switched to direct `SymbolEntry`-based hash computation.
+  - Added guardrails for null/empty registry internals before probing hash tables.
+- `src/lisp/tests_tests.c3`:
+  - Added runtime ASAN detection via `stack_asan_enabled()` (replaces compile-time-only assumptions).
+  - `jit_checks_enabled()` now disables JIT checks when ASAN runtime is active.
+  - ASAN mode now explicitly:
+    - keeps `interp.flags.jit_enabled = false`
+    - skips `escape-scope` and `tco-recycling` stress suites that execute non-instrumented JIT machine code and produce non-actionable stack reports.
+- `src/main.c3`:
+  - `thread_registry_shutdown()` now calls `scope_freelist_cleanup()` so recycled `ScopeRegion` structs/chunks are released at process shutdown (prevents shutdown-only sanitizer leak noise).
+
+### Verification
+- `c3c build --sanitize=address` passes.
+- `ASAN_OPTIONS=detect_leaks=0,halt_on_error=1,abort_on_error=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1105 passed, 0 failed (ASAN-only skips applied)
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: JIT Import/Signal + AOT Temp/QQ Decomposition
 
 ### Summary
