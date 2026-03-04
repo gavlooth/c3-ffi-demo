@@ -107,6 +107,14 @@ fn void coroutine_thunk_entry(void* arg) {
     main::g_current_stack_ctx.result = result;
 }
 
+fn CoroutineThunkState* coroutine_alloc_thunk_state(Value* thunk, Interp* interp) {
+    CoroutineThunkState* state = (CoroutineThunkState*)mem::malloc(CoroutineThunkState.sizeof);
+    if (state == null) return null;
+    state.thunk = thunk;
+    state.interp = interp;
+    return state;
+}
+
 fn Value* prim_coroutine_p(Value*[] args, Env* env, Interp* interp) {
     if (args[0].tag == COROUTINE) return make_symbol(interp, interp.sym_true);
     return make_nil(interp);
@@ -131,9 +139,11 @@ fn Value* prim_coroutine(Value*[] args, Env* env, Interp* interp) {
     if (ctx == null) return raise_error(interp, "coroutine: failed to create context");
 
     // Store thunk state on the context's user_data (lives as long as the context)
-    CoroutineThunkState* state = (CoroutineThunkState*)mem::malloc(CoroutineThunkState.sizeof);
-    state.thunk = thunk;
-    state.interp = interp;
+    CoroutineThunkState* state = coroutine_alloc_thunk_state(thunk, interp);
+    if (state == null) {
+        main::stack_ctx_destroy(ctx, &interp.stack_ctx_pool);
+        return raise_error(interp, "coroutine: out of memory");
+    }
     ctx.user_data = state;
 
     main::stack_ctx_init(ctx, &coroutine_thunk_entry, state);

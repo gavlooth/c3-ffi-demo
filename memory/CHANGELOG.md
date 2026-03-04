@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-03-04: Session 73 - Coroutine Thunk-State Allocation Helper
+
+### Summary
+Refactored coroutine thunk-state setup into a dedicated allocator helper and added explicit OOM handling in `prim_coroutine(...)`.
+
+### What changed
+- `src/lisp/primitives_iter_coroutine.c3`:
+  - Added:
+    - `coroutine_alloc_thunk_state(thunk, interp)`
+  - Refactored:
+    - `prim_coroutine(...)` now delegates user-data state allocation to helper
+  - Hardening:
+    - if thunk-state allocation fails, coroutine context is destroyed and a deterministic `"coroutine: out of memory"` error is returned
+    - avoids null dereference on allocation failure
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+- `c3c build --sanitize=address` passes.
+- `ASAN_OPTIONS=detect_leaks=0,halt_on_error=1,abort_on_error=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1105 passed, 0 failed (ASAN-mode skips active)
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 72 - Share Iterator Argument Validation
 
 ### Summary
