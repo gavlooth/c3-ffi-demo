@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-03-04: Session 41 - JIT Method-Table Wrapper Allocation Cleanup
+
+### Summary
+Removed another manual root-scope allocation block in the JIT define path by routing method-table wrapper creation through boundary alloc helpers.
+
+### What changed
+- `src/lisp/jit_jit_closure_define_qq.c3`:
+  - `jit_make_method_table_value(...)` now allocates via:
+    - `boundary_alloc_value_in_root(interp, true)`
+  - Removed local root-scope save/restore + explicit dtor registration block.
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+- `c3c build --sanitize=address` passes.
+- `ASAN_OPTIONS=detect_leaks=0,halt_on_error=1,abort_on_error=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1105 passed, 0 failed (ASAN-mode skips active)
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 40 - Additional Root Wrapper Sites Migrated
 
 ### Summary

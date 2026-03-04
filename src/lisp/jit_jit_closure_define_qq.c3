@@ -333,11 +333,7 @@ fn Value* jit_eval_set_path(Interp* interp, Expr* expr, Value* value, Env* env) 
 // define helper — called from JIT-compiled code.
 // Full define with typed dispatch support, mirrors eval_define from eval.c3.
 fn Value* jit_make_method_table_value(Interp* interp, MethodTable* mt) {
-    main::ScopeRegion* saved_scope = interp.current_scope;
-    interp.current_scope = interp.root_scope;
-    defer interp.current_scope = saved_scope;
-    Value* mt_val = interp.alloc_value();
-    main::scope_register_dtor(interp.root_scope, (void*)mt_val, &scope_dtor_value);
+    Value* mt_val = boundary_alloc_value_in_root(interp, true);
     mt_val.tag = METHOD_TABLE;
     mt_val.method_table_val = mt;
     return mt_val;
