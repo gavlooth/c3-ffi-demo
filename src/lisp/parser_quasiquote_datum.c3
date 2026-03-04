@@ -53,19 +53,69 @@ fn Value* parser_make_quote_datum(Interp* interp, Value* inner) {
     return v;
 }
 
+fn Value* Parser.parse_datum_template_only(
+    Parser* self,
+    bool template_mode,
+    SymbolId sym
+) {
+    if (!template_mode) return parser_make_nil_datum(self.interp);
+    self.lexer.advance();
+    return parser_make_symbol_datum(self.interp, sym);
+}
+
+fn Value* Parser.parse_datum_string(Parser* self) {
+    Value* v = parser_make_string_datum(self.interp, self.lexer);
+    self.lexer.advance();
+    return v;
+}
+
+fn Value* Parser.parse_datum_quote(Parser* self, bool template_mode) {
+    self.lexer.advance();
+    Value* inner = self.parse_datum_impl(template_mode);
+    return parser_make_quote_datum(self.interp, inner);
+}
+
+fn Value* Parser.parse_datum_list(Parser* self, bool template_mode) {
+    Lexer* lex = self.lexer;
+    lex.advance();
+    if (lex.current.type == T_RPAREN) {
+        lex.advance();
+        return parser_make_nil_datum(self.interp);
+    }
+
+    Value* first = self.parse_datum_impl(template_mode);
+    Value* head = self.interp.alloc_value_root();
+    head.tag = CONS;
+    head.cons_val.car = first;
+    head.cons_val.cdr = null;
+
+    Value* tail = head;
+    while (lex.current.type != T_RPAREN && !self.has_error) {
+        Value* next = self.parse_datum_impl(template_mode);
+        if (self.has_error) return null;
+        Value* cell = self.interp.alloc_value_root();
+        cell.tag = CONS;
+        cell.cons_val.car = next;
+        cell.cons_val.cdr = null;
+        tail.cons_val.cdr = cell;
+        tail = cell;
+    }
+    if (self.has_error) return null;
+
+    tail.cons_val.cdr = parser_make_nil_datum(self.interp);
+    lex.advance();  // consume ')'
+    return head;
+}
+
 fn Value* Parser.parse_datum_impl(Parser* self, bool template_mode) {
     if (self.has_error) return null;
     Lexer* lex = self.lexer;
 
     switch (lex.current.type) {
         case T_DOTDOT:
-            if (!template_mode) return parser_make_nil_datum(self.interp);
-            lex.advance();
-            return parser_make_symbol_datum(self.interp, self.interp.sym_dotdot);
+            return self.parse_datum_template_only(template_mode, self.interp.sym_dotdot);
         case T_UNDERSCORE:
-            if (!template_mode) return parser_make_nil_datum(self.interp);
-            lex.advance();
-            return parser_make_symbol_datum(self.interp, self.interp.symbols.intern("_"));
+            return self.parse_datum_template_only(template_mode, self.interp.symbols.intern("_"));
         case T_INT: {
             long val = lex.current.int_value;
             lex.advance();
@@ -76,46 +126,12 @@ fn Value* Parser.parse_datum_impl(Parser* self, bool template_mode) {
             lex.advance();
             return parser_make_symbol_datum(self.interp, sym);
         }
-        case T_STRING: {
-            Value* v = parser_make_string_datum(self.interp, lex);
-            lex.advance();
-            return v;
-        }
-        case T_QUOTE: {
-            lex.advance();
-            Value* inner = self.parse_datum_impl(template_mode);
-            return parser_make_quote_datum(self.interp, inner);
-        }
-        case T_LPAREN: {
-            lex.advance();
-            if (lex.current.type == T_RPAREN) {
-                lex.advance();
-                return parser_make_nil_datum(self.interp);
-            }
-
-            Value* first = self.parse_datum_impl(template_mode);
-            Value* head = self.interp.alloc_value_root();
-            head.tag = CONS;
-            head.cons_val.car = first;
-            head.cons_val.cdr = null;
-
-            Value* tail = head;
-            while (lex.current.type != T_RPAREN && !self.has_error) {
-                Value* next = self.parse_datum_impl(template_mode);
-                if (self.has_error) return null;
-                Value* cell = self.interp.alloc_value_root();
-                cell.tag = CONS;
-                cell.cons_val.car = next;
-                cell.cons_val.cdr = null;
-                tail.cons_val.cdr = cell;
-                tail = cell;
-            }
-            if (self.has_error) return null;
-
-            tail.cons_val.cdr = parser_make_nil_datum(self.interp);
-            lex.advance();  // consume ')'
-            return head;
-        }
+        case T_STRING:
+            return self.parse_datum_string();
+        case T_QUOTE:
+            return self.parse_datum_quote(template_mode);
+        case T_LPAREN:
+            return self.parse_datum_list(template_mode);
         default:
             return parser_make_nil_datum(self.interp);
     }

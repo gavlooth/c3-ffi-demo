@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-03-04: Session 80 - Split Quasiquote Datum Parse Helpers
+
+### Summary
+Refactored `Parser.parse_datum_impl(...)` into focused helper functions for template-only tokens, string literals, quote forms, and list datum parsing while preserving quasiquote datum behavior.
+
+### What changed
+- `src/lisp/parser_quasiquote_datum.c3`:
+  - Added:
+    - `Parser.parse_datum_template_only(template_mode, sym)`
+    - `Parser.parse_datum_string()`
+    - `Parser.parse_datum_quote(template_mode)`
+    - `Parser.parse_datum_list(template_mode)`
+  - Refactored:
+    - `Parser.parse_datum_impl(...)` now delegates per-token branches to the helpers above
+  - Preserved:
+    - template-mode handling for `..` and `_`
+    - list datum construction and `')'` consumption behavior
+    - default fallback to nil datum on unsupported tokens
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 79 - Split Shorthand-Define Parse Pipeline
 
 ### Summary
