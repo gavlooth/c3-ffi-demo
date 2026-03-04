@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-03-04: Session 66 - Share Thread Task-ID Validation
+
+### Summary
+Extracted shared thread task-id validation (negative/range checks) and reused it in join/cancel paths to reduce duplicate bounds checks.
+
+### What changed
+- `src/lisp/scheduler_primitives.c3`:
+  - Added:
+    - `scheduler_validate_thread_task_id(raw_id, invalid_msg, task_id_out, interp)`
+  - Refactored:
+    - `scheduler_thread_join_impl(...)` now uses shared task-id validator
+    - `prim_thread_cancel(...)` now uses shared task-id validator after integer parsing
+  - Preserved:
+    - operation-specific invalid-id messages
+    - same control flow for join/cancel behavior
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+- `c3c build --sanitize=address` passes.
+- `ASAN_OPTIONS=detect_leaks=0,halt_on_error=1,abort_on_error=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1105 passed, 0 failed (ASAN-mode skips active)
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 65 - Consolidate Existing Fiber-ID Parsing
 
 ### Summary

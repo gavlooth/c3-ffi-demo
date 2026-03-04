@@ -110,9 +110,14 @@ fn Value* prim_thread_spawn(Value*[] args, Env* env, Interp* interp) {
 }
 
 fn Value* scheduler_thread_join_impl(long raw_id, long timeout_ms, Interp* interp) {
-    if (raw_id < 0) return raise_error(interp, "thread-join: invalid task id");
-    usz task_id = (usz)raw_id;
-    if (task_id >= MAX_THREAD_TASKS) return raise_error(interp, "thread-join: invalid task id");
+    usz task_id = 0;
+    Value* id_err = scheduler_validate_thread_task_id(
+        raw_id,
+        "thread-join: invalid task id",
+        &task_id,
+        interp
+    );
+    if (id_err != null) return id_err;
 
     long remaining = timeout_ms;
     while (true) {
@@ -185,6 +190,19 @@ fn Value* scheduler_true_value(Interp* interp) @inline {
     return interp.global_env.lookup(interp.sym_true);
 }
 
+fn Value* scheduler_validate_thread_task_id(
+    long raw_id,
+    char[] invalid_msg,
+    usz* task_id_out,
+    Interp* interp
+) {
+    if (raw_id < 0) return raise_error(interp, invalid_msg);
+    usz task_id = (usz)raw_id;
+    if (task_id >= MAX_THREAD_TASKS) return raise_error(interp, invalid_msg);
+    *task_id_out = task_id;
+    return null;
+}
+
 fn Value* scheduler_parse_existing_fiber_arg(
     Value*[] args,
     char[] expected_msg,
@@ -250,8 +268,14 @@ fn Value* prim_thread_cancel(Value*[] args, Env* env, Interp* interp) {
         interp
     );
     if (parse_err != null) return parse_err;
-    usz task_id = (usz)raw_id;
-    if (task_id >= MAX_THREAD_TASKS) return raise_error(interp, "thread-cancel: invalid task id");
+    usz task_id = 0;
+    Value* id_err = scheduler_validate_thread_task_id(
+        raw_id,
+        "thread-cancel: invalid task id",
+        &task_id,
+        interp
+    );
+    if (id_err != null) return id_err;
 
     bool already_done = false;
     if (!scheduler_cancel_thread_task(task_id, &already_done)) {
