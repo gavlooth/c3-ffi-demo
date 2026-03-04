@@ -150,6 +150,18 @@ fn void scope_require_owner(ScopeRegion* scope, char[] op) @inline {
     }
 }
 
+macro scope_guard_owner(scope, op) {
+    scope_require_owner(scope, op);
+}
+
+macro scope_invariant_refcount_live(scope) {
+    assert(scope.refcount > 0, "scope invariant: refcount must be > 0");
+}
+
+macro scope_invariant_distinct_scopes(parent, child) {
+    assert(parent != child, "scope invariant: parent and child must differ");
+}
+
 struct ScopeTransferStats {
     usz splice_calls;
     usz splice_escape_chunk_bytes;
@@ -295,7 +307,8 @@ fn ScopeRegion* scope_create(ScopeRegion* parent = null) {
  */
 fn void scope_retain(ScopeRegion* scope) @inline {
     if (scope == null) return;
-    scope_require_owner(scope, "scope_retain");
+    scope_guard_owner(scope, "scope_retain");
+    scope_invariant_refcount_live(scope);
     scope.refcount++;
 }
 
@@ -304,7 +317,8 @@ fn void scope_retain(ScopeRegion* scope) @inline {
  */
 fn void scope_release(ScopeRegion* scope) @inline {
     if (scope == null) return;
-    scope_require_owner(scope, "scope_release");
+    scope_guard_owner(scope, "scope_release");
+    scope_invariant_refcount_live(scope);
     if (--scope.refcount == 0) {
         scope_destroy(scope);
     }
@@ -332,7 +346,7 @@ fn void scope_run_escape_dtors(ScopeRegion* scope) {
  @require scope.refcount == 0 : "scope_destroy: refcount not zero"
 *>
 fn void scope_destroy(ScopeRegion* scope) {
-    scope_require_owner(scope, "scope_destroy");
+    scope_guard_owner(scope, "scope_destroy");
     // 1. Run destructors (reverse order — LIFO) for both lanes
     scope_run_dtors(scope);
     scope_run_escape_dtors(scope);
@@ -395,7 +409,7 @@ fn void scope_destroy(ScopeRegion* scope) {
  * Slow path: allocate a new chunk when the current one is full.
  */
 fn void* ScopeRegion.alloc_slow(ScopeRegion* self, usz aligned_size) {
-    scope_require_owner(self, "scope_alloc_slow");
+    scope_guard_owner(self, "scope_alloc_slow");
     // Determine new chunk capacity: double the previous, or at least fit the request
     usz prev_cap = SCOPE_CHUNK_INITIAL;
     if (self.chunks != null) {
@@ -421,7 +435,7 @@ fn void* ScopeRegion.alloc_slow(ScopeRegion* self, usz aligned_size) {
  * Escape slow path: allocate a new ESCAPE chunk when current escape chunk is full.
  */
 fn void* ScopeRegion.alloc_escape_slow(ScopeRegion* self, usz aligned_size) {
-    scope_require_owner(self, "scope_alloc_escape_slow");
+    scope_guard_owner(self, "scope_alloc_escape_slow");
     usz prev_cap = SCOPE_CHUNK_INITIAL;
     if (self.escape_chunks != null) {
         prev_cap = self.escape_chunks.capacity;
@@ -447,7 +461,7 @@ fn void* ScopeRegion.alloc_escape_slow(ScopeRegion* self, usz aligned_size) {
  * Fast path: ~3 instructions (load bump, add, compare).
  */
 fn void* ScopeRegion.alloc(ScopeRegion* self, usz size) @inline {
-    scope_require_owner(self, "scope_alloc");
+    scope_guard_owner(self, "scope_alloc");
     usz mask = 7;
     usz aligned = (size + mask) & ~mask;
     char* result = self.bump;
@@ -465,7 +479,7 @@ fn void* ScopeRegion.alloc(ScopeRegion* self, usz size) @inline {
  * Bump-allocate `size` bytes from ESCAPE lane. 8-byte aligned.
  */
 fn void* ScopeRegion.alloc_escape(ScopeRegion* self, usz size) @inline {
-    scope_require_owner(self, "scope_alloc_escape");
+    scope_guard_owner(self, "scope_alloc_escape");
     usz mask = 7;
     usz aligned = (size + mask) & ~mask;
     if (self.escape_bump != null) {
@@ -490,7 +504,7 @@ fn void* ScopeRegion.alloc_escape(ScopeRegion* self, usz size) @inline {
  * The ScopeDtor struct itself is bump-allocated in the scope's chunks.
  */
 fn void scope_register_dtor(ScopeRegion* scope, void* ptr, ScopeDestructorFn func) {
-    scope_require_owner(scope, "scope_register_dtor");
+    scope_guard_owner(scope, "scope_register_dtor");
     ScopeDtor* d = (ScopeDtor*)scope.alloc(ScopeDtor.sizeof);
     d.ptr = ptr;
     d.func = func;
@@ -503,7 +517,7 @@ fn void scope_register_dtor(ScopeRegion* scope, void* ptr, ScopeDestructorFn fun
  * The ScopeDtor struct itself is ESCAPE-lane allocated.
  */
 fn void scope_register_dtor_escape(ScopeRegion* scope, void* ptr, ScopeDestructorFn func) {
-    scope_require_owner(scope, "scope_register_dtor_escape");
+    scope_guard_owner(scope, "scope_register_dtor_escape");
     ScopeDtor* d = (ScopeDtor*)scope.alloc_escape(ScopeDtor.sizeof);
     d.ptr = ptr;
     d.func = func;
@@ -547,7 +561,7 @@ fn bool scope_contains(ScopeRegion* scope, void* ptr) {
  * O(1) amortized per loop iteration when no escapes occur.
  */
 fn void scope_reset(ScopeRegion* scope) {
-    scope_require_owner(scope, "scope_reset");
+    scope_guard_owner(scope, "scope_reset");
     assert(scope.refcount == 1, "scope_reset: refcount must be 1 (nothing escaped)");
     // Run destructors first for both lanes
     scope_run_dtors(scope);
@@ -597,7 +611,7 @@ fn void scope_reset(ScopeRegion* scope) {
  * Safe only when RC == 1 (no external scope ownership changes during reset).
  */
 fn void scope_reset_temp_lane(ScopeRegion* scope) {
-    scope_require_owner(scope, "scope_reset_temp_lane");
+    scope_guard_owner(scope, "scope_reset_temp_lane");
     assert(scope.refcount == 1, "scope_reset_temp_lane: refcount must be 1");
 
     // TEMP dtors only; ESCAPE dtors remain registered.
@@ -665,8 +679,9 @@ fn bool is_in_scope(void* ptr, ScopeRegion* scope) {
 
 fn void scope_splice_escapes(ScopeRegion* parent, ScopeRegion* child) {
     if (child == null || parent == null) return;
-    scope_require_owner(parent, "scope_splice_escapes(parent)");
-    scope_require_owner(child, "scope_splice_escapes(child)");
+    scope_guard_owner(parent, "scope_splice_escapes(parent)");
+    scope_guard_owner(child, "scope_splice_escapes(child)");
+    scope_invariant_distinct_scopes(parent, child);
 
     g_scope_transfer_stats.splice_calls++;
     g_scope_transfer_stats.splice_escape_chunk_bytes += scope_chunk_bytes(child.escape_chunks);

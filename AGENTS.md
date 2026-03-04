@@ -39,6 +39,8 @@ When implementing or reviewing features, preserve these constraints:
 - Runtime memory architecture is dual-lane (`TEMP`/`ESCAPE`) with no stop-the-world GC
 - `scope_adopt` is retired from normal return flow; do not reintroduce it in runtime paths
 - Boundary promotion/fallback logic must preserve shared promotion-context semantics
+- Hardening priority: stabilize JIT/eval boundary paths (`jit_*`, effect dispatch boundaries, scope handoff points) before adding new runtime wiring.
+- Repeated runtime invariants (ownership/lifetime/state guards) should be enforced through shared macros/helpers, not ad-hoc one-off checks.
 - Ownership guardrail: default to scope/region ownership (`scope_retain`/`scope_release`) for runtime values.
 - Do not introduce per-type refcount lifetimes for language values (`Instance`, `Closure`, etc.).
 - Sound exception policy: only rare external-resource wrappers (for example `FFI_HANDLE` boxes over foreign pointers) may use local RC, and only with explicit finalizer policy + boundary tests.

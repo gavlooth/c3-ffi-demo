@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-03-04: Scope Guard Macroization + JIT-First Runtime Policy
+
+### Summary
+Codified runtime policy to prioritize JIT/eval boundary hardening and converted scope-owner safety checks to shared macros so lifetime/thread-affinity invariants are enforced uniformly in hot paths.
+
+### What changed
+- `AGENTS.md`:
+  - Added hardening-priority rule: stabilize `jit_*`/eval/effect boundary paths before new runtime wiring.
+  - Added invariant-enforcement rule: use shared macros/helpers for repeated ownership/lifetime/state checks.
+- `src/scope_region.c3`:
+  - Added `scope_guard_owner(scope, op)` macro wrapping `scope_require_owner`.
+  - Added invariant macros:
+    - `scope_invariant_refcount_live(scope)`
+    - `scope_invariant_distinct_scopes(parent, child)`
+  - Replaced direct `scope_require_owner(...)` calls across scope lifecycle, allocation, reset, dtor registration, and splice paths with `scope_guard_owner(...)`.
+  - Added invariant checks:
+    - `scope_retain`: refcount must be `> 0`.
+    - `scope_release`: refcount underflow guard.
+    - `scope_splice_escapes`: parent/child must be distinct.
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+- `c3c build --sanitize=address` passes.
+- `ASAN_OPTIONS=detect_leaks=0,halt_on_error=1,abort_on_error=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: ASAN Triage Follow-up (Type Lookup Hardening + Runtime ASAN Test Gating)
 
 ### Summary
