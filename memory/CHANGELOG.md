@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-03-04: Session 96 - Split REPL Session/Loop Orchestration Helpers
+
+### Summary
+Refactored `repl(...)` into focused setup/shutdown/banner/step helpers so the top-level REPL entry point stays a thin orchestrator with unchanged behavior.
+
+### What changed
+- `src/lisp/eval_repl.c3`:
+  - Added:
+    - `repl_init_session(interp, rx_out, history_file)`
+    - `repl_shutdown_session(rx, history_file)`
+    - `repl_print_banner()`
+    - `repl_step(rx, interp, buf, buf_len, ansi_red, ansi_green, ansi_reset)`
+  - Refactored:
+    - `repl(...)` now delegates initialization, one-iteration processing, and shutdown to helper functions above
+  - Preserved:
+    - SIGINT handler setup timing
+    - replxx initialization/configuration/history lifecycle
+    - `quit`/`exit`, EOF, multiline buffering, and eval-output behavior
+    - per-iteration prompt and eval flow
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 95 - Split REPL Parenthesis-Depth State Machine Helpers
 
 ### Summary

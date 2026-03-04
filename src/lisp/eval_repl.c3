@@ -561,53 +561,79 @@ fn void repl_eval_buffer(void* rx, char[8192]* buf, usz* buf_len, Interp* interp
     *buf_len = 0;
 }
 
+fn bool repl_init_session(Interp* interp, void** rx_out, char* history_file) {
+    void* rx = replxx_init();
+    if (rx == null) {
+        io::eprintn("Failed to initialize replxx");
+        return false;
+    }
+    g_replxx = rx;
+    g_repl_interp = interp;
+    repl_configure(rx, history_file);
+    *rx_out = rx;
+    return true;
+}
+
+fn void repl_shutdown_session(void* rx, char* history_file) {
+    replxx_history_save(rx, history_file);
+    replxx_end(rx);
+    g_replxx = null;
+    g_repl_interp = null;
+}
+
+fn void repl_print_banner() {
+    io::printn("Omni Lisp REPL (type 'quit' or 'exit' to leave, Ctrl-D for EOF)");
+    io::printn("---");
+}
+
+fn bool repl_step(
+    void* rx,
+    Interp* interp,
+    char[8192]* buf,
+    usz* buf_len,
+    char[] ansi_red,
+    char[] ansi_green,
+    char[] ansi_reset
+) {
+    char* line = (char*)replxx_input(rx, repl_prompt_for(*buf_len));
+    if (line == null) {
+        if (repl_handle_eof(buf_len)) return false;
+        return true;
+    }
+
+    usz len = repl_cstr_len(line);
+    ReplLineAction action = repl_classify_line(line, len, buf_len);
+    if (action == REPL_LINE_SKIP) return true;
+    if (action == REPL_LINE_QUIT) return false;
+
+    repl_append_line(buf, buf_len, line, len);
+    repl_eval_buffer(rx, buf, buf_len, interp, ansi_red, ansi_green, ansi_reset);
+    return true;
+}
+
 fn void repl(Interp* interp) {
     // Install SIGINT handler so Ctrl+C interrupts eval instead of killing process
     signal(SIGINT_VAL, &sigint_handler);
 
-    // Initialize replxx
-    void* rx = replxx_init();
-    if (rx == null) {
-        io::eprintn("Failed to initialize replxx");
+    char* history_file = ".omni_history";
+    void* rx = null;
+    if (!repl_init_session(interp, &rx, history_file)) {
         return;
     }
-    g_replxx = rx;
-    g_repl_interp = interp;
-    char* history_file = ".omni_history";
     defer {
-        replxx_history_save(rx, history_file);
-        replxx_end(rx);
-        g_replxx = null;
-        g_repl_interp = null;
+        repl_shutdown_session(rx, history_file);
     }
-
-    repl_configure(rx, history_file);
 
     // ANSI color codes for output
     char[] ansi_red     = "\x1b[31m";
     char[] ansi_green   = "\x1b[32m";
     char[] ansi_reset   = "\x1b[0m";
 
-    io::printn("Omni Lisp REPL (type 'quit' or 'exit' to leave, Ctrl-D for EOF)");
-    io::printn("---");
+    repl_print_banner();
 
     // Buffer for accumulating multi-line input
     char[8192] buf;
     usz buf_len = 0;
 
-    while (true) {
-        char* line = (char*)replxx_input(rx, repl_prompt_for(buf_len));
-        if (line == null) {
-            if (repl_handle_eof(&buf_len)) break;
-            continue;
-        }
-
-        usz len = repl_cstr_len(line);
-        ReplLineAction action = repl_classify_line(line, len, &buf_len);
-        if (action == REPL_LINE_SKIP) continue;
-        if (action == REPL_LINE_QUIT) break;
-
-        repl_append_line(&buf, &buf_len, line, len);
-        repl_eval_buffer(rx, &buf, &buf_len, interp, ansi_red, ansi_green, ansi_reset);
-    }
+    while (repl_step(rx, interp, &buf, &buf_len, ansi_red, ansi_green, ansi_reset)) {}
 }
