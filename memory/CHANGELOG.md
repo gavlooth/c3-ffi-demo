@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-03-04: Session 44 - Recursive Closure Patch Path Scope Cleanup
+
+### Summary
+Removed manual `current_scope` switching in recursive closure patching by allocating directly in the closure env scope through boundary/value-scope alloc paths.
+
+### What changed
+- `src/lisp/jit_jit_closure_define_qq.c3`:
+  - In `jit_patch_rec_closure_in_env_scope(...)`:
+    - replaced direct `interp.current_scope` mutation with:
+      - `boundary_alloc_value_in_scope(interp, env_scope)`
+      - direct `env_scope.alloc(...)` for closure payload/params/type_sig
+    - preserves existing behavior while reducing implicit scope-state mutation.
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+- `c3c build --sanitize=address` passes.
+- `ASAN_OPTIONS=detect_leaks=0,halt_on_error=1,abort_on_error=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1105 passed, 0 failed (ASAN-mode skips active)
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 43 - Root Env-Extend Boundary Helper
 
 ### Summary

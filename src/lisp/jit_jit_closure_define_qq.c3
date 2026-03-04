@@ -159,18 +159,17 @@ fn Value* jit_eval_let_destruct(Interp* interp, Expr* expr, Env* env) {
 }
 
 fn void jit_patch_rec_closure_in_env_scope(Interp* interp, Value* actual_value, SymbolId name) {
-    main::ScopeRegion* saved_scope = interp.current_scope;
-    interp.current_scope = actual_value.closure_val.env_scope;
+    main::ScopeRegion* env_scope = actual_value.closure_val.env_scope;
 
-    Value* self_ref = interp.alloc_value();
+    Value* self_ref = boundary_alloc_value_in_scope(interp, env_scope);
     self_ref.tag = CLOSURE;
 
-    Closure* copied_closure = (Closure*)interp.current_scope.alloc(Closure.sizeof);
+    Closure* copied_closure = (Closure*)env_scope.alloc(Closure.sizeof);
     *copied_closure = *actual_value.closure_val;
-    copied_closure.scope_gen = interp.current_scope.generation;
+    copied_closure.scope_gen = env_scope.generation;
 
     if (copied_closure.param_count > 0) {
-        copied_closure.params = (SymbolId*)interp.current_scope.alloc(SymbolId.sizeof * copied_closure.param_count);
+        copied_closure.params = (SymbolId*)env_scope.alloc(SymbolId.sizeof * copied_closure.param_count);
         for (usz i = 0; i < copied_closure.param_count; i++) {
             copied_closure.params[i] = actual_value.closure_val.params[i];
         }
@@ -179,12 +178,11 @@ fn void jit_patch_rec_closure_in_env_scope(Interp* interp, Value* actual_value, 
     }
 
     if (copied_closure.type_sig != null) {
-        copied_closure.type_sig = (MethodSignature*)interp.current_scope.alloc(MethodSignature.sizeof);
+        copied_closure.type_sig = (MethodSignature*)env_scope.alloc(MethodSignature.sizeof);
         *copied_closure.type_sig = *actual_value.closure_val.type_sig;
     }
 
     self_ref.closure_val = copied_closure;
-    interp.current_scope = saved_scope;
 
     Env* closure_env = actual_value.closure_val.env;
     for (usz i = 0; i < closure_env.binding_count; i++) {
