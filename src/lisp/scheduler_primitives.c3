@@ -9,6 +9,35 @@ import main;
 // ============================================================
 // Scheduler public primitives and run loops
 // ============================================================
+fn Value* scheduler_run_offload_sync(OffloadWork work, Interp* interp) {
+    OffloadCompletion* completion = scheduler_execute_offload(work);
+    if (completion == null) return raise_error(interp, "offload: worker completion alloc failed");
+    Value* out = scheduler_value_from_offload_completion(completion, interp);
+    scheduler_free_offload_completion(completion);
+    return out;
+}
+
+fn Value* scheduler_begin_fiber_offload(OffloadWork* work, usz fiber_id, Interp* interp) {
+    PendingOffload* pending = &g_scheduler.pending_offloads[fiber_id];
+    if (pending.active) {
+        shared_blob_release(work.blob);
+        return raise_error(interp, "offload: pending work already exists for this fiber");
+    }
+
+    work.fiber_id = fiber_id;
+    work.task_id = NO_TASK;
+    if (!scheduler_enqueue_offload(*work)) {
+        shared_blob_release(work.blob);
+        return raise_error(interp, "offload: queue is full");
+    }
+
+    pending.active = true;
+    pending.completed = false;
+    pending.completion = null;
+    g_scheduler.fibers[fiber_id].state = FIBER_BLOCKED;
+    return null;
+}
+
 fn Value* prim_offload(Value*[] args, Env* env, Interp* interp) {
     (void)env;
     scheduler_init();
@@ -19,31 +48,12 @@ fn Value* prim_offload(Value*[] args, Env* env, Interp* interp) {
     if (parse_err != null) return parse_err;
 
     if (!scheduler_is_running_fiber_context()) {
-        OffloadCompletion* completion = scheduler_execute_offload(work);
-        if (completion == null) return raise_error(interp, "offload: worker completion alloc failed");
-        Value* out = scheduler_value_from_offload_completion(completion, interp);
-        scheduler_free_offload_completion(completion);
-        return out;
+        return scheduler_run_offload_sync(work, interp);
     }
 
     usz fiber_id = g_scheduler.current_fiber_id;
-    PendingOffload* pending = &g_scheduler.pending_offloads[fiber_id];
-    if (pending.active) {
-        shared_blob_release(work.blob);
-        return raise_error(interp, "offload: pending work already exists for this fiber");
-    }
-
-    work.fiber_id = fiber_id;
-    work.task_id = NO_TASK;
-    if (!scheduler_enqueue_offload(work)) {
-        shared_blob_release(work.blob);
-        return raise_error(interp, "offload: queue is full");
-    }
-
-    pending.active = true;
-    pending.completed = false;
-    pending.completion = null;
-    g_scheduler.fibers[fiber_id].state = FIBER_BLOCKED;
+    Value* begin_err = scheduler_begin_fiber_offload(&work, fiber_id, interp);
+    if (begin_err != null) return begin_err;
 
     Value*[1] yargs;
     yargs[0] = make_nil(interp);

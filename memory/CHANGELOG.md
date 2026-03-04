@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-03-04: Session 62 - Decompose `prim_offload` Sync/Fiber Paths
+
+### Summary
+Split `prim_offload(...)` into focused helpers for synchronous execution and fiber-offload setup, reducing inline branching and queue-setup duplication while preserving behavior.
+
+### What changed
+- `src/lisp/scheduler_primitives.c3`:
+  - Added:
+    - `scheduler_run_offload_sync(work, interp)`
+    - `scheduler_begin_fiber_offload(work, fiber_id, interp)`
+  - `prim_offload(...)` now:
+    - delegates non-fiber path to `scheduler_run_offload_sync(...)`
+    - delegates pending/queue/block setup to `scheduler_begin_fiber_offload(...)`
+  - Preserved existing error semantics:
+    - missing job list
+    - pending offload already active
+    - queue full
+    - worker completion allocation failure
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+- `c3c build --sanitize=address` passes.
+- `ASAN_OPTIONS=detect_leaks=0,halt_on_error=1,abort_on_error=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1105 passed, 0 failed (ASAN-mode skips active)
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 61 - Decompose Cancel Argument Parsing
 
 ### Summary
