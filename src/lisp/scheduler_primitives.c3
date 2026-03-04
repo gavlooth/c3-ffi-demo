@@ -75,14 +75,7 @@ fn Value* prim_offload(Value*[] args, Env* env, Interp* interp) {
 // Minimal threaded task API over sendable offload jobs.
 // ============================================================
 
-fn Value* prim_thread_spawn(Value*[] args, Env* env, Interp* interp) {
-    (void)env;
-    scheduler_init();
-    if (!g_scheduler.thread_task_mu_ready) return raise_error(interp, "thread-spawn: task mutex unavailable");
-    OffloadWork work;
-    Value* parse_err = scheduler_parse_offload_job(args, "thread-spawn: expected job list", &work, interp);
-    if (parse_err != null) return parse_err;
-
+fn Value* scheduler_prepare_thread_spawn(OffloadWork* work, usz* task_id_out, Interp* interp) {
     usz task_id = scheduler_alloc_thread_task();
     if (task_id == NO_TASK) {
         shared_blob_release(work.blob);
@@ -91,11 +84,27 @@ fn Value* prim_thread_spawn(Value*[] args, Env* env, Interp* interp) {
 
     work.fiber_id = NO_FIBER;
     work.task_id = task_id;
-    if (!scheduler_enqueue_offload(work)) {
+    if (!scheduler_enqueue_offload(*work)) {
         shared_blob_release(work.blob);
         scheduler_drop_thread_task(task_id);
         return raise_error(interp, "thread-spawn: offload queue is full");
     }
+
+    *task_id_out = task_id;
+    return null;
+}
+
+fn Value* prim_thread_spawn(Value*[] args, Env* env, Interp* interp) {
+    (void)env;
+    scheduler_init();
+    if (!g_scheduler.thread_task_mu_ready) return raise_error(interp, "thread-spawn: task mutex unavailable");
+    OffloadWork work;
+    Value* parse_err = scheduler_parse_offload_job(args, "thread-spawn: expected job list", &work, interp);
+    if (parse_err != null) return parse_err;
+
+    usz task_id = NO_TASK;
+    Value* spawn_err = scheduler_prepare_thread_spawn(&work, &task_id, interp);
+    if (spawn_err != null) return spawn_err;
 
     return make_int(interp, (long)task_id);
 }

@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-03-04: Session 64 - Decompose Thread-Spawn Queue Setup
+
+### Summary
+Extracted thread-spawn task allocation and enqueue setup into a dedicated helper to simplify `prim_thread_spawn(...)` and centralize cleanup/error handling.
+
+### What changed
+- `src/lisp/scheduler_primitives.c3`:
+  - Added:
+    - `scheduler_prepare_thread_spawn(work, task_id_out, interp)`
+  - Refactored:
+    - `prim_thread_spawn(...)` now delegates task allocation/enqueue logic to helper
+  - Preserved:
+    - task table full handling
+    - offload queue full handling
+    - blob release and task table rollback behavior on enqueue failure
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+- `c3c build --sanitize=address` passes.
+- `ASAN_OPTIONS=detect_leaks=0,halt_on_error=1,abort_on_error=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1105 passed, 0 failed (ASAN-mode skips active)
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 63 - Consolidate Offload Job Parsing
 
 ### Summary
