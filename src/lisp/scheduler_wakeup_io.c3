@@ -260,6 +260,28 @@ fn Value* scheduler_consume_pending_tcp_read(usz fiber_id, Interp* interp) {
     return out;
 }
 
+fn Value* scheduler_value_from_offload_bytes(OffloadCompletion* completion, Interp* interp) {
+    if (completion.blob == null || completion.blob.bytes == null) {
+        return make_string(interp, "");
+    }
+
+    // Transfer byte ownership into a Value on the scheduler thread.
+    char* owned = completion.blob.bytes;
+    usz len = completion.blob.len;
+    completion.blob.bytes = null;
+    completion.blob.len = 0;
+    shared_blob_release(completion.blob);
+    completion.blob = null;
+    return make_string_owned(interp, owned, len);
+}
+
+fn Value* scheduler_value_from_offload_error(OffloadCompletion* completion, Interp* interp) {
+    if (completion.error_msg != null && completion.error_len > 0) {
+        return raise_error(interp, completion.error_msg[:completion.error_len]);
+    }
+    return raise_error(interp, "offload: worker failed");
+}
+
 fn Value* scheduler_value_from_offload_completion(OffloadCompletion* completion, Interp* interp) {
     if (completion == null) return raise_error(interp, "offload: missing completion");
 
@@ -270,24 +292,9 @@ fn Value* scheduler_value_from_offload_completion(OffloadCompletion* completion,
         case OFFLOAD_RES_INT:
             out = make_int(interp, completion.int_result);
         case OFFLOAD_RES_BYTES:
-            if (completion.blob == null || completion.blob.bytes == null) {
-                out = make_string(interp, "");
-            } else {
-                // Transfer byte ownership into a Value on the scheduler thread.
-                char* owned = completion.blob.bytes;
-                usz len = completion.blob.len;
-                completion.blob.bytes = null;
-                completion.blob.len = 0;
-                shared_blob_release(completion.blob);
-                completion.blob = null;
-                out = make_string_owned(interp, owned, len);
-            }
+            out = scheduler_value_from_offload_bytes(completion, interp);
         case OFFLOAD_RES_ERROR:
-            if (completion.error_msg != null && completion.error_len > 0) {
-                out = raise_error(interp, completion.error_msg[:completion.error_len]);
-            } else {
-                out = raise_error(interp, "offload: worker failed");
-            }
+            out = scheduler_value_from_offload_error(completion, interp);
     }
     return out;
 }
