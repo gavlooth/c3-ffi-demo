@@ -156,13 +156,16 @@ fn Env* copy_env_to_scope_inner(Env* env, Interp* interp, usz depth, PromotionCo
  * Replaces deep_copy_env — allocates into any scope, not just root_scope.
  */
 fn Env* copy_env_to_scope(Env* env, Interp* interp, usz depth = 0, PromotionContext* ctx = null) {
-    PromotionContext local_ctx = {};
     PromotionContext* active_ctx = ctx;
     bool owns_ctx = false;
     if (active_ctx == null) active_ctx = interp.active_promotion_ctx;
     if (depth == 0 && active_ctx == null) {
-        promotion_context_begin(interp, &local_ctx);
-        active_ctx = &local_ctx;
+        // Keep boundary context in scope memory (not stack local) so JIT-driven
+        // env-copy paths use the same deterministic region lifetime model.
+        PromotionContext* local_ctx = (PromotionContext*)interp.current_scope.alloc(PromotionContext.sizeof);
+        if (local_ctx == null) return null;
+        promotion_context_begin(interp, local_ctx);
+        active_ctx = local_ctx;
         owns_ctx = true;
     }
     Env* copied = copy_env_to_scope_inner(env, interp, depth, active_ctx);

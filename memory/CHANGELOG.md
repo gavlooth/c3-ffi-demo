@@ -1,5 +1,64 @@
 # Changelog
 
+## 2026-03-04: Session 99 - Fix ASAN JIT Escape-Scope Stack Overflow + Re-enable Coverage
+
+### Summary
+Reproduced the ASAN crash on the previously skipped JIT escape-scope path, fixed the root cause in env-copy boundary context handling, and re-enabled ASAN execution of JIT + escape-scope/TCO suites as regression coverage.
+
+### Reproduction (before fix)
+```bash
+c3c build --sanitize=address
+ASAN_OPTIONS=detect_leaks=0:abort_on_error=1:halt_on_error=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main
+```
+
+### Failing ASAN stack trace (before fix)
+```
+ERROR: AddressSanitizer: stack-buffer-overflow
+WRITE of size 40 at ... in lisp.copy_env_to_scope
+  #1 lisp.copy_env_to_scope src/lisp/eval_env_copy.c3:159
+  #2 lisp.boundary_copy_env_to_scope src/lisp/eval_boundary_api.c3:210
+  #3 lisp.boundary_copy_env_to_target_scope src/lisp/eval_boundary_api.c3:226
+  #4 lisp.jit_copy_closure_env_if_needed src/lisp/jit_jit_closure_define_qq.c3:46
+  #5 lisp.jit_make_closure_from_expr src/lisp/jit_jit_closure_define_qq.c3:137
+```
+
+### Root cause
+- `copy_env_to_scope(...)` created a stack-local `PromotionContext` (`local_ctx`) for top-level boundary copies.
+- Under the JIT closure env-copy call chain, ASAN consistently flagged a stack redzone overflow at that stack-local context write path.
+- This boundary context is logically boundary-owned metadata and does not need stack storage.
+
+### Fix
+- `src/lisp/eval_env_copy.c3`:
+  - Replaced stack-local `PromotionContext local_ctx = {}` with scope-allocated boundary context:
+    - `PromotionContext* local_ctx = (PromotionContext*)interp.current_scope.alloc(PromotionContext.sizeof);`
+    - `promotion_context_begin(interp, local_ctx)` / `promotion_context_end(...)` unchanged semantically.
+  - This keeps ownership aligned with Omni’s region model and removes stack-frame coupling in JIT-driven boundary-copy paths.
+
+### Regression coverage changes
+- `src/lisp/tests_tests.c3`:
+  - Removed ASAN-only JIT disabling and suite skips in `run_lisp_tests()`.
+  - ASAN now runs:
+    - JIT checks in unified helper assertions
+    - escape-scope optimization suite
+    - TCO scope recycling suite
+- `src/lisp/tests_escape_scope_tests.c3`:
+  - Added targeted regression:
+    - `escape-scope: captured env map+reverse`
+    - `(let (m 10) (car (reverse (map (lambda (x) (* x m)) (quote (1 2 3))))))`
+
+### Verification
+- ASAN build + full suite:
+  - `c3c build --sanitize=address` passes
+  - `ASAN_OPTIONS=detect_leaks=0:abort_on_error=1:halt_on_error=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes
+  - Unified: 1144 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+  - No ASAN errors; no ASAN skip banners for escape-scope/TCO suites
+- Normal build + full suite:
+  - `c3c build` passes
+  - `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes
+  - Unified: 1144 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 98 - Split Parser Module-Decl Allocation/Append Helpers
 
 ### Summary

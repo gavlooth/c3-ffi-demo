@@ -24,6 +24,8 @@ fn void run_escape_scope_core_tests(Interp* interp, int* pass, int* fail) {
 
     test_eq(interp, "escape-scope: nested map+reverse",
         "(car (reverse (map (lambda (x) (* x 10)) (quote (1 2 3)))))", 30, pass, fail);
+    test_eq(interp, "escape-scope: captured env map+reverse",
+        "(let (m 10) (car (reverse (map (lambda (x) (* x m)) (quote (1 2 3))))))", 30, pass, fail);
 
     test_eq(interp, "escape-scope: handle + map",
         "(handle (car (map (lambda (x) (+ x 1)) (quote (10 20 30)))) (tag arg (resolve 0)))", 11, pass, fail);

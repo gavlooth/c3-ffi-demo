@@ -3,7 +3,6 @@ module lisp;
 
 import std::io;
 import main;
-extern fn int stack_asan_enabled() @extern("stack_asan_enabled");
 // =============================================================================
 // SECTION 10: TESTS
 // =============================================================================
@@ -17,7 +16,7 @@ fn void setup(Interp* interp, char[] code) {
 }
 
 fn bool jit_checks_enabled() @inline {
-    return stack_asan_enabled() == 0;
+    return true;
 }
 
 fn void test_eq(Interp* interp, char[] name, char[] expr, long expected, int* pass, int* fail) {
@@ -2050,15 +2049,9 @@ fn void run_reader_dispatch_tests(Interp* interp, int* pass, int* fail) {
 
 fn void run_lisp_tests() {
     io::printn("=== Unified Tests (Interpreter + JIT) ===");
-    bool asan_mode = stack_asan_enabled() != 0;
 
     Interp* interp = (Interp*)mem::malloc(Interp.sizeof);
     interp.init();
-    if (asan_mode) {
-        // ASAN mode: run interpreter paths only. JIT machine code is not ASAN-
-        // instrumented and can produce non-actionable stack reports.
-        interp.flags.jit_enabled = false;
-    }
     register_primitives(interp);
 
     register_stdlib(interp);
@@ -2074,21 +2067,9 @@ fn void run_lisp_tests() {
     run_string_type_tests(interp, &pass, &fail);
     run_diagnostic_tests(interp, &pass, &fail);
     run_advanced_tests(interp, &pass, &fail);
-    if (asan_mode) {
-        // Escape-scope optimization tests execute non-instrumented JIT machine code.
-        // ASAN stack reports in this path are currently non-actionable noise.
-        io::printn("\n--- Escape-Scope Optimization Tests ---");
-        io::printn("[SKIP] escape-scope suite in ASAN build");
-    } else {
-        run_escape_scope_tests(interp, &pass, &fail);
-    }
+    run_escape_scope_tests(interp, &pass, &fail);
     run_limit_busting_tests(interp, &pass, &fail);
-    if (asan_mode) {
-        io::printn("\n--- TCO Scope Recycling Tests ---");
-        io::printn("[SKIP] tco-recycling suite in ASAN build");
-    } else {
-        run_tco_recycling_tests(interp, &pass, &fail);
-    }
+    run_tco_recycling_tests(interp, &pass, &fail);
     run_closure_lifecycle_tests(interp, &pass, &fail);
 
     run_pika_tests(interp, &pass, &fail);
