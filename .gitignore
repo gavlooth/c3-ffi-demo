@@ -36,6 +36,8 @@ tmp_tests/
 syntax.md
 .codegraph/
 .jj/
+.omni_history
+.claude/settings.local.json
 
 # Scratch test files
 test.omni
