@@ -31,6 +31,36 @@ fn void boundary_leave_scope(Interp* interp, main::ScopeRegion* saved_scope) @in
 }
 
 <*
+@require interp != null : "boundary_push_child_scope: null interp"
+*>
+fn main::ScopeRegion* boundary_push_child_scope(Interp* interp, main::ScopeRegion** saved_scope_out = null) @inline {
+    main::ScopeRegion* saved_scope = interp.current_scope;
+    if (saved_scope_out != null) {
+        *saved_scope_out = saved_scope;
+    }
+    main::ScopeRegion* child_scope = main::scope_create(saved_scope);
+    if (child_scope == null) {
+        return null;
+    }
+    interp.current_scope = child_scope;
+    return child_scope;
+}
+
+<*
+@require interp != null : "boundary_pop_child_scope: null interp"
+*>
+fn void boundary_pop_child_scope(
+    Interp* interp,
+    main::ScopeRegion* saved_scope,
+    main::ScopeRegion* child_scope
+) @inline {
+    interp.current_scope = saved_scope;
+    if (child_scope != null) {
+        main::scope_release(child_scope);
+    }
+}
+
+<*
 @require interp != null : "boundary_copy_to_parent_site: null interp"
 *>
 fn Value* boundary_copy_to_parent_site(Value* v, Interp* interp, uint site) @inline {

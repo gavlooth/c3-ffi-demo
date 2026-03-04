@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-03-04: Session 50 - Child-Scope Boundary Push/Pop
+
+### Summary
+Added dedicated boundary helpers for child-scope lifecycle and migrated `run`/REPL eval paths to use them, removing duplicated manual scope push/pop code and centralizing failure handling.
+
+### What changed
+- `src/lisp/eval_boundary_api.c3`:
+  - Added:
+    - `boundary_push_child_scope(interp, saved_scope_out = null)`
+    - `boundary_pop_child_scope(interp, saved_scope, child_scope)`
+  - Hardened `boundary_push_child_scope(...)`:
+    - does not mutate `interp.current_scope` when `scope_create` fails
+    - still returns saved scope through `saved_scope_out` for callers
+- `src/lisp/eval_run_pipeline.c3`:
+  - `run(...)` now uses boundary child-scope helpers with `defer`
+  - removed manual `scope_create/scope_release` and duplicated unwind paths
+- `src/lisp/eval_repl.c3`:
+  - `repl_eval_line(...)` now uses boundary child-scope helpers with `defer`
+  - added explicit error return on child-scope allocation failure
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+- `c3c build --sanitize=address` passes.
+- `ASAN_OPTIONS=detect_leaks=0,halt_on_error=1,abort_on_error=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1105 passed, 0 failed (ASAN-mode skips active)
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 49 - Scope Enter/Leave Boundary Helpers
 
 ### Summary

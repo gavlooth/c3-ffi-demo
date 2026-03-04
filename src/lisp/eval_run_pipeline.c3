@@ -150,15 +150,16 @@ fn EvalResult run(char[] source, Interp* interp) {
     expr = expand_macros_in_expr(expr, interp);
 
     // Push child scope — temporaries freed after eval
-    main::ScopeRegion* saved_scope = interp.current_scope;
-    main::ScopeRegion* child_scope = main::scope_create(saved_scope);
-    interp.current_scope = child_scope;
+    main::ScopeRegion* saved_scope = null;
+    main::ScopeRegion* child_scope = boundary_push_child_scope(interp, &saved_scope);
+    if (child_scope == null) {
+        return eval_error("run: failed to create child scope");
+    }
+    defer boundary_pop_child_scope(interp, saved_scope, child_scope);
 
     EvalResult result;
     Value* jit_result = null;
     if (!run_execute_expr(expr, interp, &jit_result, &result)) {
-        interp.current_scope = saved_scope;
-        if (child_scope != null) main::scope_release(child_scope);
         return result;
     }
 
@@ -170,12 +171,6 @@ fn EvalResult run(char[] source, Interp* interp) {
         result = eval_error_expr(jit_result.str_chars[:jit_result.str_len], expr);
     } else {
         result = eval_ok(jit_result);
-    }
-
-    // Pop child scope — frees all temporaries from this eval
-    interp.current_scope = saved_scope;
-    if (child_scope != null) {
-        main::scope_release(child_scope);
     }
 
     return result;
