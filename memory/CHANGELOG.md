@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-03-04: Session 39 - Value Constructor Root/Scoped Allocation Cleanup
+
+### Summary
+Applied boundary allocator helpers to core value constructors so root/scoped wrapper allocation no longer manually mutates `interp.current_scope` in those paths.
+
+### What changed
+- `src/lisp/value_constructors.c3`:
+  - `make_primitive(...)` now allocates via:
+    - `boundary_alloc_value_in_root(interp, true)`
+  - `make_ffi_handle_ex(...)` now allocates via:
+    - `boundary_alloc_value_in_scope(interp, target_scope, true)`
+  - Removed local save/restore `current_scope` choreography in both constructors.
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+- `c3c build --sanitize=address` passes.
+- `ASAN_OPTIONS=detect_leaks=0,halt_on_error=1,abort_on_error=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1105 passed, 0 failed (ASAN-mode skips active)
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 38 - Root-Scope Value Allocation via Boundary Helpers
 
 ### Summary

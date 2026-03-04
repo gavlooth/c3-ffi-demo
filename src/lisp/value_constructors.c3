@@ -237,12 +237,9 @@ fn Value* make_continuation(Interp* interp, Continuation* k) @inline {
 }
 
 fn Value* make_primitive(Interp* interp, char[] name, PrimitiveFn func, int arity) {
-    // Allocate in root_scope — primitives are permanent (defined in global env)
-    main::ScopeRegion* saved_scope = interp.current_scope;
-    interp.current_scope = interp.root_scope;
-    Value* v = interp.alloc_value();
+    // Allocate in root_scope — primitives are permanent (defined in global env).
+    Value* v = boundary_alloc_value_in_root(interp, true);
     v.tag = PRIMITIVE;
-    main::scope_register_dtor(interp.root_scope, (void*)v, &scope_dtor_value);
     v.prim_val = (Primitive*)mem::malloc(Primitive.sizeof);
     // Copy name into fixed buffer
     usz len = name.len;
@@ -258,7 +255,6 @@ fn Value* make_primitive(Interp* interp, char[] name, PrimitiveFn func, int arit
     v.prim_val.arity = arity;
     v.prim_val.tag = 0;
     v.prim_val.user_data = null;
-    interp.current_scope = saved_scope;
 
     return v;
 }
@@ -327,15 +323,9 @@ fn void instance_release(Instance* inst) @inline {
 fn Value* make_ffi_handle_ex(Interp* interp, void* handle, char[] name,
     FfiHandleFinalizer finalizer, bool free_lib_handle, bool root_lifetime = false) {
     main::ScopeRegion* target_scope = root_lifetime ? interp.root_scope : interp.current_scope;
-    main::ScopeRegion* saved_scope = interp.current_scope;
-    interp.current_scope = target_scope;
-
-    Value* v = interp.alloc_value();
+    Value* v = boundary_alloc_value_in_scope(interp, target_scope, true);
     v.tag = FFI_HANDLE;
-    main::scope_register_dtor(target_scope, (void*)v, &scope_dtor_value);
     v.ffi_val = make_ffi_box(handle, name, finalizer, free_lib_handle);
-
-    interp.current_scope = saved_scope;
     if (v.ffi_val == null) {
         return null;
     }
