@@ -141,72 +141,143 @@ fn void flush_symbol(char* input, CInt* colors, isz start, CInt end_pos) {
     }
 }
 
+struct ReplHighlighterState {
+    bool in_string;
+    bool in_comment;
+    bool escape_next;
+    int paren_depth;
+    isz sym_start;
+}
+
+const CInt[6] REPL_PAREN_COLORS = {
+    RXCOLOR_BRIGHTCYAN, RXCOLOR_BRIGHTMAGENTA, RXCOLOR_YELLOW,
+    RXCOLOR_BRIGHTGREEN, RXCOLOR_BRIGHTBLUE, RXCOLOR_BRIGHTRED
+};
+
+fn bool repl_highlighter_is_whitespace(char c) @inline {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
+
+fn bool repl_highlighter_is_quote_prefix(char* input, CInt i) @inline {
+    return i == 0 || input[i - 1] == '(' || input[i - 1] == ' ' || input[i - 1] == '\t';
+}
+
+fn void repl_highlighter_flush_symbol(char* input, CInt* colors, ReplHighlighterState* state, CInt pos) @inline {
+    flush_symbol(input, colors, state.sym_start, pos);
+    state.sym_start = -1;
+}
+
+fn bool repl_highlighter_step_comment(char c, CInt* colors, CInt i, ReplHighlighterState* state) @inline {
+    if (!state.in_comment) return false;
+    colors[i] = RXCOLOR_GRAY;
+    if (c == '\n') {
+        state.in_comment = false;
+    }
+    return true;
+}
+
+fn bool repl_highlighter_step_string(char c, CInt* colors, CInt i, ReplHighlighterState* state) @inline {
+    if (!state.in_string) return false;
+    colors[i] = RXCOLOR_GREEN;
+    if (state.escape_next) {
+        state.escape_next = false;
+        return true;
+    }
+    if (c == '\\') {
+        state.escape_next = true;
+        return true;
+    }
+    if (c == '"') {
+        state.in_string = false;
+    }
+    return true;
+}
+
+fn void repl_highlighter_color_paren(CInt* colors, CInt i, char c, ReplHighlighterState* state) @inline {
+    if (c == '(') {
+        colors[i] = REPL_PAREN_COLORS[state.paren_depth % 6];
+        state.paren_depth++;
+        return;
+    }
+    state.paren_depth--;
+    if (state.paren_depth < 0) {
+        state.paren_depth = 0;
+    }
+    colors[i] = REPL_PAREN_COLORS[state.paren_depth % 6];
+}
+
+fn void repl_highlighter_step_normal(
+    char* input,
+    CInt* colors,
+    CInt i,
+    char c,
+    ReplHighlighterState* state
+) {
+    if (c == ';') {
+        repl_highlighter_flush_symbol(input, colors, state, i);
+        state.in_comment = true;
+        colors[i] = RXCOLOR_GRAY;
+        return;
+    }
+    if (c == '"') {
+        repl_highlighter_flush_symbol(input, colors, state, i);
+        state.in_string = true;
+        colors[i] = RXCOLOR_GREEN;
+        return;
+    }
+    if (c == '(' || c == ')') {
+        repl_highlighter_flush_symbol(input, colors, state, i);
+        repl_highlighter_color_paren(colors, i, c, state);
+        return;
+    }
+    if (c == '[' || c == ']') {
+        repl_highlighter_flush_symbol(input, colors, state, i);
+        colors[i] = RXCOLOR_YELLOW;
+        return;
+    }
+    if (c == '{' || c == '}') {
+        repl_highlighter_flush_symbol(input, colors, state, i);
+        colors[i] = RXCOLOR_BROWN;
+        return;
+    }
+    if (c == '\'' && repl_highlighter_is_quote_prefix(input, i)) {
+        colors[i] = RXCOLOR_CYAN;
+        return;
+    }
+    if (c >= '0' && c <= '9' && state.sym_start < 0) {
+        colors[i] = RXCOLOR_BRIGHTMAGENTA;
+        return;
+    }
+    if (repl_highlighter_is_whitespace(c)) {
+        repl_highlighter_flush_symbol(input, colors, state, i);
+        return;
+    }
+    if (state.sym_start < 0) {
+        state.sym_start = (isz)i;
+    }
+}
+
 // Syntax highlighter callback for replxx — colors individual code points
 fn void lisp_highlighter(char* input, CInt* colors, CInt size, void* ud) {
     if (input == null || size <= 0) return;
 
-    bool in_string = false;
-    bool in_comment = false;
-    bool escape_next = false;
-    int paren_depth = 0;
-    CInt[6] paren_colors = { RXCOLOR_BRIGHTCYAN, RXCOLOR_BRIGHTMAGENTA, RXCOLOR_YELLOW, RXCOLOR_BRIGHTGREEN, RXCOLOR_BRIGHTBLUE, RXCOLOR_BRIGHTRED };
-    isz sym_start = -1;
+    ReplHighlighterState state = {
+        .in_string = false,
+        .in_comment = false,
+        .escape_next = false,
+        .paren_depth = 0,
+        .sym_start = -1,
+    };
 
     for (CInt i = 0; i < size; i++) {
         char c = input[i];
-
-        if (in_comment) {
-            colors[i] = RXCOLOR_GRAY;
-            if (c == '\n') { in_comment = false; }
-            continue;
-        }
-
-        if (in_string) {
-            colors[i] = RXCOLOR_GREEN;
-            if (escape_next) { escape_next = false; continue; }
-            if (c == '\\') { escape_next = true; continue; }
-            if (c == '"') { in_string = false; }
-            continue;
-        }
-
-        // Normal mode
-        if (c == ';') {
-            flush_symbol(input, colors, sym_start, i); sym_start = -1;
-            in_comment = true;
-            colors[i] = RXCOLOR_GRAY;
-        } else if (c == '"') {
-            flush_symbol(input, colors, sym_start, i); sym_start = -1;
-            in_string = true;
-            colors[i] = RXCOLOR_GREEN;
-        } else if (c == '(' || c == ')') {
-            flush_symbol(input, colors, sym_start, i); sym_start = -1;
-            if (c == '(') {
-                colors[i] = paren_colors[paren_depth % 6];
-                paren_depth++;
-            } else {
-                paren_depth--;
-                if (paren_depth < 0) { paren_depth = 0; }
-                colors[i] = paren_colors[paren_depth % 6];
-            }
-        } else if (c == '[' || c == ']') {
-            flush_symbol(input, colors, sym_start, i); sym_start = -1;
-            colors[i] = RXCOLOR_YELLOW;
-        } else if (c == '{' || c == '}') {
-            flush_symbol(input, colors, sym_start, i); sym_start = -1;
-            colors[i] = RXCOLOR_BROWN;
-        } else if (c == '\'' && (i == 0 || input[i-1] == '(' || input[i-1] == ' ' || input[i-1] == '\t')) {
-            colors[i] = RXCOLOR_CYAN;
-        } else if (c >= '0' && c <= '9' && sym_start < 0) {
-            colors[i] = RXCOLOR_BRIGHTMAGENTA;
-        } else if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
-            flush_symbol(input, colors, sym_start, i); sym_start = -1;
-        } else {
-            if (sym_start < 0) { sym_start = (isz)i; }
-        }
+        if (repl_highlighter_step_comment(c, colors, i, &state)) continue;
+        if (repl_highlighter_step_string(c, colors, i, &state)) continue;
+        repl_highlighter_step_normal(input, colors, i, c, &state);
     }
 
     // Flush trailing symbol
-    flush_symbol(input, colors, sym_start, size);
+    flush_symbol(input, colors, state.sym_start, size);
 }
 
 // Completion callback — complete defined symbols

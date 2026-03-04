@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026-03-04: Session 93 - Split REPL Highlighter State/Step Helpers
+
+### Summary
+Refactored `lisp_highlighter(...)` by extracting explicit highlighter state and focused per-mode helpers (comment/string/normal), preserving REPL syntax-coloring behavior while reducing branch density in the main loop.
+
+### What changed
+- `src/lisp/eval_repl.c3`:
+  - Added:
+    - `ReplHighlighterState` struct
+    - `REPL_PAREN_COLORS` constant palette
+    - `repl_highlighter_is_whitespace(c)`
+    - `repl_highlighter_is_quote_prefix(input, i)`
+    - `repl_highlighter_flush_symbol(input, colors, state, pos)`
+    - `repl_highlighter_step_comment(c, colors, i, state)`
+    - `repl_highlighter_step_string(c, colors, i, state)`
+    - `repl_highlighter_color_paren(colors, i, c, state)`
+    - `repl_highlighter_step_normal(input, colors, i, c, state)`
+  - Refactored:
+    - `lisp_highlighter(...)` now loops and delegates to the step helpers above
+  - Preserved:
+    - comment/string/escape handling
+    - paren-depth color cycling semantics
+    - symbol flush behavior and keyword/constant coloring
+    - quote-prefix, digit, and bracket color rules
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 92 - Split JIT Shift-Detection Traversal Helpers
 
 ### Summary
