@@ -199,6 +199,50 @@ fn Value* promote_escape_coroutine(Value* v, Interp* interp, PromotionContext* c
     return result;
 }
 
+fn Value* promote_to_escape_by_tag(Value* v, Interp* interp, PromotionContext* ctx) {
+    switch (v.tag) {
+        case NIL:
+        case INT:
+        case DOUBLE:
+        case SYMBOL:
+            return promote_escape_scalar(v, interp, ctx);
+        case STRING:
+        case ERROR:
+            return promote_escape_string_or_error(v, interp, ctx);
+        case CONS:
+            return promote_escape_cons(v, interp, ctx);
+        case CLOSURE:
+            return promote_escape_closure(v, interp, ctx);
+        case PARTIAL_PRIM:
+            return promote_escape_partial_prim(v, interp, ctx);
+        case CONTINUATION:
+            return promote_escape_continuation(v, interp, ctx);
+        case ITERATOR:
+            return promote_escape_iterator(v, interp, ctx);
+        case COROUTINE:
+            return promote_escape_coroutine(v, interp, ctx);
+        case PRIMITIVE:
+        case HASHMAP:
+        case ARRAY:
+        case METHOD_TABLE:
+        case TYPE_INFO:
+        case MODULE:
+            // Wrapper promotion into ESCAPE lane; backing data/ownership remains unchanged.
+            return promote_escape_shared_wrapper(v, interp, ctx);
+        case INSTANCE:
+            return promote_escape_instance(v, interp, ctx);
+        case FFI_HANDLE:
+            return promote_escape_ffi_handle(v, interp, ctx);
+        default:
+            return v;
+    }
+}
+
+fn void promote_to_escape_memo(Value* old_v, Value* new_v, Interp* interp, PromotionContext* ctx) {
+    if (ctx == null || new_v == null || new_v == old_v) return;
+    promotion_context_remember(ctx, old_v, new_v, interp);
+}
+
 /**
  * Promote a value from current scope TEMP lane to current scope ESCAPE lane.
  * This is an intra-scope promotion primitive for dual-lane rollout.
@@ -216,53 +260,8 @@ fn Value* promote_to_escape(Value* v, Interp* interp) {
     Value* fast_path = null;
     if (promote_to_escape_fast_path(v, interp, &fast_path)) return fast_path;
 
-    Value* result;
-    switch (v.tag) {
-        case NIL:
-        case INT:
-        case DOUBLE:
-        case SYMBOL:
-            result = promote_escape_scalar(v, interp, ctx);
-        case STRING:
-        case ERROR:
-            result = promote_escape_string_or_error(v, interp, ctx);
-            break;
-        case CONS:
-            result = promote_escape_cons(v, interp, ctx);
-            break;
-        case CLOSURE:
-            result = promote_escape_closure(v, interp, ctx);
-            break;
-        case PARTIAL_PRIM:
-            result = promote_escape_partial_prim(v, interp, ctx);
-            break;
-        case CONTINUATION:
-            result = promote_escape_continuation(v, interp, ctx);
-        case ITERATOR:
-            result = promote_escape_iterator(v, interp, ctx);
-        case COROUTINE:
-            result = promote_escape_coroutine(v, interp, ctx);
-        case PRIMITIVE:
-        case HASHMAP:
-        case ARRAY:
-        case METHOD_TABLE:
-        case TYPE_INFO:
-        case MODULE:
-            // Wrapper promotion into ESCAPE lane; backing data/ownership remains unchanged.
-            result = promote_escape_shared_wrapper(v, interp, ctx);
-            break;
-        case INSTANCE:
-            result = promote_escape_instance(v, interp, ctx);
-            break;
-        case FFI_HANDLE:
-            result = promote_escape_ffi_handle(v, interp, ctx);
-            break;
-        default:
-            result = v;
-    }
-    if (ctx != null && result != null && result != v) {
-        promotion_context_remember(ctx, v, result, interp);
-    }
+    Value* result = promote_to_escape_by_tag(v, interp, ctx);
+    promote_to_escape_memo(v, result, interp, ctx);
     return result;
 }
 

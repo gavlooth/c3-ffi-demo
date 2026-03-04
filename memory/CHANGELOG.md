@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-03-04: Session 87 - Split Escape-Promotion Dispatch/Memo Helpers
+
+### Summary
+Refactored `promote_to_escape(...)` by extracting tag-based dispatch and memoization helpers, preserving dual-lane promotion behavior while reducing control-flow density in the main function.
+
+### What changed
+- `src/lisp/eval_promotion_escape.c3`:
+  - Added:
+    - `promote_to_escape_by_tag(v, interp, ctx)`
+    - `promote_to_escape_memo(old_v, new_v, interp, ctx)`
+  - Refactored:
+    - `promote_to_escape(...)` now delegates value-tag dispatch to `promote_to_escape_by_tag(...)`
+    - promotion-context memo registration moved to `promote_to_escape_memo(...)`
+  - Preserved:
+    - all existing fast-path checks (`escape_generation`, current generation, target-scope-chain)
+    - per-tag promotion behavior and shared-wrapper semantics
+    - active promotion-context memo behavior for newly promoted values
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 86 - Split Env-Copy Wrapper/Core Helpers
 
 ### Summary
