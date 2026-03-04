@@ -263,6 +263,43 @@ fn Value* prim_spawn(Value*[] args, Env* env, Interp* interp) {
     return make_int(interp, (long)id);
 }
 
+fn Value* scheduler_result_or_nil(usz fiber_id, Interp* interp) @inline {
+    Value* result = g_scheduler.fibers[fiber_id].result;
+    return result != null ? result : make_nil(interp);
+}
+
+fn Value* scheduler_await_in_fiber_context(usz target, Interp* interp) {
+    usz waiter_id = g_scheduler.current_fiber_id;
+    FiberEntry* waiter = &g_scheduler.fibers[waiter_id];
+
+    if (target == waiter_id) return raise_error(interp, "await: fiber cannot await itself");
+    if (g_scheduler.fibers[target].parent_id != waiter_id) {
+        return raise_error(interp, "await: fiber can only await direct children");
+    }
+    if (waiter.waiting_children) {
+        return raise_error(interp, "await: parent is already waiting for child completion");
+    }
+
+    if (g_scheduler.fibers[target].state == FIBER_DONE) {
+        return scheduler_result_or_nil(target, interp);
+    }
+
+    waiter.awaiting_fiber = true;
+    waiter.await_target = target;
+    waiter.state = FIBER_BLOCKED;
+
+    Value*[1] yargs;
+    yargs[0] = make_nil(interp);
+    Value* y = prim_yield(yargs[..], null, interp);
+    if (y != null && y.tag == ERROR) return y;
+
+    if (g_scheduler.fibers[target].state != FIBER_DONE) {
+        return raise_error(interp, "await: resumed before child completed");
+    }
+
+    return scheduler_result_or_nil(target, interp);
+}
+
 // ============================================================
 // (await fiber-id) → result value
 //
@@ -281,48 +318,15 @@ fn Value* prim_await(Value*[] args, Env* env, Interp* interp) {
     }
 
     if (scheduler_is_running_fiber_context()) {
-        usz waiter_id = g_scheduler.current_fiber_id;
-        FiberEntry* waiter = &g_scheduler.fibers[waiter_id];
-
-        if (target == waiter_id) return raise_error(interp, "await: fiber cannot await itself");
-        if (g_scheduler.fibers[target].parent_id != waiter_id) {
-            return raise_error(interp, "await: fiber can only await direct children");
-        }
-        if (waiter.waiting_children) {
-            return raise_error(interp, "await: parent is already waiting for child completion");
-        }
-
-        if (g_scheduler.fibers[target].state == FIBER_DONE) {
-            Value* done_result = g_scheduler.fibers[target].result;
-            return done_result != null ? done_result : make_nil(interp);
-        }
-
-        waiter.awaiting_fiber = true;
-        waiter.await_target = target;
-        waiter.state = FIBER_BLOCKED;
-
-        Value*[1] yargs;
-        yargs[0] = make_nil(interp);
-        Value* y = prim_yield(yargs[..], null, interp);
-        if (y != null && y.tag == ERROR) return y;
-
-        if (g_scheduler.fibers[target].state != FIBER_DONE) {
-            return raise_error(interp, "await: resumed before child completed");
-        }
-
-        Value* done_result = g_scheduler.fibers[target].result;
-        return done_result != null ? done_result : make_nil(interp);
+        return scheduler_await_in_fiber_context(target, interp);
     }
 
     if (g_scheduler.fibers[target].state == FIBER_DONE) {
-        Value* r = g_scheduler.fibers[target].result;
-        return r != null ? r : make_nil(interp);
+        return scheduler_result_or_nil(target, interp);
     }
 
     scheduler_run_until(target, interp);
-
-    Value* r = g_scheduler.fibers[target].result;
-    return r != null ? r : make_nil(interp);
+    return scheduler_result_or_nil(target, interp);
 }
 
 // ============================================================

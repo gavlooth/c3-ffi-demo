@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-03-04: Session 58 - Decompose Scheduler `await` Path
+
+### Summary
+Refactored `prim_await(...)` into focused helpers to reduce branching complexity while preserving runtime semantics and error behavior.
+
+### What changed
+- `src/lisp/scheduler_primitives.c3`:
+  - Added:
+    - `scheduler_result_or_nil(...)`
+    - `scheduler_await_in_fiber_context(...)`
+  - Simplified `prim_await(...)` by delegating:
+    - in-fiber await checks/yield/resume handling
+    - done-result extraction via shared helper
+  - Error messages and await constraints remain unchanged:
+    - self-await forbidden
+    - only direct-child await inside fibers
+    - resumed-before-done guard preserved
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+- `c3c build --sanitize=address` passes.
+- `ASAN_OPTIONS=detect_leaks=0,halt_on_error=1,abort_on_error=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1105 passed, 0 failed (ASAN-mode skips active)
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 57 - Decompose `eval_defunion` Registration Path
 
 ### Summary
