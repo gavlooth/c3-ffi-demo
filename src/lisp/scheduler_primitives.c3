@@ -185,6 +185,30 @@ fn Value* scheduler_true_value(Interp* interp) @inline {
     return interp.global_env.lookup(interp.sym_true);
 }
 
+fn Value* scheduler_parse_existing_fiber_arg(
+    Value*[] args,
+    char[] expected_msg,
+    char[] invalid_msg,
+    usz* fiber_id_out,
+    Interp* interp
+) {
+    long raw_id = 0;
+    Value* parse_err = scheduler_parse_nonnegative_int_arg(
+        args,
+        expected_msg,
+        invalid_msg,
+        &raw_id,
+        interp
+    );
+    if (parse_err != null) return parse_err;
+    usz fiber_id = (usz)raw_id;
+    if (fiber_id >= g_scheduler.fiber_count) {
+        return raise_error(interp, invalid_msg);
+    }
+    *fiber_id_out = fiber_id;
+    return null;
+}
+
 fn Value* prim_thread_join(Value*[] args, Env* env, Interp* interp) {
     (void)env;
     scheduler_init();
@@ -269,19 +293,15 @@ fn bool scheduler_cancel_fiber(usz fiber_id, Interp* interp) {
 fn Value* prim_fiber_cancel(Value*[] args, Env* env, Interp* interp) {
     (void)env;
     scheduler_init();
-    long raw_id = 0;
-    Value* parse_err = scheduler_parse_nonnegative_int_arg(
+    usz fiber_id = 0;
+    Value* parse_err = scheduler_parse_existing_fiber_arg(
         args,
         "fiber-cancel: expected fiber-id integer",
         "fiber-cancel: invalid fiber id",
-        &raw_id,
+        &fiber_id,
         interp
     );
     if (parse_err != null) return parse_err;
-    usz fiber_id = (usz)raw_id;
-    if (fiber_id >= g_scheduler.fiber_count) {
-        return raise_error(interp, "fiber-cancel: invalid fiber id");
-    }
 
     // Cannot cancel self
     if (scheduler_is_running_fiber_context() && g_scheduler.current_fiber_id == fiber_id) {
@@ -374,14 +394,15 @@ fn Value* scheduler_await_in_fiber_context(usz target, Interp* interp) {
 // ============================================================
 
 fn Value* prim_await(Value*[] args, Env* env, Interp* interp) {
-    if (args.len < 1 || !is_int(args[0])) {
-        return raise_error(interp, "await: expected (await fiber-id)");
-    }
-
-    usz target = (usz)args[0].int_val;
-    if (target >= g_scheduler.fiber_count) {
-        return raise_error(interp, "await: invalid fiber id");
-    }
+    usz target = 0;
+    Value* parse_err = scheduler_parse_existing_fiber_arg(
+        args,
+        "await: expected (await fiber-id)",
+        "await: invalid fiber id",
+        &target,
+        interp
+    );
+    if (parse_err != null) return parse_err;
 
     if (scheduler_is_running_fiber_context()) {
         return scheduler_await_in_fiber_context(target, interp);

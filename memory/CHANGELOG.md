@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-03-04: Session 65 - Consolidate Existing Fiber-ID Parsing
+
+### Summary
+Extracted shared fiber-id parsing/validation for scheduler primitives that require an existing fiber id, reducing duplication between `prim_fiber_cancel(...)` and `prim_await(...)`.
+
+### What changed
+- `src/lisp/scheduler_primitives.c3`:
+  - Added:
+    - `scheduler_parse_existing_fiber_arg(args, expected_msg, invalid_msg, fiber_id_out, interp)`
+  - Refactored:
+    - `prim_fiber_cancel(...)` now uses shared existing-fiber parser
+    - `prim_await(...)` now uses shared existing-fiber parser
+  - Preserved:
+    - same expected/invalid error messages per primitive
+    - same out-of-range behavior (`fiber_id >= fiber_count`)
+    - same cancellation/await control-flow behavior
+
+### Verification
+- `c3c build` passes.
+- `LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+- `c3c build --sanitize=address` passes.
+- `ASAN_OPTIONS=detect_leaks=0,halt_on_error=1,abort_on_error=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1105 passed, 0 failed (ASAN-mode skips active)
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 64 - Decompose Thread-Spawn Queue Setup
 
 ### Summary
