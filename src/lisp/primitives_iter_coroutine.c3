@@ -120,13 +120,17 @@ fn Value* prim_coroutine_p(Value*[] args, Env* env, Interp* interp) {
     return make_nil(interp);
 }
 
-fn Value* prim_coroutine(Value*[] args, Env* env, Interp* interp) {
+fn Value* prim_coroutine_require_thunk(Value*[] args, Value** thunk_out, Interp* interp) {
     if (args.len < 1) return raise_error(interp, "coroutine: expected a thunk argument");
     Value* thunk = args[0];
     if (thunk == null || thunk.tag != CLOSURE) {
         return raise_error(interp, "coroutine: argument must be a closure");
     }
+    *thunk_out = thunk;
+    return null;
+}
 
+fn Value* prim_coroutine_prepare_thunk(Value* thunk, Interp* interp) {
     // Phase 4b: Promote thunk to root_scope so it survives call_scope release.
     // The coroutine may be resumed after the creating scope is freed.
     thunk = boundary_promote_to_root(thunk, interp);
@@ -134,7 +138,10 @@ fn Value* prim_coroutine(Value*[] args, Env* env, Interp* interp) {
         // Precompile coroutine body before first execution on switched stack.
         jit_warm_expr_cache(thunk.closure_val.body, interp);
     }
+    return thunk;
+}
 
+fn Value* prim_coroutine_create_ctx(Value* thunk, main::StackCtx** ctx_out, Interp* interp) {
     main::StackCtx* ctx = main::stack_ctx_create(&interp.stack_ctx_pool);
     if (ctx == null) return raise_error(interp, "coroutine: failed to create context");
 
@@ -147,6 +154,20 @@ fn Value* prim_coroutine(Value*[] args, Env* env, Interp* interp) {
     ctx.user_data = state;
 
     main::stack_ctx_init(ctx, &coroutine_thunk_entry, state);
+    *ctx_out = ctx;
+    return null;
+}
+
+fn Value* prim_coroutine(Value*[] args, Env* env, Interp* interp) {
+    Value* thunk = null;
+    Value* parse_err = prim_coroutine_require_thunk(args, &thunk, interp);
+    if (parse_err != null) return parse_err;
+
+    thunk = prim_coroutine_prepare_thunk(thunk, interp);
+
+    main::StackCtx* ctx = null;
+    Value* ctx_err = prim_coroutine_create_ctx(thunk, &ctx, interp);
+    if (ctx_err != null) return ctx_err;
 
     return make_coroutine(interp, ctx);
 }

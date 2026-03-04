@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-03-04: Session 75 - Decompose Coroutine Creation Path
+
+### Summary
+Refactored `prim_coroutine(...)` into helper stages for thunk validation, thunk preparation, and context/state creation, keeping coroutine semantics unchanged.
+
+### What changed
+- `src/lisp/primitives_iter_coroutine.c3`:
+  - Added:
+    - `prim_coroutine_require_thunk(args, thunk_out, interp)`
+    - `prim_coroutine_prepare_thunk(thunk, interp)`
+    - `prim_coroutine_create_ctx(thunk, ctx_out, interp)`
+  - Refactored:
+    - `prim_coroutine(...)` now delegates to the helpers above before `make_coroutine(...)`
+  - Preserved:
+    - same error strings for missing/invalid thunk
+    - same root-promotion + `jit_warm_expr_cache(...)` behavior
+    - same stack-context allocation and OOM cleanup behavior
+
+### Verification
+- `c3c build` passes.
+- `ASAN_OPTIONS=detect_leaks=0,halt_on_error=1,abort_on_error=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+- `c3c build --sanitize=address` passes.
+- `ASAN_OPTIONS=detect_leaks=0,halt_on_error=1,abort_on_error=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main` passes:
+  - Unified: 1143 passed, 0 failed
+  - Compiler: 73 passed, 0 failed
+
 ## 2026-03-04: Session 74 - Split Coroutine Resume Validation/Switch/Post-Switch
 
 ### Summary
