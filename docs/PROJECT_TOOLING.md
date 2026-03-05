@@ -1,6 +1,6 @@
 # Omni Lisp — Project Tooling
 
-**Last updated:** 2026-02-25
+**Last updated:** 2026-03-05
 
 Omni provides CLI commands for creating projects and auto-generating FFI bindings from C headers.
 
@@ -57,6 +57,7 @@ scripts/run_boundary_hardening.sh
 
 Runs a full hardening matrix:
 
+- boundary-facade guard (`scripts/check_boundary_facade_usage.sh`) to block direct legacy boundary calls outside sanctioned files,
 - normal build + test run,
 - ASAN build + test run,
 - `OMNI_FIBER_TEMP=1` enabled,

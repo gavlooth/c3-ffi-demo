@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-03-05: Session 169 - Boundary Facade CI Guard
+
+### Summary
+Added an explicit guard that fails boundary-hardening runs when direct legacy boundary helpers are used outside sanctioned boundary implementation files.
+
+### What changed
+- `scripts/check_boundary_facade_usage.sh`
+  - New CI/local guard script that scans `src/lisp` for direct calls to:
+    - `copy_to_parent(...)`
+    - `promote_to_escape(...)`
+    - `promote_to_root(...)`
+    - `copy_env_to_scope_inner(...)`
+    - `scope_splice_escapes(...)`
+  - Allows only sanctioned internal callsites (`eval_boundary_api.c3` + legacy implementation modules).
+  - Ignores `src/lisp/tests_*.c3` to avoid constraining low-level regression fixtures.
+- `scripts/run_boundary_hardening.sh`
+  - Added Stage 0 to run `scripts/check_boundary_facade_usage.sh` before build/test stages.
+- `docs/PROJECT_TOOLING.md`
+  - Documented the new boundary-facade guard in the boundary-hardening profile.
+
+### Why this matters
+- Enforces boundary API discipline in automation instead of relying on review memory.
+- Prevents drift back to direct legacy helper usage across runtime callsites.
+- Keeps main-plan hardening focused on centralized ownership/boundary transitions.
+
+### Validation
+- `scripts/check_boundary_facade_usage.sh`
+- `scripts/run_boundary_hardening.sh` (Stage 0 path exercised)
+
 ## 2026-03-05: Session 168 - Configurable Bot Login for PR Upsert
 
 ### Summary

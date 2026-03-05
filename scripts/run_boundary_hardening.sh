@@ -111,6 +111,9 @@ if [[ "$OMNI_BOUNDARY_ASSERT_SUMMARY" == "1" && "$OMNI_BOUNDARY_SUMMARY" != "1" 
   exit 1
 fi
 
+echo "=== Boundary Hardening: Stage 0 (boundary facade guard) ==="
+scripts/check_boundary_facade_usage.sh
+
 echo "=== Boundary Hardening: Stage 1 (normal build) ==="
 c3c build
 

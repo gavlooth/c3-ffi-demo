@@ -432,6 +432,28 @@ Execution policy:
   - normal full suite green (`Stack engine 15/0`, `Unified 1178/0`, `Compiler 73/0`),
   - strict ASAN full suite green (`Stack engine 14/0`, `Unified 1177/0`, `Compiler 73/0`).
 
+### Session 169 Follow-up (2026-03-05): Boundary Facade CI Guard
+
+- Added explicit boundary-facade enforcement script:
+  - `scripts/check_boundary_facade_usage.sh`
+  - scans `src/lisp` for direct legacy boundary helper usage and fails on non-sanctioned callsites.
+- Guarded symbols:
+  - `copy_to_parent(...)`
+  - `promote_to_escape(...)`
+  - `promote_to_root(...)`
+  - `copy_env_to_scope_inner(...)`
+  - `scope_splice_escapes(...)`
+- Allowed only in sanctioned internal files:
+  - `src/lisp/eval_boundary_api.c3`
+  - `src/lisp/eval_promotion_copy.c3`
+  - `src/lisp/eval_promotion_escape.c3`
+  - `src/lisp/eval_env_copy.c3`
+- Tests are excluded from this gate (`src/lisp/tests_*.c3`) to preserve low-level regression fixtures.
+- Wired guard into boundary profile:
+  - `scripts/run_boundary_hardening.sh` now runs Stage 0 guard check before build/test stages.
+- Validation:
+  - `scripts/check_boundary_facade_usage.sh`: pass.
+
 ## Global Gates (run after every commit)
 
 ```bash
