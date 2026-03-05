@@ -173,6 +173,21 @@ Validation:
 Next:
 - Add targeted scheduler wakeup/offload interleaving stress with Fiber TEMP enabled to widen boundary-race coverage.
 
+## Fiber TEMP Phase 5b Progress (2026-03-05)
+
+Completed:
+- Added scheduler thread-boundary coverage for Fiber TEMP context metrics:
+  - repeated `thread-spawn`/`thread-join` cycles under flag,
+  - verifies `ctx_take_hits`/`ctx_return_count` remain unchanged when no stack context is active.
+- Preserved mixed scheduler boundary stress semantics without introducing invalid invariants for stack-context-involving paths.
+
+Validation:
+- Normal: `Stack engine 19/0`, `Scope region 51/0`, `Unified 1179/0`, `Compiler 73/0`.
+- ASAN strict: `Stack engine 18/0`, `Scope region 51/0`, `Unified 1178/0`, `Compiler 73/0`.
+
+Next:
+- Add targeted scheduler wakeup/offload interleaving stress with Fiber TEMP enabled to widen boundary-race coverage.
+
 ## Session Rules
 
 Global rule for every session:

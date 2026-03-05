@@ -86,6 +86,7 @@ Enablement substrate update:
 - Fiber TEMP now uses lifecycle-backed per-context chunk caches (with clone-share refcount) before global fallback.
 - Added stack-engine clone/discard stress coverage for Fiber TEMP-enabled contexts.
 - Added scheduler/offload boundary test coverage asserting Fiber TEMP context-cache counters remain unchanged for worker-thread operations without stack contexts.
+- Extended scheduler suite coverage to keep this boundary invariant explicit while avoiding false constraints on mixed stack-context stress paths.
 
 ## 4. Phase Plan
 

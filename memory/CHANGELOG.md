@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-03-05: Session 150 - Scheduler Fiber TEMP Thread-Boundary Coverage
+
+### Summary
+Added scheduler-side Fiber TEMP boundary coverage that specifically checks thread/offload operations do not mutate stack-context-local Fiber TEMP counters when no stack context is active.
+
+### What changed
+- `src/lisp/tests_tests.c3`
+  - Added `run_scheduler_fiber_temp_thread_boundary_tests(...)`.
+  - Under `OMNI_FIBER_TEMP=1`, captures `ctx_take_hits` / `ctx_return_count`, runs repeated `thread-spawn` + `thread-join` cycles, and asserts counters remain unchanged.
+  - Wired test into `run_scheduler_tests(...)`.
+  - Kept existing mixed scheduler boundary stress semantics unchanged (no incorrect “ctx counters must stay constant” constraint there).
+
+### Why this matters
+- Covers the critical boundary guarantee with a precise invariant:
+  - worker/offload thread paths without stack contexts must not touch Fiber TEMP context caches.
+- Avoids over-constraining mixed scheduler stress that intentionally includes stack-context activity.
+
+### Validation
+- Normal:
+  - `c3c build`
+  - `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - Result: pass (`Stack engine 19/0`, `Scope region 51/0`, `Unified 1179/0`, `Compiler 73/0`)
+- ASAN strict:
+  - `c3c clean && c3c build --sanitize=address`
+  - `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - Result: pass (`Stack engine 18/0`, `Scope region 51/0`, `Unified 1178/0`, `Compiler 73/0`)
+- Flagged summary:
+  - `OMNI_FIBER_TEMP=1 OMNI_TEST_SUMMARY=1 ...`
+  - Result includes:
+    - `OMNI_TEST_SUMMARY suite=stack_engine pass=19 fail=0`
+    - `OMNI_TEST_SUMMARY suite=scope_region pass=51 fail=0`
+    - `OMNI_TEST_SUMMARY suite=fiber_temp_pool enabled=1 hits=66 misses=4 returns=109 drop_frees=0 pooled=6 peak=6 ctx_hits=33 ctx_returns=70 eligible_slow=2 bypass_large=0 bypass_escape=2`
+
 ## 2026-03-05: Session 149 - Fiber TEMP Thread/Offload Boundary Guard Test
 
 ### Summary
