@@ -2477,13 +2477,17 @@ fn void run_deduce_open_smoke_test(Interp* interp, int* pass, int* fail) {
 }
 
 fn void run_deduce_reopen_stress_test(Interp* interp, int* pass, int* fail) {
-    SymbolId reopen_sym = interp.symbols.intern("ddb-reopen");
     bool ok = true;
     isz failed_iter = -1;
 
     for (usz i = 0; i < 64; i++) {
-        EvalResult r = run("(define ddb-reopen (deduce 'open 'memory))", interp);
-        Value* h = interp.global_env.lookup(reopen_sym);
+        EvalResult r = run(
+            "(begin "
+            "  (define ddb-reopen (deduce 'open 'memory)) "
+            "  ddb-reopen)",
+            interp
+        );
+        Value* h = r.value;
         if (r.error.has_error || h == null || h.tag != FFI_HANDLE || h.ffi_val == null) {
             ok = false;
             failed_iter = (isz)i;

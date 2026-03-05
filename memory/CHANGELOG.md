@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-03-05: Session 190 - Deduce Reopen Stress Test De-Flaking (Single-Expression Handle Check)
+
+### Summary
+Reduced order-sensitivity in the deduce reopen stress test by removing out-of-band global-env lookup and asserting the reopened handle through a single evaluation result.
+
+### What changed
+- `src/lisp/tests_tests.c3`
+  - `run_deduce_reopen_stress_test(...)` now executes:
+    - `(begin (define ddb-reopen (deduce 'open 'memory)) ddb-reopen)`
+  - Validation checks the returned `EvalResult.value` directly for a live `FFI_HANDLE`.
+  - Removed separate `global_env.lookup(...)` dependency from this stress path.
+
+### Why this matters
+- Keeps test intent (repeated open/rebind) while reducing external state-coupling and timing sensitivity between eval and environment lookup in stress loops.
+- Complements Session 189 deduce path-suffix hardening for ASAN stability.
+
+### Validation
+- `c3c build`
+- `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1193 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `c3c clean && c3c build --sanitize=address`
+- ASAN repeated full-run probe (`detect_leaks=1:halt_on_error=1:abort_on_error=1`, 3 runs):
+  - all passed (`Unified 1192/0`, `Compiler 73/0` each run).
+
 ## 2026-03-05: Session 189 - Deduce ASAN Flake Hardening (Full-Width Memory DB Path Suffix)
 
 ### Summary

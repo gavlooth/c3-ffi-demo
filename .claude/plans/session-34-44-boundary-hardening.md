@@ -159,6 +159,17 @@ Execution policy:
   - strict ASAN full suite: pass (`Unified 1192/0`, `Compiler 73/0`)
   - repeated ASAN probe (3 full reruns): all pass (`Unified 1192/0`, `Compiler 73/0` each).
 
+### Session 190 Follow-up (2026-03-05): Deduce Reopen Stress Test Coupling Reduction
+
+- Updated `run_deduce_reopen_stress_test(...)` in `src/lisp/tests_tests.c3`:
+  - replaced separate `run(...)` + `global_env.lookup(...)` pattern with single expression:
+    `(begin (define ddb-reopen (deduce 'open 'memory)) ddb-reopen)`.
+- Goal:
+  - preserve test semantics while reducing out-of-band env lookup timing/order coupling in stress loops.
+- Validation:
+  - normal full suite: pass (`Unified 1193/0`, `Compiler 73/0`)
+  - strict ASAN repeated full-run probe (3 runs): all pass (`Unified 1192/0`, `Compiler 73/0` each).
+
 ### Post-44 Continuation Snapshot (Sessions 45-68)
 
 - Boundary API expansion and caller migration completed across eval/jit/env/value/module paths.
