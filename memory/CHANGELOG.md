@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-03-05: Session 165 - PR Comment Upsert for Boundary Workflow
+
+### Summary
+Refined boundary workflow PR-comment behavior to upsert a single bot comment instead of posting a new comment on each run.
+
+### What changed
+- `.github/workflows/boundary-hardening.yml`
+  - PR comment step now:
+    - uses a stable marker (`<!-- omni-boundary-hardening-summary -->`) in comment body,
+    - lists existing PR comments,
+    - updates the most recent matching bot comment when present,
+    - creates a new comment only when none exists.
+- `docs/PROJECT_TOOLING.md`
+  - Documented upsert behavior for the optional `pr_number` workflow input.
+
+### Why this matters
+- Reduces PR noise while preserving visibility of latest boundary profile status.
+- Keeps CI outputs aligned to main plan operational goals without runtime changes.
+
+### Validation
+- Workflow logic updated to deterministic create-or-update flow keyed by marker.
+- No runtime/test path changes; boundary profile scripts unchanged.
+
 ## 2026-03-05: Session 164 - Optional PR Comment Bridge for Boundary CI
 
 ### Summary

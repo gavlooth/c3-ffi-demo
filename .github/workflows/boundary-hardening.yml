@@ -64,22 +64,46 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
             const prNumber = Number('${{ github.event.inputs.pr_number }}');
             if (!Number.isInteger(prNumber) || prNumber <= 0) {
               core.setFailed(`Invalid pr_number input: '${{ github.event.inputs.pr_number }}'`);
               return;
             }
+            const marker = '<!-- omni-boundary-hardening-summary -->';
             const summary = fs.readFileSync('build/boundary_hardening_job_summary.md', 'utf8');
             const body = [
+              marker,
               'Boundary hardening profile completed.',
               '',
               summary,
               '',
-              `Workflow run: https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+              `Workflow run: https://github.com/${owner}/${repo}/actions/runs/${context.runId}`
             ].join('\n');
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
+            const { data: comments } = await github.rest.issues.listComments({
+              owner,
+              repo,
               issue_number: prNumber,
-              body
+              per_page: 100
             });
+            const existing = [...comments].reverse().find((c) =>
+              c?.user?.type === 'Bot' &&
+              typeof c.body === 'string' &&
+              c.body.includes(marker)
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: prNumber,
+                body
+              });
+            }

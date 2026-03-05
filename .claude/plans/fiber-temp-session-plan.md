@@ -410,6 +410,20 @@ Validation:
 Next:
 - Optional: deduplicate/replace prior boundary bot comments (update-last-comment policy) to reduce PR noise.
 
+## Fiber TEMP Phase 6n Progress (2026-03-05)
+
+Completed:
+- Implemented boundary PR comment upsert policy in workflow:
+  - marker-based detection,
+  - update existing bot comment when present,
+  - create only when absent.
+
+Validation:
+- Workflow script path remains deterministic and non-invasive (manual dispatch + optional input).
+
+Next:
+- Optional: switch from list-first-page to paginated lookup if comment volume grows beyond 100 comments.
+
 ## Fiber TEMP Phase 5b Progress (2026-03-05)
 
 Completed:

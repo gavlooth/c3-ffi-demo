@@ -98,6 +98,7 @@ The workflow is `workflow_dispatch` only and expects a self-hosted Linux runner 
 Optional workflow input:
 
 - `pr_number` — when provided, the workflow posts the same boundary summary as a PR comment.
+  Re-runs update the existing boundary bot comment (upsert), rather than creating duplicates.
 
 ---
 

@@ -106,6 +106,7 @@ Enablement substrate update:
 - Added external CI entrypoint (`.github/workflows/boundary-hardening.yml`) to run boundary profile and upload logs/JSON artifacts.
 - Added CI job-summary rendering step (`scripts/emit_boundary_job_summary.sh`) for quick boundary signal visibility.
 - Added optional workflow-dispatch PR comment bridge for boundary summary publication (`pr_number` input).
+- Updated PR comment bridge to upsert (marker-based update) to avoid repeated comment spam.
 
 ## 4. Phase Plan
 
