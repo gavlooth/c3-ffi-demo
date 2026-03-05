@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-03-05: Session 168 - Configurable Bot Login for PR Upsert
+
+### Summary
+Made boundary workflow PR-comment upsert bot identity configurable while preserving the secure default.
+
+### What changed
+- `.github/workflows/boundary-hardening.yml`
+  - Added `workflow_dispatch` input:
+    - `pr_comment_bot_login` (default: `github-actions[bot]`)
+  - PR comment upsert matcher now uses that input for `user.login` matching, with fallback to `github-actions[bot]`.
+- `docs/PROJECT_TOOLING.md`
+  - Documented new `pr_comment_bot_login` input and behavior.
+
+### Why this matters
+- Supports repos/workflows that use alternate bot identities or tokens.
+- Keeps deterministic upsert behavior without relaxing marker-based safety.
+- Maintains main-plan focus on CI operational robustness.
+
+### Validation
+- Workflow YAML updated and remains structurally consistent.
+- No runtime/test-path changes.
+
 ## 2026-03-05: Session 167 - Strict Bot Identity Match for PR Comment Upsert
 
 ### Summary

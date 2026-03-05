@@ -109,6 +109,7 @@ Enablement substrate update:
 - Updated PR comment bridge to upsert (marker-based update) to avoid repeated comment spam.
 - Hardened upsert lookup with paginated PR comment scan for long threads.
 - Tightened upsert target identity to `github-actions[bot]` for deterministic bot-comment updates.
+- Added configurable bot-login workflow input for upsert targeting, preserving secure default.
 
 ## 4. Phase Plan
 

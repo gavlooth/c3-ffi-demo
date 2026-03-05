@@ -449,6 +449,19 @@ Validation:
 Next:
 - Optional: make expected bot login configurable via workflow input/env if alternate auth token is used.
 
+## Fiber TEMP Phase 6q Progress (2026-03-05)
+
+Completed:
+- Added configurable bot-login input for boundary PR comment upsert:
+  - workflow input `pr_comment_bot_login` (default `github-actions[bot]`),
+  - matcher uses provided bot login + marker/pagination safeguards.
+
+Validation:
+- Workflow-only change; no runtime impact.
+
+Next:
+- Optional: add workflow guard to skip PR comment step when `pr_number` references a non-PR issue.
+
 ## Fiber TEMP Phase 5b Progress (2026-03-05)
 
 Completed:
