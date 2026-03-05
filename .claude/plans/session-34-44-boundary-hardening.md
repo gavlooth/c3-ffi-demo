@@ -516,6 +516,49 @@ Execution policy:
   - strict ASAN full suite: pass (`Unified 1212/0`, `Compiler 73/0`)
   - strict ASAN full suite with `OMNI_FIBER_TEMP=1`: pass (`Unified 1211/0`, `Compiler 73/0`)
 
+### Session 217 Follow-up (2026-03-05): Enforcement Config Externalization
+
+- Externalized facade/sensitive policy data into dedicated files:
+  - `scripts/boundary_facade_policy.txt`
+  - `scripts/boundary_sensitive_files.txt`
+- Updated policy scripts to consume those files:
+  - `scripts/check_boundary_facade_usage.sh`
+  - `scripts/check_boundary_change_policy.sh`
+- Added lightweight CI guard workflow:
+  - `.github/workflows/boundary-policy-guard.yml`
+- Outcome:
+  - policy now reviewed/edited as data files (reduced hardcoded drift risk),
+  - fast guard path exists independent of full self-hosted hardening run.
+
+### Session 218 Follow-up (2026-03-05): Boundary Surface Lock Audit
+
+- Added policy-driven audit utility:
+  - `scripts/audit_boundary_surface.sh`
+  - strict mode (`OMNI_BOUNDARY_AUDIT_STRICT=1`) returns non-zero on violations.
+- Generated checked-in audit snapshot:
+  - `docs/BOUNDARY_SURFACE_AUDIT.md`
+  - current status: `total=28`, `allowed=23`, `ignored=5`, `violations=0`.
+- Outcome:
+  - direct legacy boundary surface is now measured by an auditable artifact.
+
+### Session 219 Follow-up (2026-03-05): Final Handoff + Test Module Decomposition
+
+- Split worker/interleave scheduler boundary regressions into dedicated module:
+  - new file `src/lisp/tests_scheduler_boundary_worker.c3`
+  - moved:
+    - `run_scheduler_offload_worker_retry_full_wakeup_boundary_tests(...)`
+    - `run_scheduler_wakeup_offload_ready_barrier_boundary_tests(...)`
+    - `run_scheduler_thread_task_worker_cancel_interleave_boundary_tests(...)`
+    - `run_scheduler_thread_join_timeout_then_join_boundary_tests(...)`
+- Published boundary runtime audit handoff:
+  - `docs/BOUNDARY_RUNTIME_AUDIT_2026-03-05.md`
+- Validation:
+  - facade guard: pass
+  - strict boundary surface audit: pass (`violations=0`)
+  - full normal suite: pass (`Unified 1212/0`, `Compiler 73/0`)
+  - full ASAN suite: pass (`Unified 1211/0`, `Compiler 73/0`)
+  - repeated ASAN+fiber-temp soak (3 runs): all pass (`Unified 1211/0`, `Compiler 73/0`)
+
 ### Post-44 Continuation Snapshot (Sessions 45-68)
 
 - Boundary API expansion and caller migration completed across eval/jit/env/value/module paths.

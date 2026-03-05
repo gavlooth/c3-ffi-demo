@@ -1,5 +1,84 @@
 # Changelog
 
+## 2026-03-05: Session 219 - Boundary Audit Handoff + Scheduler Test Module Split
+
+### Summary
+Completed final hardening-handoff pass: split high-complexity scheduler boundary worker/interleave tests into a dedicated module and published runtime audit notes with repeated ASAN+fiber-temp soak validation.
+
+### What changed
+- `src/lisp/tests_scheduler_boundary_worker.c3` (new)
+  - moved worker/interleave boundary regressions out of monolithic test file:
+    - `run_scheduler_offload_worker_retry_full_wakeup_boundary_tests(...)`
+    - `run_scheduler_wakeup_offload_ready_barrier_boundary_tests(...)`
+    - `run_scheduler_thread_task_worker_cancel_interleave_boundary_tests(...)`
+    - `run_scheduler_thread_join_timeout_then_join_boundary_tests(...)`
+- `src/lisp/tests_tests.c3`
+  - removed moved definitions; retained suite orchestration callsites.
+- `docs/BOUNDARY_RUNTIME_AUDIT_2026-03-05.md` (new)
+  - published no-drift contract, residual risk list, and closure criteria.
+
+### Why this matters
+- Reduces test hotspot pressure in `tests_tests.c3` while preserving behavior.
+- Makes boundary hardening status and residual risks explicit for contributors.
+
+### Validation
+- `bash scripts/check_boundary_facade_usage.sh`
+- `OMNI_BOUNDARY_AUDIT_STRICT=1 scripts/audit_boundary_surface.sh docs/BOUNDARY_SURFACE_AUDIT.md`
+- `c3c build`
+- `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1212 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `c3c build --sanitize=address`
+- `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1211 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- repeated soak:
+  - `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_FIBER_TEMP=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main` (3 consecutive runs)
+  - each run: `Unified: 1211 passed, 0 failed`, `Compiler: 73 passed, 0 failed`
+
+## 2026-03-05: Session 218 - Boundary Surface Lock (Policy-Driven Audit)
+
+### Summary
+Added policy-driven boundary surface audit tooling and generated a strict audit artifact from the current tree.
+
+### What changed
+- `scripts/audit_boundary_surface.sh` (new)
+  - scans direct legacy boundary callsites in `src/lisp`,
+  - classifies each as `allowed` / `ignored` / `violation` using policy file,
+  - emits markdown report and supports strict mode (`OMNI_BOUNDARY_AUDIT_STRICT=1`).
+- `docs/BOUNDARY_SURFACE_AUDIT.md` (new, generated)
+  - current snapshot:
+    - total scanned: `28`
+    - allowed: `23`
+    - ignored: `5`
+    - violations: `0`
+
+### Why this matters
+- Converts “surface lock” from ad-hoc grep output into an auditable, repeatable artifact.
+- Gives an explicit zero-violation gate for completion tracking.
+
+## 2026-03-05: Session 217 - CI/Policy Enforcement Closure (Config Externalization)
+
+### Summary
+Finalized enforcement plumbing by externalizing boundary policy config and adding a lightweight CI guard workflow independent from self-hosted heavy profile runs.
+
+### What changed
+- `scripts/boundary_facade_policy.txt` (new)
+  - source-of-truth allowlist/ignore rules for facade guard.
+- `scripts/boundary_sensitive_files.txt` (new)
+  - source-of-truth list for boundary-sensitive policy checks.
+- `scripts/check_boundary_facade_usage.sh`
+  - now loads policy from `scripts/boundary_facade_policy.txt` (instead of hardcoded cases).
+- `scripts/check_boundary_change_policy.sh`
+  - now loads sensitive files from `scripts/boundary_sensitive_files.txt`.
+- `.github/workflows/boundary-policy-guard.yml` (new)
+  - runs facade policy guard on PR file changes relevant to boundary policy.
+
+### Why this matters
+- Removes hardcoded rule drift in enforcement scripts.
+- Makes boundary policy reviewable as data, not embedded shell logic.
+- Adds fast CI feedback path even when full self-hosted hardening job is not invoked.
+
 ## 2026-03-05: Session 216 - Offload-Ready Barrier Payload Regression
 
 ### Summary
