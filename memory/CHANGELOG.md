@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-03-05: Session 181 - TCO Recycle Error-Path Boundary Rollback Consolidation
+
+### Summary
+Consolidated duplicated TCO recycle error rollback logic into a single helper and added explicit invariant checks across `jit_prepare_tco_recycle(...)` paths.
+
+### What changed
+- `src/lisp/jit_jit_eval_scopes.c3`
+  - Added `jit_tco_recycle_restore_on_error(...)` to centralize:
+    - `current_scope`/`tco_recycle_scope` rollback,
+    - fresh-scope release,
+    - `jit_env` restore,
+    - boundary invariant assertion,
+    - error return.
+  - Routed both defer-retarget error branches through the helper.
+  - Added `boundary_assert_interp_scope_chain(...)` guards at:
+    - `jit_prepare_tco_recycle(...)` entry,
+    - fast-path return,
+    - alloc-failure return,
+    - success return.
+
+### Why this matters
+- Reduces duplicated, easy-to-diverge boundary rollback logic in one of the trickiest JIT lifetime paths.
+- Keeps rollback behavior consistent across all TCO recycle failure exits.
+- Improves auditability without changing semantics.
+
+### Validation
+- `c3c build`
+- `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1187 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `c3c clean && c3c build --sanitize=address`
+- `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1186 passed, 0 failed` (JIT checks disabled under ASAN)
+  - `Compiler: 73 passed, 0 failed`
+
 ## 2026-03-05: Session 180 - TCO Env-Copy Boundary Restore Consolidation + Regression
 
 ### Summary

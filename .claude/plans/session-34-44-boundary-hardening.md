@@ -57,6 +57,21 @@ Execution policy:
   - normal full suite: pass (`Unified 1187/0`, `Compiler 73/0`)
   - strict ASAN full suite: pass (`Unified 1186/0`, `Compiler 73/0`)
 
+### Session 181 Follow-up (2026-03-05): TCO Recycle Error-Path Rollback Consolidation
+
+- Refactored duplicated rollback/error branches in `jit_prepare_tco_recycle(...)`:
+  - added `jit_tco_recycle_restore_on_error(...)` in `src/lisp/jit_jit_eval_scopes.c3`.
+- Unified rollback guarantees now flow through one helper:
+  - restore `current_scope` + `tco_recycle_scope`,
+  - release fresh scope,
+  - restore `jit_env`,
+  - assert boundary invariant,
+  - return runtime error.
+- Added invariant hooks at TCO prepare entry/return points (fast path, alloc-failure, success).
+- Validation:
+  - normal full suite: pass (`Unified 1187/0`, `Compiler 73/0`)
+  - strict ASAN full suite: pass (`Unified 1186/0`, `Compiler 73/0`)
+
 ### Post-44 Continuation Snapshot (Sessions 45-68)
 
 - Boundary API expansion and caller migration completed across eval/jit/env/value/module paths.

@@ -114,11 +114,29 @@ fn JitFn jit_lookup_or_compile(Expr* expr, Interp* interp) {
     return cached;
 }
 
+fn Value* jit_tco_recycle_restore_on_error(
+    Interp* interp,
+    main::ScopeRegion* restore_scope,
+    main::ScopeRegion* fresh_scope,
+    Env* saved_env,
+    char[] msg
+) {
+    interp.current_scope = restore_scope;
+    interp.tco_recycle_scope = restore_scope;
+    if (fresh_scope != null) {
+        main::scope_release(fresh_scope);
+    }
+    interp.jit_env = saved_env;
+    boundary_assert_interp_scope_chain(interp);
+    return raise_error(interp, msg);
+}
+
 fn Value* jit_prepare_tco_recycle(
     Env** env_io,
     Env* saved_env,
     Interp* interp
 ) {
+    boundary_assert_interp_scope_chain(interp);
     main::ScopeRegion* cs = interp.current_scope;
     if (cs != interp.tco_recycle_scope || cs.refcount != 1) return null;
 
@@ -134,6 +152,7 @@ fn Value* jit_prepare_tco_recycle(
         main::scope_reset_temp_lane(cs);
         interp.current_scope = cs;
         interp.tco_recycle_scope = cs;
+        boundary_assert_interp_scope_chain(interp);
         return null;
     }
 
@@ -141,6 +160,7 @@ fn Value* jit_prepare_tco_recycle(
     main::ScopeRegion* fresh = main::scope_create(cs.parent);
     if (fresh == null) {
         interp.jit_env = saved_env;
+        boundary_assert_interp_scope_chain(interp);
         return raise_error(interp, "jit: failed to allocate TCO recycle scope");
     }
     interp.current_scope = fresh;
@@ -148,11 +168,13 @@ fn Value* jit_prepare_tco_recycle(
     if (interp.tco_scope_defer_active) {
         main::StackCtx* defer_ctx = main::g_current_stack_ctx;
         if (defer_ctx == null) {
-            interp.current_scope = cs;
-            interp.tco_recycle_scope = cs;
-            main::scope_release(fresh);
-            interp.jit_env = saved_env;
-            return raise_error(interp, "jit: missing active stack context for call-scope defer");
+            return jit_tco_recycle_restore_on_error(
+                interp,
+                cs,
+                fresh,
+                saved_env,
+                "jit: missing active stack context for call-scope defer"
+            );
         }
         bool retargeted = main::stack_ctx_defer_update_arg(
             defer_ctx,
@@ -160,15 +182,18 @@ fn Value* jit_prepare_tco_recycle(
             (void*)fresh
         );
         if (!retargeted) {
-            interp.current_scope = cs;
-            interp.tco_recycle_scope = cs;
-            main::scope_release(fresh);
-            interp.jit_env = saved_env;
-            return raise_error(interp, "jit: failed to retarget call-scope defer");
+            return jit_tco_recycle_restore_on_error(
+                interp,
+                cs,
+                fresh,
+                saved_env,
+                "jit: failed to retarget call-scope defer"
+            );
         }
     }
     *env_io = jit_copy_tco_env_chain_for_recycle(*env_io, interp, cs);
     main::scope_release(cs);
+    boundary_assert_interp_scope_chain(interp);
     return null;
 }
 
