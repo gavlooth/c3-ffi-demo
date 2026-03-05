@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-03-05: Session 215 - Thread Timeout-Then-Join Boundary Regression
+
+### Summary
+Added scheduler regression coverage for thread-task timeout path correctness: immediate timeout must not consume task completion, and a later join must still complete and clear task state.
+
+### What changed
+- `src/lisp/tests_tests.c3`
+  - Added:
+    - `run_scheduler_thread_join_timeout_then_join_boundary_tests(...)`
+  - New coverage loop:
+    - allocates thread task + enqueues worker offload (`OFFLOAD_SLEEP_MS`),
+    - performs immediate timeout join (`scheduler_thread_join_impl(..., 0)`), expects error and task still present,
+    - performs later bounded join (`scheduler_thread_join_impl(..., 250)`), expects non-error completion and task removal,
+    - verifies interpreter boundary/runtime snapshot stability.
+  - Wired into `run_scheduler_tests(...)`.
+
+### Why this matters
+- Locks in timeout semantics across real worker execution:
+  - timeout does not consume/destroy task completion state,
+  - subsequent join remains valid and deterministic.
+- Guards against regressions where timeout/join interleavings strand or prematurely clear thread-task entries.
+
+### Validation
+- `c3c build`
+- `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1209 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `c3c build --sanitize=address`
+- `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1211 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `OMNI_FIBER_TEMP=1 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1210 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+
 ## 2026-03-05: Session 214 - Worker-Cancel Thread-Task Interleave Regression
 
 ### Summary

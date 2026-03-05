@@ -485,6 +485,21 @@ Execution policy:
   - strict ASAN full suite: pass (`Unified 1210/0`, `Compiler 73/0`)
   - strict ASAN full suite with `OMNI_FIBER_TEMP=1`: pass (`Unified 1209/0`, `Compiler 73/0`)
 
+### Session 215 Follow-up (2026-03-05): Thread Timeout-Then-Join Boundaries
+
+- Added scheduler regression `run_scheduler_thread_join_timeout_then_join_boundary_tests(...)` in `src/lisp/tests_tests.c3`:
+  - executes immediate timeout join on active worker task (expects timeout error + task persistence),
+  - executes later bounded join on same task (expects completion + task removal),
+  - verifies boundary/runtime snapshot stability.
+- Wired into `run_scheduler_tests(...)`.
+- Outcome:
+  - hardens timeout path semantics against worker interleavings,
+  - ensures timeout does not prematurely consume task state needed for later join.
+- Validation:
+  - normal full suite: pass (`Unified 1209/0`, `Compiler 73/0`)
+  - strict ASAN full suite: pass (`Unified 1211/0`, `Compiler 73/0`)
+  - strict ASAN full suite with `OMNI_FIBER_TEMP=1`: pass (`Unified 1210/0`, `Compiler 73/0`)
+
 ### Post-44 Continuation Snapshot (Sessions 45-68)
 
 - Boundary API expansion and caller migration completed across eval/jit/env/value/module paths.
