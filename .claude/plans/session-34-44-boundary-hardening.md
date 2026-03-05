@@ -235,6 +235,18 @@ Execution policy:
   - strict ASAN full suite: pass (`Unified 1197/0`, `Compiler 73/0`)
   - strict ASAN full suite with `OMNI_FIBER_TEMP=1`: pass (`Unified 1197/0`, `Compiler 73/0`)
 
+### Session 196 Follow-up (2026-03-05): Invalid Offload Wakeup Payload Drain
+
+- Added scheduler regression `run_scheduler_invalid_offload_wakeup_boundary_tests(...)` in `src/lisp/tests_tests.c3`:
+  - enqueues `WAKEUP_OFFLOAD_READY` with out-of-range fiber ids and real `OffloadCompletion*` payloads,
+  - interleaves additional invalid poll-error events,
+  - verifies wakeup ring drains fully and interpreter boundary/runtime fields remain unchanged.
+- Wired into `run_scheduler_tests(...)`.
+- Validation:
+  - normal full suite: pass (`Unified 1199/0`, `Compiler 73/0`)
+  - strict ASAN full suite: pass (`Unified 1198/0`, `Compiler 73/0`)
+  - strict ASAN full suite with `OMNI_FIBER_TEMP=1`: pass (`Unified 1198/0`, `Compiler 73/0`)
+
 ### Post-44 Continuation Snapshot (Sessions 45-68)
 
 - Boundary API expansion and caller migration completed across eval/jit/env/value/module paths.

@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-03-05: Session 196 - Invalid Offload Wakeup Boundary Regression
+
+### Summary
+Added scheduler regression coverage for invalid `WAKEUP_OFFLOAD_READY` events carrying real completion payloads, asserting safe drain behavior and boundary/runtime state stability.
+
+### What changed
+- `src/lisp/tests_tests.c3`
+  - Added:
+    - `run_scheduler_invalid_offload_wakeup_boundary_tests(...)`
+  - New test repeatedly:
+    - prepares scheduler wakeup ring in deterministic no-async mode,
+    - allocates a real `OffloadCompletion*` via `scheduler_make_task_cancel_completion()`,
+    - enqueues `WAKEUP_OFFLOAD_READY` with out-of-range fiber id (invalid wakeup path),
+    - also enqueues a second invalid poll-error event to force mixed invalid-event drain,
+    - drains wakeups and verifies queue convergence (`head == tail`),
+    - validates interpreter boundary/runtime fields are unchanged.
+  - Wired into `run_scheduler_tests(...)`.
+
+### Why this matters
+- Prior regressions covered queue mechanics and valid pending-read transitions, but not invalid offload-ready payload cleanup through `scheduler_handle_invalid_wakeup(...)`.
+- This test closes that gap and gives ASAN-backed confidence against payload leak/double-free regressions on invalid wakeup paths.
+
+### Validation
+- `c3c build`
+- `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1199 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `c3c clean && c3c build --sanitize=address`
+- `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1198 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `OMNI_FIBER_TEMP=1 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1198 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+
 ## 2026-03-05: Session 195 - Scheduler Mixed Wakeup-Event Boundary Regression
 
 ### Summary

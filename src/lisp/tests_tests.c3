@@ -2511,6 +2511,94 @@ fn void run_scheduler_wakeup_mixed_event_boundary_tests(Interp* interp, int* pas
     }
 }
 
+fn void run_scheduler_invalid_offload_wakeup_boundary_tests(Interp* interp, int* pass, int* fail) {
+    // Invariant: invalid offload wakeups must be drained safely (payload cleanup path)
+    // and must not mutate interpreter boundary/runtime state.
+    main::ScopeRegion* saved_scope = interp.current_scope;
+    main::ScopeRegion* saved_releasing = interp.releasing_scope;
+    Env* saved_jit_env = interp.jit_env;
+    Env* saved_match_env = interp.match_env;
+    Expr* saved_jit_tco_expr = interp.jit_tco_expr;
+    Env* saved_jit_tco_env = interp.jit_tco_env;
+    main::ScopeRegion* saved_tco_recycle = interp.tco_recycle_scope;
+    usz saved_tco_slot = interp.tco_scope_defer_slot;
+    bool saved_tco_active = interp.tco_scope_defer_active;
+    bool saved_escape_mode = interp.escape_env_mode;
+    PromotionContext* saved_active_ctx = interp.active_promotion_ctx;
+
+    bool ok = true;
+    usz failed_step = 0;
+    char[] failed_phase = "";
+
+    for (usz i = 0; i < 32; i++) {
+        void* saved_async = null;
+        scheduler_test_prepare_no_async(&saved_async);
+
+        OffloadCompletion* completion = scheduler_make_task_cancel_completion();
+        if (completion == null) {
+            ok = false;
+            failed_step = i;
+            failed_phase = "alloc";
+            scheduler_test_restore_no_async(saved_async);
+            break;
+        }
+
+        bool pushed_ready = wakeup_enqueue(WAKEUP_OFFLOAD_READY, MAX_FIBERS + 4000 + i, 0, completion);
+        bool pushed_err = wakeup_enqueue(WAKEUP_POLL_ERROR, MAX_FIBERS + 5000 + i, -1, null);
+        if (!pushed_ready) {
+            scheduler_free_offload_completion(completion);
+            ok = false;
+            failed_step = i;
+            failed_phase = "enqueue";
+            scheduler_test_restore_no_async(saved_async);
+            break;
+        }
+
+        drain_wakeups();
+        usz head = g_scheduler.wakeup_head.load();
+        usz tail = g_scheduler.wakeup_tail.load();
+        bool state_ok = scheduler_runtime_boundary_fields_match(
+            interp,
+            saved_scope,
+            saved_releasing,
+            saved_jit_env,
+            saved_match_env,
+            saved_jit_tco_expr,
+            saved_jit_tco_env,
+            saved_tco_recycle,
+            saved_tco_slot,
+            saved_tco_active,
+            saved_escape_mode,
+            saved_active_ctx
+        );
+
+        bool drain_ok = pushed_err && head == tail;
+        scheduler_test_restore_no_async(saved_async);
+        if (!drain_ok || !state_ok) {
+            ok = false;
+            failed_step = i;
+            if (!drain_ok) {
+                failed_phase = "drain";
+            } else {
+                failed_phase = "boundary";
+            }
+            break;
+        }
+    }
+
+    if (ok) {
+        emit_pass_literal("[PASS] scheduler invalid offload wakeup boundary restore");
+        (*pass)++;
+    } else {
+        io::printfn(
+            "[FAIL] scheduler invalid offload wakeup boundary restore at step %d (%s)",
+            (int)failed_step,
+            (ZString)failed_phase
+        );
+        (*fail)++;
+    }
+}
+
 fn void run_scheduler_mixed_boundary_state_restore_tests(Interp* interp, int* pass, int* fail) {
     // Invariant: mixed scheduler thread/offload paths (success + expected error)
     // preserve interpreter boundary/runtime state across iterations.
@@ -2776,6 +2864,7 @@ fn void run_scheduler_tests(Interp* interp, int* pass, int* fail) {
     run_scheduler_boundary_stress_tests(interp, pass, fail);
     run_scheduler_wakeup_wraparound_boundary_tests(interp, pass, fail);
     run_scheduler_wakeup_mixed_event_boundary_tests(interp, pass, fail);
+    run_scheduler_invalid_offload_wakeup_boundary_tests(interp, pass, fail);
     run_scheduler_mixed_boundary_state_restore_tests(interp, pass, fail);
     run_scheduler_wakeup_offload_error_boundary_tests(interp, pass, fail);
 }
