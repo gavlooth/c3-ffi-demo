@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-03-05: Session 213 - Offload Worker Retry Under Full Wakeup Ring
+
+### Summary
+Added scheduler regression coverage for real producer contention: offload worker retries `WAKEUP_OFFLOAD_READY` while the wakeup ring is full, then completes safely after drain with explicit completion consumption.
+
+### What changed
+- `src/lisp/tests_tests.c3`
+  - Added:
+    - `run_scheduler_offload_worker_retry_full_wakeup_boundary_tests(...)`
+  - New coverage loop:
+    - prepares blocked pending-offload slot for in-range completion delivery,
+    - pre-fills wakeup ring to capacity with invalid poll-error events,
+    - enqueues offload work (`OFFLOAD_SLEEP_MS`) so worker becomes concurrent producer,
+    - waits for retry signal via `wakeup_drops` increase under full ring,
+    - drains ring, waits for completion delivery to pending slot, consumes completion via `scheduler_consume_pending_offload(...)`,
+    - verifies queue convergence, slot reset, and interpreter boundary/runtime snapshot stability.
+  - Wired into `run_scheduler_tests(...)`.
+
+### Why this matters
+- Prior coverage validated ring semantics mostly from synthetic enqueue paths.
+- This test drives the real worker retry loop (`while (!wakeup_enqueue(...))`) under contention and locks in payload lifetime correctness in that path.
+
+### Validation
+- `c3c build`
+- `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1208 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `c3c build --sanitize=address`
+- `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1209 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `OMNI_FIBER_TEMP=1 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1208 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+
 ## 2026-03-05: Session 212 - Inactive Offload-Ready Payload Cleanup Regression
 
 ### Summary

@@ -453,6 +453,22 @@ Execution policy:
   - strict ASAN full suite: pass (`Unified 1208/0`, `Compiler 73/0`)
   - strict ASAN full suite with `OMNI_FIBER_TEMP=1`: pass (`Unified 1207/0`, `Compiler 73/0`)
 
+### Session 213 Follow-up (2026-03-05): Worker Retry on Full Wakeup Ring
+
+- Added scheduler regression `run_scheduler_offload_worker_retry_full_wakeup_boundary_tests(...)` in `src/lisp/tests_tests.c3`:
+  - exercises real offload-worker producer retry loop while ring is full,
+  - observes retry via `wakeup_drops` delta,
+  - drains ring, waits for in-range pending-offload completion delivery, consumes completion explicitly,
+  - verifies queue convergence, pending-slot reset, and boundary/runtime state stability.
+- Wired into `run_scheduler_tests(...)`.
+- Outcome:
+  - adds concurrent producer-path coverage (worker thread + scheduler consumer) to wakeup hardening block,
+  - prevents regressions where retry/delivery teardown leaves completion payloads stranded.
+- Validation:
+  - normal full suite: pass (`Unified 1208/0`, `Compiler 73/0`)
+  - strict ASAN full suite: pass (`Unified 1209/0`, `Compiler 73/0`)
+  - strict ASAN full suite with `OMNI_FIBER_TEMP=1`: pass (`Unified 1208/0`, `Compiler 73/0`)
+
 ### Post-44 Continuation Snapshot (Sessions 45-68)
 
 - Boundary API expansion and caller migration completed across eval/jit/env/value/module paths.

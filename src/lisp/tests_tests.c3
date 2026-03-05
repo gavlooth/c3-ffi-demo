@@ -2787,6 +2787,120 @@ fn void run_scheduler_inactive_offload_ready_payload_cleanup_boundary_tests(Inte
     }
 }
 
+fn void run_scheduler_offload_worker_retry_full_wakeup_boundary_tests(Interp* interp, int* pass, int* fail) {
+    // Invariant: offload worker retries WAKEUP_OFFLOAD_READY enqueue while ring is full,
+    // then succeeds after drain without mutating interpreter boundary/runtime fields.
+    SchedulerBoundarySnapshot saved = scheduler_capture_runtime_boundary_snapshot(interp);
+    bool ok = true;
+    usz failed_step = 0;
+    char[] failed_phase = "";
+
+    for (usz i = 0; i < 8; i++) {
+        void* saved_async = null;
+        scheduler_test_prepare_blocked_pending_offload(&saved_async);
+
+        usz pushed_fill = 0;
+        for (usz j = 0; j < WAKEUP_RING_SIZE; j++) {
+            if (wakeup_enqueue(WAKEUP_POLL_ERROR, MAX_FIBERS + i * WAKEUP_RING_SIZE + j + 1, -1, null)) {
+                pushed_fill++;
+            }
+        }
+        if (pushed_fill != WAKEUP_RING_SIZE) {
+            ok = false;
+            failed_step = i;
+            failed_phase = "prefill";
+            scheduler_test_cleanup_no_async(saved_async);
+            break;
+        }
+
+        usz drops_before = g_scheduler.wakeup_drops.load();
+        OffloadWork work = {};
+        work.fiber_id = 0;
+        work.task_id = NO_TASK;
+        work.op = OFFLOAD_SLEEP_MS;
+        work.int_arg = 0;
+        work.blob = null;
+        bool queued = scheduler_enqueue_offload(work);
+        if (!queued) {
+            ok = false;
+            failed_step = i;
+            failed_phase = "enqueue-offload";
+            scheduler_test_cleanup_single_fiber_no_async(saved_async);
+            break;
+        }
+
+        bool observed_retry = false;
+        for (usz spin = 0; spin < 40; spin++) {
+            c_usleep(1000);
+            if (g_scheduler.wakeup_drops.load() > drops_before) {
+                observed_retry = true;
+                break;
+            }
+        }
+
+        // Release the full ring and wait until worker completion is delivered
+        // to the active pending-offload slot, then consume it to avoid leaks.
+        drain_wakeups();
+        bool completion_ready = false;
+        for (usz spin = 0; spin < 160; spin++) {
+            c_usleep(1000);
+            drain_wakeups();
+            if (g_scheduler.pending_offloads[0].active &&
+                g_scheduler.pending_offloads[0].completed &&
+                g_scheduler.pending_offloads[0].completion != null &&
+                g_scheduler.fibers[0].state == FIBER_READY) {
+                completion_ready = true;
+                break;
+            }
+        }
+
+        bool consume_ok = false;
+        if (completion_ready) {
+            Value* consumed = scheduler_consume_pending_offload(0, interp);
+            consume_ok = consumed != null && consumed.tag != ERROR;
+        }
+
+        // Defensive final drain in case a producer raced after consume.
+        drain_wakeups();
+        c_usleep(1000);
+        drain_wakeups();
+
+        bool state_ok = scheduler_runtime_boundary_matches_snapshot(interp, &saved);
+        bool queue_empty = g_scheduler.wakeup_head.load() == g_scheduler.wakeup_tail.load();
+        bool slot_cleared = !g_scheduler.pending_offloads[0].active &&
+                            !g_scheduler.pending_offloads[0].completed &&
+                            g_scheduler.pending_offloads[0].completion == null;
+        bool cycle_ok = observed_retry && completion_ready && consume_ok && queue_empty && slot_cleared && state_ok;
+        scheduler_test_cleanup_single_fiber_no_async(saved_async);
+        if (!cycle_ok) {
+            ok = false;
+            failed_step = i;
+            if (!observed_retry) {
+                failed_phase = "retry";
+            } else if (!completion_ready || !consume_ok || !slot_cleared) {
+                failed_phase = "completion";
+            } else if (!queue_empty) {
+                failed_phase = "queue";
+            } else {
+                failed_phase = "boundary";
+            }
+            break;
+        }
+    }
+
+    if (ok) {
+        emit_pass_literal("[PASS] scheduler offload worker retry on full wakeup boundary restore");
+        (*pass)++;
+    } else {
+        io::printfn(
+            "[FAIL] scheduler offload worker retry on full wakeup boundary restore at step %d (%s)",
+            (int)failed_step,
+            (ZString)failed_phase
+        );
+        (*fail)++;
+    }
+}
+
 fn void run_scheduler_duplicate_offload_ready_boundary_tests(Interp* interp, int* pass, int* fail) {
     // Invariant: duplicate/late WAKEUP_OFFLOAD_READY events for one active pending
     // offload retain the first completion payload, safely discard extras, and
@@ -3545,6 +3659,7 @@ fn void run_scheduler_tests(Interp* interp, int* pass, int* fail) {
     run_scheduler_wakeup_drop_counter_boundary_tests(interp, pass, fail);
     run_scheduler_wakeup_full_payload_ownership_boundary_tests(interp, pass, fail);
     run_scheduler_inactive_offload_ready_payload_cleanup_boundary_tests(interp, pass, fail);
+    run_scheduler_offload_worker_retry_full_wakeup_boundary_tests(interp, pass, fail);
     run_scheduler_duplicate_offload_ready_boundary_tests(interp, pass, fail);
     run_scheduler_consume_pending_offload_boundary_tests(interp, pass, fail);
     run_scheduler_consume_pending_tcp_read_boundary_tests(interp, pass, fail);
