@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-03-05: Session 214 - Worker-Cancel Thread-Task Interleave Regression
+
+### Summary
+Added scheduler regression coverage for real worker-thread enqueue interleaved with immediate thread-task cancellation, with explicit completion ownership checks and boundary snapshot assertions.
+
+### What changed
+- `src/lisp/tests_tests.c3`
+  - Added:
+    - `run_scheduler_thread_task_worker_cancel_interleave_boundary_tests(...)`
+  - New coverage loop:
+    - allocates real thread task id,
+    - enqueues offload work (`OFFLOAD_SLEEP_MS`) through worker path,
+    - immediately cancels task (`scheduler_cancel_thread_task`),
+    - waits for completion materialization (`scheduler_take_thread_task_completion`),
+    - verifies cancel completion kind (`OFFLOAD_RES_ERROR`) and task-table cleanup,
+    - verifies interpreter boundary/runtime snapshot stability.
+  - Wired into `run_scheduler_tests(...)`.
+
+### Why this matters
+- Existing thread-task tests covered internal state transitions, but this locks in behavior on the real worker interleaving path.
+- It guards against regressions where cancel+worker completion races leak completion ownership or leave stale task entries.
+
+### Validation
+- `c3c build`
+- `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1208 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `c3c build --sanitize=address`
+- `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1210 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `OMNI_FIBER_TEMP=1 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1209 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+
 ## 2026-03-05: Session 213 - Offload Worker Retry Under Full Wakeup Ring
 
 ### Summary

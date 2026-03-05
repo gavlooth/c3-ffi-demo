@@ -3419,6 +3419,93 @@ fn void run_scheduler_thread_task_cancel_boundary_tests(Interp* interp, int* pas
     }
 }
 
+fn void run_scheduler_thread_task_worker_cancel_interleave_boundary_tests(Interp* interp, int* pass, int* fail) {
+    // Invariant: real worker enqueue + immediate task cancel converges to one
+    // cancel completion and preserves interpreter boundary/runtime state.
+    SchedulerBoundarySnapshot saved = scheduler_capture_runtime_boundary_snapshot(interp);
+
+    bool ok = true;
+    usz failed_step = 0;
+    char[] failed_phase = "";
+
+    for (usz i = 0; i < 16; i++) {
+        usz task_id = scheduler_alloc_thread_task();
+        if (task_id == NO_TASK) {
+            ok = false;
+            failed_step = i;
+            failed_phase = "alloc";
+            break;
+        }
+
+        OffloadWork work = {};
+        work.fiber_id = NO_FIBER;
+        work.task_id = task_id;
+        work.op = OFFLOAD_SLEEP_MS;
+        work.int_arg = 10;
+        work.blob = null;
+        bool enqueued = scheduler_enqueue_offload(work);
+        if (!enqueued) {
+            scheduler_drop_thread_task(task_id);
+            ok = false;
+            failed_step = i;
+            failed_phase = "enqueue";
+            break;
+        }
+
+        bool already_done = false;
+        bool cancel_ok = scheduler_cancel_thread_task(task_id, &already_done);
+        bool cancel_state_ok = cancel_ok && !already_done;
+        if (!cancel_state_ok) {
+            scheduler_drop_thread_task(task_id);
+            ok = false;
+            failed_step = i;
+            failed_phase = "cancel";
+            break;
+        }
+
+        OffloadCompletion* completion = null;
+        for (usz spin = 0; spin < 240; spin++) {
+            completion = scheduler_take_thread_task_completion(task_id);
+            if (completion != null) break;
+            c_usleep(1000);
+        }
+
+        bool completion_ok = completion != null &&
+                             completion.kind == OFFLOAD_RES_ERROR &&
+                             !scheduler_thread_task_exists(task_id);
+        if (completion != null) {
+            scheduler_free_offload_completion(completion);
+        } else {
+            scheduler_drop_thread_task(task_id);
+        }
+
+        bool state_ok = scheduler_runtime_boundary_matches_snapshot(interp, &saved);
+        bool cycle_ok = completion_ok && state_ok;
+        if (!cycle_ok) {
+            ok = false;
+            failed_step = i;
+            if (!completion_ok) {
+                failed_phase = "completion";
+            } else {
+                failed_phase = "boundary";
+            }
+            break;
+        }
+    }
+
+    if (ok) {
+        emit_pass_literal("[PASS] scheduler worker cancel interleave boundary restore");
+        (*pass)++;
+    } else {
+        io::printfn(
+            "[FAIL] scheduler worker cancel interleave boundary restore at step %d (%s)",
+            (int)failed_step,
+            (ZString)failed_phase
+        );
+        (*fail)++;
+    }
+}
+
 fn void run_scheduler_wakeup_ready_barrier_boundary_tests(Interp* interp, int* pass, int* fail) {
     // Invariant: drain_wakeups must stop at the first unready slot and preserve FIFO order.
     // Also verify interpreter boundary/runtime state remains unchanged.
@@ -3665,6 +3752,7 @@ fn void run_scheduler_tests(Interp* interp, int* pass, int* fail) {
     run_scheduler_consume_pending_tcp_read_boundary_tests(interp, pass, fail);
     run_scheduler_thread_task_completion_boundary_tests(interp, pass, fail);
     run_scheduler_thread_task_cancel_boundary_tests(interp, pass, fail);
+    run_scheduler_thread_task_worker_cancel_interleave_boundary_tests(interp, pass, fail);
     run_scheduler_wakeup_ready_barrier_boundary_tests(interp, pass, fail);
     run_scheduler_mixed_boundary_state_restore_tests(interp, pass, fail);
     run_scheduler_wakeup_offload_error_boundary_tests(interp, pass, fail);

@@ -469,6 +469,22 @@ Execution policy:
   - strict ASAN full suite: pass (`Unified 1209/0`, `Compiler 73/0`)
   - strict ASAN full suite with `OMNI_FIBER_TEMP=1`: pass (`Unified 1208/0`, `Compiler 73/0`)
 
+### Session 214 Follow-up (2026-03-05): Worker-Cancel Thread-Task Interleave
+
+- Added scheduler regression `run_scheduler_thread_task_worker_cancel_interleave_boundary_tests(...)` in `src/lisp/tests_tests.c3`:
+  - enqueues real worker offload task with explicit thread-task id,
+  - immediately cancels task, then waits for completion take,
+  - verifies cancel completion kind (`OFFLOAD_RES_ERROR`) + task entry cleanup,
+  - verifies interpreter boundary/runtime snapshot stability.
+- Wired into `run_scheduler_tests(...)`.
+- Outcome:
+  - extends thread-task cancel coverage from local state-machine assertions to live worker interleavings,
+  - hardens completion ownership and cleanup expectations under cancel+completion races.
+- Validation:
+  - normal full suite: pass (`Unified 1208/0`, `Compiler 73/0`)
+  - strict ASAN full suite: pass (`Unified 1210/0`, `Compiler 73/0`)
+  - strict ASAN full suite with `OMNI_FIBER_TEMP=1`: pass (`Unified 1209/0`, `Compiler 73/0`)
+
 ### Post-44 Continuation Snapshot (Sessions 45-68)
 
 - Boundary API expansion and caller migration completed across eval/jit/env/value/module paths.
