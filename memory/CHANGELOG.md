@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026-03-05: Session 149 - Fiber TEMP Thread/Offload Boundary Guard Test
+
+### Summary
+Added scheduler-level boundary coverage to ensure Fiber TEMP context-cache metrics remain stack-context-local during thread/offload operations that run outside stack contexts.
+
+### What changed
+- `src/lisp/tests_tests.c3`
+  - Added `run_scheduler_fiber_temp_thread_boundary_tests(...)`.
+  - Under `OMNI_FIBER_TEMP=1`, the test:
+    - captures `ctx_take_hits` / `ctx_return_count`,
+    - runs repeated `thread-spawn` + `thread-join` offload work,
+    - asserts context-cache counters do not change (no stack context involvement).
+  - Wired into `run_scheduler_tests(...)`.
+
+### Why this matters
+- Validates the intended ownership boundary: Fiber TEMP per-context caches are tied to stack contexts, not generic worker/offload thread activity.
+- Adds explicit regression coverage for the cross-thread boundary concern.
+
+### Validation
+- Normal:
+  - `c3c build`
+  - `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - Result: pass (`Stack engine 19/0`, `Scope region 51/0`, `Unified 1179/0`, `Compiler 73/0`)
+- ASAN strict:
+  - `c3c clean && c3c build --sanitize=address`
+  - `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - Result: pass (`Stack engine 18/0`, `Scope region 51/0`, `Unified 1178/0`, `Compiler 73/0`)
+- Flagged summary:
+  - `OMNI_FIBER_TEMP=1 OMNI_TEST_SUMMARY=1 ...`
+  - Result includes:
+    - `OMNI_TEST_SUMMARY suite=stack_engine pass=19 fail=0`
+    - `OMNI_TEST_SUMMARY suite=scope_region pass=51 fail=0`
+    - `OMNI_TEST_SUMMARY suite=fiber_temp_pool enabled=1 hits=66 misses=4 returns=109 drop_frees=0 pooled=6 peak=6 ctx_hits=33 ctx_returns=70 eligible_slow=2 bypass_large=0 bypass_escape=2`
+
 ## 2026-03-05: Session 148 - Fiber TEMP Clone/Discard Stress Coverage
 
 ### Summary

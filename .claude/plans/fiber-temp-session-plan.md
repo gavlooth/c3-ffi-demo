@@ -160,6 +160,19 @@ Validation:
 Next:
 - Add cross-thread/offload guard tests to ensure Fiber TEMP remains confined to stack-context owner thread and global fallback remains safe under worker interactions.
 
+## Fiber TEMP Phase 5 Progress (2026-03-05)
+
+Completed:
+- Added scheduler/offload boundary test ensuring Fiber TEMP context-cache counters stay unchanged for repeated `thread-spawn`/`thread-join` operations (no stack context).
+- Coverage is active only when `OMNI_FIBER_TEMP=1`; flag-off path remains stable.
+
+Validation:
+- Normal: `Stack engine 19/0`, `Scope region 51/0`, `Unified 1179/0`, `Compiler 73/0`.
+- ASAN strict: `Stack engine 18/0`, `Scope region 51/0`, `Unified 1178/0`, `Compiler 73/0`.
+
+Next:
+- Add targeted scheduler wakeup/offload interleaving stress with Fiber TEMP enabled to widen boundary-race coverage.
+
 ## Session Rules
 
 Global rule for every session:

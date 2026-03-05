@@ -85,6 +85,7 @@ Enablement substrate update:
 - Added a defer-independent `StackCtx` lifecycle callback channel (attach/find/clone/destroy) so persistent per-context resources can be owned safely without interfering with LIFO `stack_ctx_undefer(...)` behavior.
 - Fiber TEMP now uses lifecycle-backed per-context chunk caches (with clone-share refcount) before global fallback.
 - Added stack-engine clone/discard stress coverage for Fiber TEMP-enabled contexts.
+- Added scheduler/offload boundary test coverage asserting Fiber TEMP context-cache counters remain unchanged for worker-thread operations without stack contexts.
 
 ## 4. Phase Plan
 
