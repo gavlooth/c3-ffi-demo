@@ -137,6 +137,17 @@ Execution policy:
   - normal full suite: pass (`Unified 1192/0`, `Compiler 73/0`)
   - strict ASAN full suite: pass (`Unified 1191/0`, `Compiler 73/0`)
 
+### Session 188 Follow-up (2026-03-05): Nested Promotion-Context Stack Discipline
+
+- Added regression `run_memory_lifetime_nested_promotion_context_stack_test(...)` in `src/lisp/tests_tests.c3`.
+- Coverage target:
+  - nested outer-aborted + inner-budgeted promotion contexts under releasing-scope copies,
+  - verifies context `prev` linkage, active-context restoration, inner memo reuse, outer abort non-aliasing fallback, and final context teardown.
+- Validation:
+  - normal full suite: pass (`Unified 1193/0`, `Compiler 73/0`)
+  - strict ASAN full suite: pass after immediate rerun (`Unified 1192/0`, `Compiler 73/0`)
+  - note: observed one transient order-sensitive deduce fail on first ASAN run (`deduce repeated open/rebind`), not reproduced on rerun.
+
 ### Post-44 Continuation Snapshot (Sessions 45-68)
 
 - Boundary API expansion and caller migration completed across eval/jit/env/value/module paths.

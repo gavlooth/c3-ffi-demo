@@ -4004,10 +4004,80 @@ fn void run_memory_lifetime_promotion_abort_nested_releasing_copy_test(Interp* i
     }
 }
 
+fn void run_memory_lifetime_nested_promotion_context_stack_test(Interp* interp, int* pass, int* fail) {
+    // Invariant: nested promotion contexts preserve stack discipline and memo behavior.
+    {
+        main::ScopeRegion* saved_scope = interp.current_scope;
+        main::ScopeRegion* parent = main::scope_create(saved_scope);
+        main::ScopeRegion* child = main::scope_create(parent);
+        if (parent == null || child == null) {
+            if (child != null) main::scope_release(child);
+            if (parent != null) main::scope_release(parent);
+            io::printn("[FAIL] lifetime: nested promotion context stack");
+            (*fail)++;
+            return;
+        }
+
+        interp.current_scope = child;
+        Value* src = make_cons(interp, make_int(interp, 55), make_nil(interp));
+
+        interp.current_scope = parent;
+        main::ScopeRegion* saved_releasing = interp.releasing_scope;
+        interp.releasing_scope = child;
+
+        PromotionContext outer = {};
+        promotion_context_begin(interp, &outer, 0); // force aborted fallback in outer
+        Value* outer_a = boundary_copy_from_releasing_scope(
+            src, interp, child, COPY_SITE_RUN_JIT_RESULT);
+
+        PromotionContext inner = {};
+        promotion_context_begin(interp, &inner, 4);
+        bool inner_prev_ok = inner.prev == &outer && interp.active_promotion_ctx == &inner;
+        Value* inner_a = boundary_copy_from_releasing_scope(
+            src, interp, child, COPY_SITE_RUN_JIT_RESULT);
+        Value* inner_b = boundary_copy_from_releasing_scope(
+            src, interp, child, COPY_SITE_RUN_JIT_RESULT);
+        bool inner_memo_ok = inner_a != null && inner_b == inner_a && !inner.aborted;
+        promotion_context_end(interp, &inner);
+        bool outer_restored_ok = interp.active_promotion_ctx == &outer;
+
+        Value* outer_b = boundary_copy_from_releasing_scope(
+            src, interp, child, COPY_SITE_RUN_JIT_RESULT);
+        promotion_context_end(interp, &outer);
+
+        bool outer_abort_ok = outer.aborted &&
+                              outer_a != null &&
+                              outer_b != null &&
+                              outer_a != outer_b;
+        bool final_ctx_ok = interp.active_promotion_ctx == null;
+
+        interp.releasing_scope = saved_releasing;
+        interp.current_scope = saved_scope;
+        main::scope_release(child);
+        main::scope_release(parent);
+
+        bool ok = inner_prev_ok && inner_memo_ok && outer_restored_ok &&
+                  outer_abort_ok && final_ctx_ok;
+        if (ok) {
+            emit_pass_literal("[PASS] lifetime: nested promotion context stack");
+            (*pass)++;
+        } else {
+            io::printfn("[FAIL] lifetime: nested promotion context stack (inner_prev_ok=%s inner_memo_ok=%s outer_restored_ok=%s outer_abort_ok=%s final_ctx_ok=%s)",
+                inner_prev_ok ? "yes" : "no",
+                inner_memo_ok ? "yes" : "no",
+                outer_restored_ok ? "yes" : "no",
+                outer_abort_ok ? "yes" : "no",
+                final_ctx_ok ? "yes" : "no");
+            (*fail)++;
+        }
+    }
+}
+
 fn void run_memory_lifetime_promotion_context_tests(Interp* interp, int* pass, int* fail) {
     run_memory_lifetime_promotion_context_memo_test(interp, pass, fail);
     run_memory_lifetime_promotion_abort_fallback_test(interp, pass, fail);
     run_memory_lifetime_promotion_abort_nested_releasing_copy_test(interp, pass, fail);
+    run_memory_lifetime_nested_promotion_context_stack_test(interp, pass, fail);
 }
 
 fn void run_memory_lifetime_regression_tests(Interp* interp, int* pass, int* fail) {

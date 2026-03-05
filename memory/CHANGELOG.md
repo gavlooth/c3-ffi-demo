@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-03-05: Session 188 - Nested Promotion-Context Stack Regression
+
+### Summary
+Added regression coverage for nested promotion-context stack behavior under releasing-scope copies, including mixed outer-aborted and inner-budgeted contexts.
+
+### What changed
+- `src/lisp/tests_tests.c3`
+  - Added `run_memory_lifetime_nested_promotion_context_stack_test(...)`.
+  - Scenario:
+    - outer `PromotionContext` with budget `0` (forced abort),
+    - nested inner `PromotionContext` with budget `4`,
+    - repeated `boundary_copy_from_releasing_scope(...)` calls inside/outside inner scope.
+  - Verifies:
+    - context stack linkage (`inner.prev == &outer`),
+    - active-context restore after `promotion_context_end(inner)`,
+    - memo behavior in inner context (`inner_b == inner_a`),
+    - abort fallback non-aliasing in outer context (`outer_a != outer_b`),
+    - final active-context teardown (`interp.active_promotion_ctx == null`).
+  - Wired into `run_memory_lifetime_promotion_context_tests(...)`.
+
+### Why this matters
+- Hardens correctness around nested promotion-context stack discipline and releasing-scope copy behavior, where implicit context leakage can produce subtle lifetime regressions.
+
+### Validation
+- `c3c build`
+- `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1193 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `c3c clean && c3c build --sanitize=address`
+- `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - one transient run observed an order-sensitive deduce failure (`deduce repeated open/rebind`),
+  - immediate rerun passed cleanly:
+    - `Unified: 1192 passed, 0 failed` (JIT checks disabled under ASAN)
+    - `Compiler: 73 passed, 0 failed`
+
 ## 2026-03-05: Session 187 - Nested Releasing-Copy Interleaving Regression Under Promotion Abort
 
 ### Summary
