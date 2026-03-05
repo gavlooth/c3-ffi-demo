@@ -38,6 +38,52 @@ Validation for follow-up:
 - `c3c build` + `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`: pass (`Stack engine 15/0`, `Unified 1178/0`, `Compiler 73/0`)
 - `c3c clean && c3c build --sanitize=address` + strict ASAN run: pass (`Stack engine 14/0`, `Unified 1177/0`, `Compiler 73/0`)
 
+## Fiber TEMP Phase 1 Progress (2026-03-05)
+
+Completed:
+- Added conservative `OMNI_FIBER_TEMP` scaffold in `scope_region`:
+  - chunk-pool state and helpers,
+  - TEMP-lane reclaim hook in destroy/reset/splice paths,
+  - summary counters (`OMNI_TEST_SUMMARY suite=fiber_temp_pool ...`).
+- Validation remains green in normal + ASAN with flag OFF and ON smoke run.
+
+Next:
+- Start eligibility routing (narrow whitelist) so selected TEMP allocations can use Fiber TEMP in active stack contexts.
+
+## Fiber TEMP Phase 2 Progress (2026-03-05)
+
+Completed:
+- Introduced narrow eligibility gate:
+  - scopes become Fiber TEMP eligible only when created in active stack contexts (`OMNI_FIBER_TEMP` enabled, stack context active, parent scope present).
+  - TEMP lane only: ESCAPE lane remains raw alloc/free.
+- Added stack-engine exercise test for in-context scope create/release to drive pool metrics under the flag.
+
+Validation:
+- Normal: `Stack engine 16/0`, `Unified 1178/0`, `Compiler 73/0`.
+- ASAN strict: `Stack engine 15/0`, `Unified 1177/0`, `Compiler 73/0`.
+- Flagged metrics now non-zero (`hits=3`, `misses=3`, `returns=6`, `eligible_slow=4`, `bypass_large=0`), confirming active path exercise.
+
+Next:
+- Expand allocation-shape whitelist beyond size-only checks (for example bypass pool routing once ESCAPE-lane activity appears in a scope).
+
+## Fiber TEMP Phase 2b Progress (2026-03-05)
+
+Completed:
+- Extended allocation-shape whitelist to include ESCAPE activity:
+  - Fiber TEMP slow-path routing now requires no ESCAPE chunks/dtors on the scope.
+  - Added `bypass_escape` metric counter for explicit observability.
+- Extended stack-engine in-context scope test to exercise both:
+  - a TEMP-heavy eligible scope,
+  - a mixed TEMP+ESCAPE scope that should bypass Fiber TEMP pool routing.
+
+Validation:
+- Normal: `Stack engine 16/0`, `Unified 1178/0`, `Compiler 73/0`.
+- ASAN strict: `Stack engine 15/0`, `Unified 1177/0`, `Compiler 73/0`.
+- Flagged metrics: `hits=1`, `misses=3`, `returns=6`, `eligible_slow=2`, `bypass_large=0`, `bypass_escape=2`.
+
+Next:
+- Add focused assertions around Fiber TEMP pool invariants (take/reclaim behavior and bypass counters) without coupling tests to suite order.
+
 ## Session Rules
 
 Global rule for every session:

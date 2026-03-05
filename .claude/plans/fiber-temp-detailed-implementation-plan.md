@@ -65,6 +65,22 @@ Item `4` follow-up status:
 - Completed: legacy stack-layer scope coupling removed (`stack_ctx_pin_scope`, `stack_ctx_unpin_scope`, `pinned_scope`).
 - Suspend-lifetime scope retention is now owned by runtime boundary code through generic defer-backed guards.
 
+Phase 1 scaffold status:
+- Completed conservative Fiber TEMP skeleton in `scope_region` under `OMNI_FIBER_TEMP`:
+  - chunk-pool helpers + counters,
+  - TEMP-lane chunk reclaim hook in destroy/reset/splice paths,
+  - no default behavior change with flag OFF.
+
+Phase 2 initial gate status:
+- Completed context-level eligibility routing:
+  - `ScopeRegion.fiber_temp_eligible` set only for scopes created inside active stack contexts.
+  - TEMP lane routing is eligibility-aware; ESCAPE lane remains raw.
+  - Added stack-engine in-context scope create/release test to exercise flagged pool metrics.
+- Extended allocation-shape whitelist:
+  - Pool routing remains size-gated (`<= 4096` slow-path request).
+  - Eligible scopes now bypass pool routing after ESCAPE-lane activity appears (`escape_chunks`/`escape_dtors`), further constraining Fiber TEMP to ephemeral TEMP-heavy scope shapes.
+  - Flagged summary confirms bypass path exercise (`bypass_escape=2`).
+
 ## 4. Phase Plan
 
 ### Phase 0: Baseline and Invariant Freeze

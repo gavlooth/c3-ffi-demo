@@ -921,6 +921,12 @@ struct TestState {
     int step;
 }
 
+struct FiberTempScopeState {
+    ScopeRegion* parent_scope;
+    int ok;
+    int bypass_escape;
+}
+
 struct TestDeferLog {
     int[8] order;
     int count;
@@ -1269,6 +1275,37 @@ fn bool test_fpu_preservation() {
     return ok;
 }
 
+fn void test_entry_scope_create_in_stack_ctx(void* arg) {
+    FiberTempScopeState* state = (FiberTempScopeState*)arg;
+    usz bypass_before = g_fiber_temp_pool_stats.bypass_escape_activity_allocs;
+
+    ScopeRegion* child1 = scope_create(state.parent_scope);
+    bool ok1 = true;
+    for (usz i = 0; i < 32; i++) {
+        if (child1.alloc(64) == null) {
+            ok1 = false;
+            break;
+        }
+    }
+    scope_release(child1);
+
+    ScopeRegion* child2 = scope_create(state.parent_scope);
+    bool ok2 = true;
+    void* e = child2.alloc_escape(32);
+    if (e == null) ok2 = false;
+    for (usz i = 0; i < 32; i++) {
+        if (child2.alloc(64) == null) {
+            ok2 = false;
+            break;
+        }
+    }
+    scope_release(child2);
+
+    state.ok = (ok1 && ok2) ? 1 : 0;
+    usz bypass_after = g_fiber_temp_pool_stats.bypass_escape_activity_allocs;
+    state.bypass_escape = bypass_after > bypass_before ? 1 : 0;
+}
+
 // Clone a suspended context and verify multi-shot behavior:
 // cloned execution completes independently while the source remains resumable.
 fn bool test_stack_ctx_clone_multishot() {
@@ -1314,6 +1351,38 @@ fn bool test_stack_ctx_clone_multishot() {
 
     stack_ctx_destroy(clone, &pool);
     stack_ctx_destroy(source, &pool);
+    stack_pool_shutdown(&pool);
+    return ok;
+}
+
+fn bool test_stack_ctx_scope_create_in_context() {
+    StackPool pool;
+    stack_pool_init(&pool);
+
+    ScopeRegion* parent_scope = scope_create(null);
+    StackCtx* c = stack_ctx_create(&pool);
+    if (c == null || parent_scope == null) {
+        if (c != null) stack_ctx_destroy(c, &pool);
+        if (parent_scope != null) scope_release(parent_scope);
+        stack_pool_shutdown(&pool);
+        return false;
+    }
+
+    FiberTempScopeState state;
+    state.parent_scope = parent_scope;
+    state.ok = 0;
+    state.bypass_escape = 0;
+    stack_ctx_init(c, &test_entry_scope_create_in_stack_ctx, &state);
+
+    StackContext main_ctx;
+    stack_ctx_switch_to(c, &main_ctx);
+    bool ok = c.status == CTX_COMPLETED && state.ok == 1;
+    if (scope_fiber_temp_flag_enabled()) {
+        ok = ok && state.bypass_escape == 1;
+    }
+
+    scope_release(parent_scope);
+    stack_ctx_destroy(c, &pool);
     stack_pool_shutdown(&pool);
     return ok;
 }
@@ -1571,6 +1640,9 @@ fn void run_stack_engine_tests() {
 
     if (test_stack_ctx_clone_multishot()) { stack_print_pass("clone/resume multi-shot"); pass++; }
     else { io::printfn("  FAIL: clone/resume multi-shot"); fail++; }
+
+    if (test_stack_ctx_scope_create_in_context()) { stack_print_pass("scope create inside stack context"); pass++; }
+    else { io::printfn("  FAIL: scope create inside stack context"); fail++; }
 
     if (test_stack_ctx_defer_destroy_lifo()) { stack_print_pass("defer destroy order (LIFO)"); pass++; }
     else { io::printfn("  FAIL: defer destroy order (LIFO)"); fail++; }

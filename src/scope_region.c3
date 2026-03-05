@@ -85,6 +85,7 @@ struct ScopeRegion {
     usz          alloc_count;   // Object count (for stats)
     uint         escape_generation; // Unique stamp for ESCAPE-lane membership checks
     void*        owner_thread_token; // Thread-affinity token for runtime safety checks
+    bool         fiber_temp_eligible; // True when scope may use fiber-temp TEMP backing
 
     // Recycling
     ScopeRegion* pool_next;     // Freelist link (only used when in freelist)
@@ -174,6 +175,104 @@ struct ScopeTransferStats {
 
 ScopeTransferStats g_scope_transfer_stats;
 
+struct FiberTempPoolStats {
+    usz take_hits;
+    usz take_misses;
+    usz return_count;
+    usz drop_frees;
+    usz peak_pool_count;
+    usz eligible_slow_allocs;
+    usz bypass_large_allocs;
+    usz bypass_escape_activity_allocs;
+}
+
+ScopeChunk* g_fiber_temp_chunk_pool = null;
+usz g_fiber_temp_chunk_pool_count = 0;
+const usz FIBER_TEMP_CHUNK_POOL_MAX = 2048;
+const usz FIBER_TEMP_ELIGIBLE_MAX_ALLOC = 4096;
+FiberTempPoolStats g_fiber_temp_pool_stats;
+
+fn bool scope_fiber_temp_flag_enabled() @inline {
+    return scope_c_getenv("OMNI_FIBER_TEMP") != null;
+}
+
+fn bool scope_fiber_temp_context_eligible() @inline {
+    if (!scope_fiber_temp_flag_enabled()) return false;
+    return g_current_stack_ctx != null;
+}
+
+fn bool fiber_temp_alloc_size_eligible(usz aligned_size) @inline {
+    return aligned_size <= FIBER_TEMP_ELIGIBLE_MAX_ALLOC;
+}
+
+fn bool fiber_temp_scope_shape_eligible(ScopeRegion* scope) @inline {
+    return scope.escape_chunks == null && scope.escape_dtors == null;
+}
+
+fn void fiber_temp_pool_record_peak() @inline {
+    if (g_fiber_temp_chunk_pool_count > g_fiber_temp_pool_stats.peak_pool_count) {
+        g_fiber_temp_pool_stats.peak_pool_count = g_fiber_temp_chunk_pool_count;
+    }
+}
+
+fn ScopeChunk* fiber_temp_chunk_try_take(usz min_bytes) {
+    if (!scope_fiber_temp_flag_enabled()) return null;
+
+    scope_global_lock();
+    ScopeChunk* prev = null;
+    ScopeChunk* cur = g_fiber_temp_chunk_pool;
+    while (cur != null) {
+        if (cur.capacity >= min_bytes) {
+            ScopeChunk* next = cur.next;
+            if (prev != null) {
+                prev.next = next;
+            } else {
+                g_fiber_temp_chunk_pool = next;
+            }
+            g_fiber_temp_chunk_pool_count--;
+            g_fiber_temp_pool_stats.take_hits++;
+            scope_global_unlock();
+            cur.next = null;
+            return cur;
+        }
+        prev = cur;
+        cur = cur.next;
+    }
+    g_fiber_temp_pool_stats.take_misses++;
+    scope_global_unlock();
+    return null;
+}
+
+fn void scope_chunk_reclaim_temp(ScopeChunk* chunk) {
+    if (chunk == null) return;
+    if (!scope_fiber_temp_flag_enabled()) {
+        mem::free(chunk);
+        return;
+    }
+
+    scope_global_lock();
+    if (g_fiber_temp_chunk_pool_count < FIBER_TEMP_CHUNK_POOL_MAX) {
+        chunk.next = g_fiber_temp_chunk_pool;
+        g_fiber_temp_chunk_pool = chunk;
+        g_fiber_temp_chunk_pool_count++;
+        g_fiber_temp_pool_stats.return_count++;
+        fiber_temp_pool_record_peak();
+        scope_global_unlock();
+        return;
+    }
+    g_fiber_temp_pool_stats.drop_frees++;
+    scope_global_unlock();
+    mem::free(chunk);
+}
+
+fn void scope_temp_chunk_release(ScopeRegion* scope, ScopeChunk* chunk) @inline {
+    if (scope != null && scope.fiber_temp_eligible) {
+        scope_chunk_reclaim_temp(chunk);
+        return;
+    }
+    mem::free(chunk);
+}
+
 fn usz scope_chunk_bytes(ScopeChunk* chunk) @inline {
     usz total = 0;
     while (chunk != null) {
@@ -209,7 +308,7 @@ fn void scope_print_memory_stats() {
  * Allocate a new chunk with at least `min_bytes` of usable data space.
  * The chunk struct header is placed at the start; data follows inline.
  */
-fn ScopeChunk* scope_chunk_alloc(usz min_bytes) {
+fn ScopeChunk* scope_chunk_alloc_raw(usz min_bytes) {
     // Double from initial, capped at max
     usz capacity = SCOPE_CHUNK_INITIAL;
     while (capacity < min_bytes) {
@@ -224,6 +323,12 @@ fn ScopeChunk* scope_chunk_alloc(usz min_bytes) {
     chunk.next = null;
     chunk.capacity = capacity;
     return chunk;
+}
+
+fn ScopeChunk* scope_chunk_alloc_temp(usz min_bytes) {
+    ScopeChunk* pooled = fiber_temp_chunk_try_take(min_bytes);
+    if (pooled != null) return pooled;
+    return scope_chunk_alloc_raw(min_bytes);
 }
 
 /**
@@ -247,6 +352,7 @@ fn ScopeRegion* scope_create(ScopeRegion* parent = null) {
     ScopeRegion* scope = null;
     uint generation = 0;
     uint escape_generation = 0;
+    bool fiber_temp_eligible = scope_fiber_temp_context_eligible() && parent != null;
 
     // Global freelist and generation stamps are shared across threads.
     if (scope_freelist_recycle_enabled()) {
@@ -277,7 +383,9 @@ fn ScopeRegion* scope_create(ScopeRegion* parent = null) {
     // Reuse existing chunk if present, else allocate
     ScopeChunk* chunk = scope.chunks;
     if (chunk == null) {
-        chunk = scope_chunk_alloc(SCOPE_CHUNK_INITIAL);
+        chunk = fiber_temp_eligible
+            ? scope_chunk_alloc_temp(SCOPE_CHUNK_INITIAL)
+            : scope_chunk_alloc_raw(SCOPE_CHUNK_INITIAL);
         chunk.next = null;
         scope.chunks = chunk;
     }
@@ -295,6 +403,7 @@ fn ScopeRegion* scope_create(ScopeRegion* parent = null) {
     scope.alloc_count = 0;
     scope.pool_next = null;
     scope.owner_thread_token = scope_current_thread_token();
+    scope.fiber_temp_eligible = fiber_temp_eligible;
 
     // Retain parent
     if (parent != null) {
@@ -363,7 +472,7 @@ fn void scope_destroy(ScopeRegion* scope) {
     ScopeChunk* c = scope.chunks;
     while (c != null) {
         ScopeChunk* next = c.next;
-        mem::free(c);
+        scope_temp_chunk_release(scope, c);
         c = next;
     }
 
@@ -383,6 +492,7 @@ fn void scope_destroy(ScopeRegion* scope) {
     scope.escape_limit = null;
     scope.dtors = null;
     scope.escape_dtors = null;
+    scope.fiber_temp_eligible = false;
 
     // 5. Recycle ScopeRegion struct (increment generation, add to freelist)
     scope.generation++;
@@ -421,7 +531,22 @@ fn void* ScopeRegion.alloc_slow(ScopeRegion* self, usz aligned_size) {
     if (new_cap > SCOPE_CHUNK_MAX) new_cap = SCOPE_CHUNK_MAX;
     if (new_cap < aligned_size) new_cap = aligned_size;
 
-    ScopeChunk* chunk = scope_chunk_alloc(new_cap);
+    bool size_eligible = fiber_temp_alloc_size_eligible(aligned_size);
+    bool shape_eligible = fiber_temp_scope_shape_eligible(self);
+    bool use_fiber_temp = self.fiber_temp_eligible && size_eligible && shape_eligible;
+    if (use_fiber_temp) {
+        g_fiber_temp_pool_stats.eligible_slow_allocs++;
+    } else if (self.fiber_temp_eligible) {
+        if (!size_eligible) {
+            g_fiber_temp_pool_stats.bypass_large_allocs++;
+        } else if (!shape_eligible) {
+            g_fiber_temp_pool_stats.bypass_escape_activity_allocs++;
+        }
+    }
+
+    ScopeChunk* chunk = use_fiber_temp
+        ? scope_chunk_alloc_temp(new_cap)
+        : scope_chunk_alloc_raw(new_cap);
     chunk.next = self.chunks;
     self.chunks = chunk;
 
@@ -446,7 +571,7 @@ fn void* ScopeRegion.alloc_escape_slow(ScopeRegion* self, usz aligned_size) {
     if (new_cap > SCOPE_CHUNK_MAX) new_cap = SCOPE_CHUNK_MAX;
     if (new_cap < aligned_size) new_cap = aligned_size;
 
-    ScopeChunk* chunk = scope_chunk_alloc(new_cap);
+    ScopeChunk* chunk = scope_chunk_alloc_raw(new_cap);
     chunk.next = self.escape_chunks;
     self.escape_chunks = chunk;
 
@@ -578,7 +703,7 @@ fn void scope_reset(ScopeRegion* scope) {
             // This is the oldest (first allocated) chunk — keep it
             keep = c;
         } else {
-            mem::free(c);
+            scope_temp_chunk_release(scope, c);
         }
         c = next;
     }
@@ -627,7 +752,7 @@ fn void scope_reset_temp_lane(ScopeRegion* scope) {
         if (next == null) {
             keep = c;
         } else {
-            mem::free(c);
+            scope_temp_chunk_release(scope, c);
         }
         c = next;
     }
@@ -639,7 +764,9 @@ fn void scope_reset_temp_lane(ScopeRegion* scope) {
         scope.limit = scope.bump + keep.capacity;
     } else {
         // Defensive fallback: recreate baseline TEMP chunk if scope had none.
-        ScopeChunk* chunk = scope_chunk_alloc(SCOPE_CHUNK_INITIAL);
+        ScopeChunk* chunk = scope.fiber_temp_eligible
+            ? scope_chunk_alloc_temp(SCOPE_CHUNK_INITIAL)
+            : scope_chunk_alloc_raw(SCOPE_CHUNK_INITIAL);
         chunk.next = null;
         scope.chunks = chunk;
         scope.bump = scope_chunk_data(chunk);
@@ -716,7 +843,7 @@ fn void scope_splice_escapes(ScopeRegion* parent, ScopeRegion* child) {
     ScopeChunk* c = child.chunks;
     while (c != null) {
         ScopeChunk* next = c.next;
-        mem::free(c);
+        scope_temp_chunk_release(child, c);
         c = next;
     }
     child.chunks = null;
@@ -724,6 +851,7 @@ fn void scope_splice_escapes(ScopeRegion* parent, ScopeRegion* child) {
     child.limit = null;
     child.escape_bump = null;
     child.escape_limit = null;
+    child.fiber_temp_eligible = false;
 
     // Detach and release child scope ownership.
     if (child.parent != null) {
@@ -770,6 +898,18 @@ fn void scope_freelist_cleanup() {
         ScopeRegion* next = s.pool_next;
         mem::free(s);
         s = next;
+    }
+
+    scope_global_lock();
+    ScopeChunk* chunk = g_fiber_temp_chunk_pool;
+    g_fiber_temp_chunk_pool = null;
+    g_fiber_temp_chunk_pool_count = 0;
+    scope_global_unlock();
+
+    while (chunk != null) {
+        ScopeChunk* next = chunk.next;
+        mem::free(chunk);
+        chunk = next;
     }
 }
 
@@ -1110,5 +1250,18 @@ fn void run_scope_region_tests() {
     io::printfn("%d passed, %d failed", (int)passed, (int)failed);
     if (scope_c_getenv("OMNI_TEST_SUMMARY") != null) {
         io::printfn("OMNI_TEST_SUMMARY suite=scope_region pass=%d fail=%d", (int)passed, (int)failed);
+        io::printfn(
+            "OMNI_TEST_SUMMARY suite=fiber_temp_pool enabled=%d hits=%d misses=%d returns=%d drop_frees=%d pooled=%d peak=%d eligible_slow=%d bypass_large=%d bypass_escape=%d",
+            (int)(scope_fiber_temp_flag_enabled() ? 1 : 0),
+            (int)g_fiber_temp_pool_stats.take_hits,
+            (int)g_fiber_temp_pool_stats.take_misses,
+            (int)g_fiber_temp_pool_stats.return_count,
+            (int)g_fiber_temp_pool_stats.drop_frees,
+            (int)g_fiber_temp_chunk_pool_count,
+            (int)g_fiber_temp_pool_stats.peak_pool_count,
+            (int)g_fiber_temp_pool_stats.eligible_slow_allocs,
+            (int)g_fiber_temp_pool_stats.bypass_large_allocs,
+            (int)g_fiber_temp_pool_stats.bypass_escape_activity_allocs
+        );
     }
 }

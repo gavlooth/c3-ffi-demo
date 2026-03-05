@@ -1,5 +1,159 @@
 # Changelog
 
+## 2026-03-05: Session 143 - Fiber TEMP Shape Whitelist (ESCAPE-Aware Bypass)
+
+### Summary
+Hardened Fiber TEMP routing from size-only eligibility to shape-aware eligibility:
+- Fiber TEMP pool routing now bypasses scopes that have ESCAPE-lane activity.
+- This keeps Fiber TEMP focused on ephemeral TEMP-heavy scopes and avoids broad adoption in mixed TEMP/ESCAPE scope shapes.
+
+### What changed
+- `src/scope_region.c3`
+  - Added `fiber_temp_scope_shape_eligible(...)`.
+  - `alloc_slow(...)` Fiber TEMP decision now requires:
+    - scope eligible (`fiber_temp_eligible`),
+    - size eligible (`<= FIBER_TEMP_ELIGIBLE_MAX_ALLOC`),
+    - shape eligible (no ESCAPE chunks/dtors on the scope).
+  - Added new metric counter:
+    - `bypass_escape_activity_allocs`
+  - Extended summary line:
+    - `OMNI_TEST_SUMMARY suite=fiber_temp_pool ... bypass_escape=...`
+- `src/stack_engine.c3`
+  - Extended in-context scope exercise to include a mixed TEMP+ESCAPE child scope and verify `bypass_escape` behavior when `OMNI_FIBER_TEMP=1`.
+- Planning/docs sync:
+  - `.claude/plans/fiber-temp-session-plan.md`
+  - `.claude/plans/fiber-temp-detailed-implementation-plan.md`
+  - Updated stale metrics text and recorded shape-whitelist progression.
+
+### Why this matters
+- Reduces risk of accidental broad Fiber TEMP routing while preserving current gains.
+- Keeps ownership semantics unchanged: ESCAPE lane remains deterministic and independent.
+- Provides observability for the new bypass reason via explicit metrics.
+
+### Validation
+- Normal:
+  - `c3c build`
+  - `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - Result: pass (`Stack engine 16/0`, `Unified 1178/0`, `Compiler 73/0`)
+- ASAN strict:
+  - `c3c clean && c3c build --sanitize=address`
+  - `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - Result: pass (`Stack engine 15/0`, `Unified 1177/0`, `Compiler 73/0`)
+- Flagged metrics run:
+  - `c3c build`
+  - `OMNI_FIBER_TEMP=1 OMNI_TEST_SUMMARY=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - Result includes:
+    - `OMNI_TEST_SUMMARY suite=stack_engine pass=16 fail=0`
+    - `OMNI_TEST_SUMMARY suite=scope_region pass=50 fail=0`
+    - `OMNI_TEST_SUMMARY suite=fiber_temp_pool enabled=1 hits=1 misses=3 returns=6 drop_frees=0 pooled=5 peak=5 eligible_slow=2 bypass_large=0 bypass_escape=2`
+
+## 2026-03-05: Session 142 - Fiber TEMP Eligibility Gate + In-Context Exercise
+
+### Summary
+Advanced Fiber TEMP from pure scaffold to a narrow eligibility model:
+- only scopes created in active stack contexts are marked Fiber TEMP eligible,
+- only TEMP lane uses pool-backed paths when eligible,
+- ESCAPE lane remains unchanged.
+
+Also added a stack-engine test that creates/releases scopes inside a stack context so Fiber TEMP pool behavior is exercised under the feature flag.
+
+### What changed
+- `src/scope_region.c3`
+  - Added `ScopeRegion.fiber_temp_eligible`.
+  - Added `scope_fiber_temp_context_eligible()` and used it at scope creation.
+  - `scope_create(...)` now marks scopes eligible only when:
+    - `OMNI_FIBER_TEMP` is enabled,
+    - a stack context is active,
+    - parent scope is non-null.
+  - Added `scope_temp_chunk_release(...)`:
+    - eligible TEMP chunks → `scope_chunk_reclaim_temp(...)`
+    - non-eligible TEMP chunks → direct `mem::free(...)`
+  - `alloc_slow(...)` now selects:
+    - `scope_chunk_alloc_temp(...)` for eligible scopes,
+    - `scope_chunk_alloc_raw(...)` otherwise.
+  - TEMP reset/destroy/splice paths now use eligibility-aware release.
+  - ESCAPE lane stays on raw allocation/free paths.
+- `src/stack_engine.c3`
+  - Added `test_stack_ctx_scope_create_in_context()` + entry helper to exercise scope create/release and TEMP slow-path overflow inside active stack context.
+  - Wired into `run_stack_engine_tests()`.
+
+### Why this matters
+- This is the first meaningful routing gate for Fiber TEMP without changing ownership semantics.
+- It keeps risk bounded:
+  - no broad “all TEMP everywhere” enablement,
+  - no ESCAPE lane interference,
+  - no stack-core ownership drift.
+- It provides a deterministic exercise path for metrics and regressions.
+
+### Validation
+- Normal:
+  - `c3c build`
+  - `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - Result: pass (`Stack engine 16/0`, `Unified 1178/0`, `Compiler 73/0`)
+- ASAN strict:
+  - `c3c clean && c3c build --sanitize=address`
+  - `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - Result: pass (`Stack engine 15/0`, `Unified 1177/0`, `Compiler 73/0`)
+- Flagged metrics run:
+  - `c3c build`
+  - `OMNI_FIBER_TEMP=1 OMNI_TEST_SUMMARY=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - Result includes:
+    - `OMNI_TEST_SUMMARY suite=stack_engine pass=16 fail=0`
+    - `OMNI_TEST_SUMMARY suite=scope_region pass=50 fail=0`
+    - `OMNI_TEST_SUMMARY suite=fiber_temp_pool enabled=1 hits=3 misses=3 returns=6 drop_frees=0 pooled=3 peak=3 eligible_slow=4 bypass_large=0`
+
+## 2026-03-05: Session 141 - Fiber TEMP Phase 1 Skeleton (Flagged, Conservative)
+
+### Summary
+Implemented a conservative Phase 1 scaffold for Fiber TEMP in `scope_region`:
+- feature flag gate (`OMNI_FIBER_TEMP`),
+- chunk-pool skeleton + counters,
+- no default behavior change when flag is off.
+
+This is intentionally infrastructure-only; no broad allocation routing changes yet.
+
+### What changed
+- `src/scope_region.c3`
+  - Added Fiber TEMP gate helpers:
+    - `scope_fiber_temp_flag_enabled()`
+    - `scope_fiber_temp_enabled()`
+  - Added chunk-pool state + metrics:
+    - `g_fiber_temp_chunk_pool`
+    - `g_fiber_temp_chunk_pool_count`
+    - `g_fiber_temp_pool_stats`
+    - `FIBER_TEMP_CHUNK_POOL_MAX`
+  - Added pool operations:
+    - `fiber_temp_chunk_try_take(...)`
+    - `scope_chunk_reclaim_temp(...)`
+  - Added explicit chunk allocation split:
+    - `scope_chunk_alloc_temp(...)` (TEMP lane, flagged pool path)
+    - `scope_chunk_alloc_raw(...)` (raw fallback / ESCAPE lane)
+  - Replaced direct frees for TEMP-lane chunk teardown paths (destroy/reset/splice) with `scope_chunk_reclaim_temp(...)`.
+  - ESCAPE-lane chunk behavior remains direct-free (unchanged).
+  - Extended test summary output with:
+    - `OMNI_TEST_SUMMARY suite=fiber_temp_pool ...`
+  - Extended `scope_freelist_cleanup()` to drain fiber-temp chunk pool.
+
+### Guardrail notes
+- Ownership authority remains region-centric; this session does not alter boundary promotion semantics.
+- Stack engine remains generic; no new `ScopeRegion` logic was added there.
+- Finalizer-bearing value policy unchanged.
+
+### Validation
+- Normal:
+  - `c3c build`
+  - `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - Result: pass (`Stack engine 15/0`, `Unified 1178/0`, `Compiler 73/0`)
+- ASAN strict:
+  - `c3c clean && c3c build --sanitize=address`
+  - `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - Result: pass (`Stack engine 14/0`, `Unified 1177/0`, `Compiler 73/0`)
+- Flagged smoke (`OMNI_FIBER_TEMP=1`):
+  - `OMNI_FIBER_TEMP=1 OMNI_TEST_SUMMARY=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - Result includes:
+    - `OMNI_TEST_SUMMARY suite=scope_region pass=50 fail=0`
+    - `OMNI_TEST_SUMMARY suite=fiber_temp_pool enabled=1 hits=0 misses=0 returns=0 drop_frees=0 pooled=0 peak=0`
+
 ## 2026-03-05: Session 140 - Close Item 4 (Remove Stack-Layer Scope Coupling)
 
 ### Summary
