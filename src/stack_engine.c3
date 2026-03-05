@@ -925,6 +925,7 @@ struct FiberTempScopeState {
     ScopeRegion* parent_scope;
     int ok;
     int bypass_escape;
+    int eligible_slow;
 }
 
 struct TestDeferLog {
@@ -1278,6 +1279,7 @@ fn bool test_fpu_preservation() {
 fn void test_entry_scope_create_in_stack_ctx(void* arg) {
     FiberTempScopeState* state = (FiberTempScopeState*)arg;
     usz bypass_before = g_fiber_temp_pool_stats.bypass_escape_activity_allocs;
+    usz eligible_before = g_fiber_temp_pool_stats.eligible_slow_allocs;
 
     ScopeRegion* child1 = scope_create(state.parent_scope);
     bool ok1 = true;
@@ -1303,7 +1305,9 @@ fn void test_entry_scope_create_in_stack_ctx(void* arg) {
 
     state.ok = (ok1 && ok2) ? 1 : 0;
     usz bypass_after = g_fiber_temp_pool_stats.bypass_escape_activity_allocs;
+    usz eligible_after = g_fiber_temp_pool_stats.eligible_slow_allocs;
     state.bypass_escape = bypass_after > bypass_before ? 1 : 0;
+    state.eligible_slow = eligible_after > eligible_before ? 1 : 0;
 }
 
 // Clone a suspended context and verify multi-shot behavior:
@@ -1372,6 +1376,7 @@ fn bool test_stack_ctx_scope_create_in_context() {
     state.parent_scope = parent_scope;
     state.ok = 0;
     state.bypass_escape = 0;
+    state.eligible_slow = 0;
     stack_ctx_init(c, &test_entry_scope_create_in_stack_ctx, &state);
 
     StackContext main_ctx;
@@ -1379,6 +1384,7 @@ fn bool test_stack_ctx_scope_create_in_context() {
     bool ok = c.status == CTX_COMPLETED && state.ok == 1;
     if (scope_fiber_temp_flag_enabled()) {
         ok = ok && state.bypass_escape == 1;
+        ok = ok && state.eligible_slow == 1;
     }
 
     scope_release(parent_scope);

@@ -1,5 +1,43 @@
 # Changelog
 
+## 2026-03-05: Session 144 - Fiber TEMP Test Hardening (Per-Test Metric Deltas)
+
+### Summary
+Hardened Fiber TEMP validation in stack-engine tests by asserting per-test metric deltas (not absolute global counters), reducing order sensitivity while preserving coverage of the new ESCAPE-aware bypass path.
+
+### What changed
+- `src/stack_engine.c3`
+  - Extended `FiberTempScopeState` with:
+    - `bypass_escape`
+    - `eligible_slow`
+  - `test_entry_scope_create_in_stack_ctx(...)` now captures local before/after deltas for:
+    - `g_fiber_temp_pool_stats.bypass_escape_activity_allocs`
+    - `g_fiber_temp_pool_stats.eligible_slow_allocs`
+  - `test_stack_ctx_scope_create_in_context()` now asserts under `OMNI_FIBER_TEMP=1`:
+    - bypass path exercised (`bypass_escape == 1`)
+    - eligible slow-path exercised (`eligible_slow == 1`)
+
+### Why this matters
+- Keeps Fiber TEMP assertions stable across test ordering and prior suite activity.
+- Verifies both positive and bypass routing behavior under real stack-context execution.
+
+### Validation
+- Normal:
+  - `c3c build`
+  - `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - Result: pass (`Stack engine 16/0`, `Unified 1178/0`, `Compiler 73/0`)
+- ASAN strict:
+  - `c3c clean && c3c build --sanitize=address`
+  - `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - Result: pass (`Stack engine 15/0`, `Unified 1177/0`, `Compiler 73/0`)
+- Flagged metrics run:
+  - `c3c build`
+  - `OMNI_FIBER_TEMP=1 OMNI_TEST_SUMMARY=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - Result includes:
+    - `OMNI_TEST_SUMMARY suite=stack_engine pass=16 fail=0`
+    - `OMNI_TEST_SUMMARY suite=scope_region pass=50 fail=0`
+    - `OMNI_TEST_SUMMARY suite=fiber_temp_pool enabled=1 hits=1 misses=3 returns=6 drop_frees=0 pooled=5 peak=5 eligible_slow=2 bypass_large=0 bypass_escape=2`
+
 ## 2026-03-05: Session 143 - Fiber TEMP Shape Whitelist (ESCAPE-Aware Bypass)
 
 ### Summary
