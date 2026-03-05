@@ -99,6 +99,7 @@ Optional workflow input:
 
 - `pr_number` — when provided, the workflow posts the same boundary summary as a PR comment.
   Re-runs update the existing boundary bot comment (upsert), rather than creating duplicates.
+  Lookup is paginated to handle long PR comment threads.
 
 ---
 

@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-03-05: Session 166 - Paginated PR Comment Upsert Lookup
+
+### Summary
+Hardened the boundary workflow PR-comment upsert path by adding paginated comment lookup, so existing marker comments are still found on PRs with large comment histories.
+
+### What changed
+- `.github/workflows/boundary-hardening.yml`
+  - Updated the PR comment bridge script:
+    - replaced single-page comment lookup (`per_page=100`) with paginated scan (up to 10 pages),
+    - preserves marker-based upsert semantics,
+    - updates existing marker comment when found; creates only when absent.
+- `docs/PROJECT_TOOLING.md`
+  - Documented that PR comment upsert lookup is paginated.
+
+### Why this matters
+- Prevents duplicate summary comments on long-lived/high-traffic PRs.
+- Keeps CI summary publication stable as comment volume grows.
+- Stays within the current plan: CI operational robustness, no runtime behavior changes.
+
+### Validation
+- Workflow logic updated and remains syntactically valid.
+- No runtime/test-path changes introduced.
+
 ## 2026-03-05: Session 165 - PR Comment Upsert for Boundary Workflow
 
 ### Summary

@@ -81,17 +81,27 @@ jobs:
               '',
               `Workflow run: https://github.com/${owner}/${repo}/actions/runs/${context.runId}`
             ].join('\n');
-            const { data: comments } = await github.rest.issues.listComments({
-              owner,
-              repo,
-              issue_number: prNumber,
-              per_page: 100
-            });
-            const existing = [...comments].reverse().find((c) =>
-              c?.user?.type === 'Bot' &&
-              typeof c.body === 'string' &&
-              c.body.includes(marker)
-            );
+            let existing = null;
+            for (let page = 1; page <= 10; page++) {
+              const { data: comments } = await github.rest.issues.listComments({
+                owner,
+                repo,
+                issue_number: prNumber,
+                per_page: 100,
+                page
+              });
+              if (!comments || comments.length === 0) break;
+              const found = [...comments].reverse().find((c) =>
+                c?.user?.type === 'Bot' &&
+                typeof c.body === 'string' &&
+                c.body.includes(marker)
+              );
+              if (found) {
+                existing = found;
+                break;
+              }
+              if (comments.length < 100) break;
+            }
             if (existing) {
               await github.rest.issues.updateComment({
                 owner,
