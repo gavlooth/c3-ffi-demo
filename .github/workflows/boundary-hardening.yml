@@ -2,6 +2,16 @@ name: Boundary Hardening
 
 on:
   workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Optional PR number to post boundary summary comment"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
 
 jobs:
   boundary-hardening:
@@ -24,6 +34,13 @@ jobs:
           OMNI_BOUNDARY_QUIET: "1"
         run: scripts/run_boundary_hardening.sh
 
+      - name: Build boundary summary markdown
+        if: always()
+        run: |
+          scripts/emit_boundary_job_summary.sh \
+            build/boundary_hardening_normal.log \
+            build/boundary_hardening_asan.log > build/boundary_hardening_job_summary.md
+
       - name: Upload boundary-hardening artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -34,10 +51,35 @@ jobs:
             build/boundary_hardening_normal.log
             build/boundary_hardening_asan.log
             build/boundary_hardening_summary.json
+            build/boundary_hardening_job_summary.md
 
       - name: Publish boundary summary to job summary
         if: always()
-        run: |
-          scripts/emit_boundary_job_summary.sh \
-            build/boundary_hardening_normal.log \
-            build/boundary_hardening_asan.log >> "$GITHUB_STEP_SUMMARY"
+        run: cat build/boundary_hardening_job_summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment boundary summary on PR
+        if: ${{ always() && github.event.inputs.pr_number != '' }}
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const prNumber = Number('${{ github.event.inputs.pr_number }}');
+            if (!Number.isInteger(prNumber) || prNumber <= 0) {
+              core.setFailed(`Invalid pr_number input: '${{ github.event.inputs.pr_number }}'`);
+              return;
+            }
+            const summary = fs.readFileSync('build/boundary_hardening_job_summary.md', 'utf8');
+            const body = [
+              'Boundary hardening profile completed.',
+              '',
+              summary,
+              '',
+              `Workflow run: https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body
+            });

@@ -95,6 +95,10 @@ The workflow is `workflow_dispatch` only and expects a self-hosted Linux runner 
    - `build/boundary_hardening_asan.log`
    - `build/boundary_hardening_summary.json`
 
+Optional workflow input:
+
+- `pr_number` — when provided, the workflow posts the same boundary summary as a PR comment.
+
 ---
 
 ## omni.toml Format

@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-03-05: Session 164 - Optional PR Comment Bridge for Boundary CI
+
+### Summary
+Extended boundary-hardening CI workflow with an optional PR-comment bridge that posts the generated boundary summary to a selected PR.
+
+### What changed
+- `.github/workflows/boundary-hardening.yml`
+  - Added `workflow_dispatch` input:
+    - `pr_number` (optional)
+  - Added workflow permissions:
+    - `contents: read`
+    - `pull-requests: write`
+  - Added summary markdown generation step:
+    - writes `build/boundary_hardening_job_summary.md` via `scripts/emit_boundary_job_summary.sh`
+  - Added PR comment step (`actions/github-script@v7`):
+    - runs only when `pr_number` is provided
+    - validates input and posts summary markdown as a PR comment
+  - Uploads `build/boundary_hardening_job_summary.md` with other artifacts.
+- `docs/PROJECT_TOOLING.md`
+  - Documented optional `pr_number` input behavior.
+
+### Why this matters
+- Keeps the main plan focused on operationalizing boundary signals in CI.
+- Reduces triage latency by surfacing the exact boundary summary directly in PR discussion when requested.
+- Remains non-disruptive (manual dispatch + optional input).
+
+### Validation
+- Verified shell tooling remains valid:
+  - `bash -n scripts/run_boundary_hardening.sh scripts/parse_boundary_summary.sh scripts/emit_boundary_job_summary.sh`
+- Verified summary renderer output remains correct against current logs:
+  - `scripts/emit_boundary_job_summary.sh build/boundary_hardening_normal.log build/boundary_hardening_asan.log`
+  - output shows expected PASS rows and fail-field values.
+
 ## 2026-03-05: Session 163 - CI Job Summary Rendering for Boundary Profile
 
 ### Summary

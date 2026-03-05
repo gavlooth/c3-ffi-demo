@@ -105,6 +105,7 @@ Enablement substrate update:
 - Added JSON summary artifact emission (`scripts/parse_boundary_summary.sh`) for normal/ASAN boundary profile logs.
 - Added external CI entrypoint (`.github/workflows/boundary-hardening.yml`) to run boundary profile and upload logs/JSON artifacts.
 - Added CI job-summary rendering step (`scripts/emit_boundary_job_summary.sh`) for quick boundary signal visibility.
+- Added optional workflow-dispatch PR comment bridge for boundary summary publication (`pr_number` input).
 
 ## 4. Phase Plan
 

@@ -395,6 +395,21 @@ Validation:
 Next:
 - Optional: add a lightweight PR comment bridge consuming the same renderer output.
 
+## Fiber TEMP Phase 6m Progress (2026-03-05)
+
+Completed:
+- Added optional PR-comment bridge in boundary workflow:
+  - new `workflow_dispatch` input `pr_number`,
+  - workflow posts boundary summary markdown to the specified PR when set.
+- Added workflow-level permissions required for PR comments and included markdown summary artifact upload.
+
+Validation:
+- Shell scripts syntax-check clean (`bash -n` across boundary tooling scripts).
+- Summary renderer output remains correct on existing normal/ASAN logs.
+
+Next:
+- Optional: deduplicate/replace prior boundary bot comments (update-last-comment policy) to reduce PR noise.
+
 ## Fiber TEMP Phase 5b Progress (2026-03-05)
 
 Completed:
