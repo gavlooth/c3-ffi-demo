@@ -1,5 +1,44 @@
 # Changelog
 
+## 2026-03-05: Session 223 - Constructor/Type Alias Polish (`Array`/`Dict`/`List`/`Set`, `typeof`)
+
+### Summary
+Completed naming-style follow-up so constructor/type ergonomics match the
+capitalized type-token model while preserving backward compatibility.
+
+### What changed
+- Primitive alias registration:
+  - `List` -> `list`
+  - `Array` -> `array`
+  - `Dict` -> `dict`
+  - `Set` -> `set`
+  - `typeof` -> `type-of`
+  - file: `src/lisp/eval_init_primitives.c3`
+- Constructor dispatch polish:
+  - `(list it)` now consumes iterators directly.
+  - `(array it)` now consumes iterators directly.
+  - files:
+    - `src/lisp/primitives_core.c3`
+    - `src/lisp/prim_collection_sort_array.c3`
+- Tests:
+  - added alias coverage for `Array`/`List`/`Dict`/`Set`.
+  - added `typeof` alias coverage.
+  - file: `src/lisp/tests_advanced_tests.c3`
+- Docs:
+  - language and references updated to document alias style and exact-type
+    equality via symbols (`(= (type-of x) 'Type)`).
+  - files:
+    - `docs/LANGUAGE_SPEC.md`
+    - `docs/reference/06-effects.md`
+    - `docs/reference/11-appendix-primitives.md`
+    - `docs/reference/12-appendix-stdlib.md`
+
+### Validation
+- `c3c build`
+- `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1224 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+
 ## 2026-03-05: Session 222 - Constructor Dispatch for Iterators + Unified Infinite Sources
 
 ### Summary

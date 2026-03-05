@@ -72,7 +72,8 @@ fn void register_regular_primitives_core(Interp* interp) {
     PrimReg[] core_prims = {
         // List operations
         { "cons", &prim_cons, 2 }, { "car", &prim_car, 1 }, { "cdr", &prim_cdr, 1 },
-        { "null?", &prim_null, 1 }, { "pair?", &prim_pair, 1 }, { "list", &prim_list, -1 },
+        { "null?", &prim_null, 1 }, { "pair?", &prim_pair, 1 },
+        { "list", &prim_list, -1 }, { "List", &prim_list, -1 },
         // Boolean
         { "not", &prim_not, 1 },
         // I/O (raw primitives for effect fast path)
@@ -97,6 +98,7 @@ fn void register_regular_primitives_core(Interp* interp) {
         { "gensym", &prim_gensym, 0 },
         // Dict
         { "dict", &prim_dict, -1 }, { "dict-set!", &prim_dict_set, 3 },
+        { "Dict", &prim_dict, -1 },
         // Math library
         { "sin", &prim_sin, 1 }, { "cos", &prim_cos, 1 }, { "tan", &prim_tan, 1 },
         { "asin", &prim_asin, 1 }, { "acos", &prim_acos, 1 }, { "atan", &prim_atan, 1 },
@@ -123,16 +125,19 @@ fn void register_regular_primitives_collections(Interp* interp) {
         { "apply", &prim_apply, 2 }, { "bound?", &prim_bound, 1 },
         { "error", &prim_error, 1 }, { "error-message", &prim_error_message, 1 },
         // Arrays
-        { "array", &prim_array, -1 }, { "array-set!", &prim_array_set, 3 },
+        { "array", &prim_array, -1 }, { "Array", &prim_array, -1 },
+        { "array-set!", &prim_array_set, 3 },
         // Sets
-        { "set", &prim_set, -1 }, { "set-add", &prim_set_add, 2 },
+        { "set", &prim_set, -1 }, { "Set", &prim_set, -1 },
+        { "set-add", &prim_set_add, 2 },
         { "set-remove", &prim_set_remove, 2 }, { "set-contains?", &prim_set_contains, 2 },
         { "set-size", &prim_set_size, 1 }, { "set->list", &prim_set_to_list, 1 },
         // Additional I/O and convenience
         { "read-string", &prim_read_string, 1 }, { "string->symbol", &prim_string_to_symbol, 1 },
         { "symbol->string", &prim_symbol_to_string, 1 },
         // Type system
-        { "type-of", &prim_type_of, 1 }, { "is?", &prim_is_type, 2 },
+        { "type-of", &prim_type_of, 1 }, { "typeof", &prim_type_of, 1 },
+        { "is?", &prim_is_type, 2 },
         { "instance?", &prim_is_instance, 1 }, { "type-args", &prim_type_args, 1 },
         // Memory reclamation
         { "unsafe-free!", &prim_free_bang, 1 },

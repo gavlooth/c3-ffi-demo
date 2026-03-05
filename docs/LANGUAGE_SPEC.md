@@ -57,8 +57,8 @@ string->list
 null?
 
 ; Collection literals
-[1 2 3]         ; array literal, desugars to (array 1 2 3)
-{'a 1 'b 2}     ; dict literal, desugars to (dict 'a 1 'b 2)
+[1 2 3]         ; array literal, desugars to (array 1 2 3) (Array alias available)
+{'a 1 'b 2}     ; dict literal, desugars to (dict 'a 1 'b 2) (Dict alias available)
 
 ; Quote shorthand
 'symbol     ; equivalent to (quote symbol)
@@ -356,8 +356,10 @@ None                    ; nullary variant
 
 ```lisp
 (type-of 42)            ; => 'Int
+(typeof 42)             ; => 'Int  (alias)
 (type-of "hi")          ; => 'String
 (type-of (Point 1 2))   ; => 'Point
+(= (type-of (Array 1 2)) 'Array) ; exact type via symbol equality
 (is? 42 'Int)           ; => true
 (is? (Circle 5) 'Shape) ; => true (walks parent chain)
 (instance? (Point 1 2)) ; => true
@@ -471,7 +473,7 @@ Binary primitives partially apply when given one argument: `(+ 3)` returns a `PA
 | `cons` | 2 | Construct pair |
 | `car` | 1 | First element |
 | `cdr` | 1 | Rest element |
-| `list` | variadic | Create list; single collection arg dispatches conversion (`(list [1 2 3])`, `(list (iterator ...))`) |
+| `list` / `List` | variadic | Create list; single collection arg dispatches conversion (`(List [1 2 3])`, `(List (iterator ...))`) |
 | `length` | 1 | Generic: list, array, dict, or string length |
 | `null?` | 1 | Check if nil |
 | `pair?` | 1 | Check if cons |
@@ -553,14 +555,14 @@ I/O primitives go through algebraic effects (`io/print`, `io/println`, etc.). Wh
 
 | Prim | Arity | Description |
 |------|-------|-------------|
-| `dict` | variadic | Create dict from key-value pairs; `{'a 1 'b 2}` desugars to this |
+| `dict` / `Dict` | variadic | Create dict from key-value pairs; `{'a 1 'b 2}` desugars to this |
 | `dict-set!` | 3 | Set key-value pair |
 
 ### 7.11 Array Operations (2)
 
 | Prim | Arity | Description |
 |------|-------|-------------|
-| `array` | variadic | Create array; `[1 2 3]` desugars to this; single collection arg dispatches conversion (`(array '(1 2 3))`, `(array (iterator ...))`) |
+| `array` / `Array` | variadic | Create array; `[1 2 3]` desugars to this; single collection arg dispatches conversion (`(Array '(1 2 3))`, `(Array (iterator ...))`) |
 | `array-set!` | 3 | Set element at index |
 
 ### 7.12 Generic Collection Operations (6)
@@ -623,7 +625,7 @@ Note: `length` (Section 7.3) is also generic — works on lists, arrays, dicts, 
 
 | Prim | Description |
 |------|-------------|
-| `type-of` | Type name as symbol |
+| `type-of` / `typeof` | Type name as symbol |
 | `is?` | Type/subtype check |
 | `instance?` | Check if type instance |
 | `eval` | Evaluate expression |
@@ -1012,8 +1014,10 @@ Goodbye!
 (keys person)           ; => '(name age)
 
 ; Constructor dispatch
-(array '(1 2 3))        ; list → array conversion
-(list [1 2 3])          ; array → list conversion
+(Array '(1 2 3))        ; list → array conversion
+(List [1 2 3])          ; array → list conversion
+(Array (take 5 (range-from 0))) ; force iterator into array
+(List (take 5 (range-from 0)))  ; force iterator into list
 
 ; Cons mutation via dot-path
 (define p (cons 1 2))
