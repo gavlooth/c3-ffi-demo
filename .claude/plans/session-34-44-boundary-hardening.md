@@ -272,6 +272,18 @@ Execution policy:
   - strict ASAN full suite: pass (`Unified 1200/0`, `Compiler 73/0`)
   - strict ASAN full suite with `OMNI_FIBER_TEMP=1`: pass (`Unified 1200/0`, `Compiler 73/0`)
 
+### Session 199 Follow-up (2026-03-05): Pending-Offload Consume Path Boundary Checks
+
+- Added scheduler regression `run_scheduler_consume_pending_offload_boundary_tests(...)` in `src/lisp/tests_tests.c3`:
+  - exercises direct `scheduler_consume_pending_offload(...)` pre-completion, completed, and post-reset paths,
+  - alternates completion kinds (`OFFLOAD_RES_INT` and cancel/error completion),
+  - verifies returned value semantics, pending-slot reset, and boundary/runtime field stability after each phase.
+- Wired into `run_scheduler_tests(...)`.
+- Validation:
+  - normal full suite: pass (`Unified 1202/0`, `Compiler 73/0`)
+  - strict ASAN full suite: pass (`Unified 1201/0`, `Compiler 73/0`)
+  - strict ASAN full suite with `OMNI_FIBER_TEMP=1`: pass (`Unified 1201/0`, `Compiler 73/0`)
+
 ### Post-44 Continuation Snapshot (Sessions 45-68)
 
 - Boundary API expansion and caller migration completed across eval/jit/env/value/module paths.

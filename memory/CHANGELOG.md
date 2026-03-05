@@ -1,5 +1,42 @@
 # Changelog
 
+## 2026-03-05: Session 199 - Pending-Offload Consume Boundary Regression
+
+### Summary
+Added direct consume-path scheduler regression coverage for `scheduler_consume_pending_offload(...)`, asserting boundary/runtime state stability across pre-completion error, completed success/error consume, and post-consume repeat-error paths.
+
+### What changed
+- `src/lisp/tests_tests.c3`
+  - Added:
+    - `run_scheduler_consume_pending_offload_boundary_tests(...)`
+  - New coverage (looped stress):
+    - Phase A: consume before completion (`active=false/completed=false`) must return `ERROR`.
+    - Phase B: consume completed offload:
+      - alternates between `OFFLOAD_RES_INT` completion and cancel-error completion,
+      - verifies returned value shape (`INT` or `ERROR`) matches completion kind,
+      - verifies pending slot resets to zeroed state.
+    - Phase C: consume after reset must return `ERROR` again.
+  - Verifies interpreter boundary/runtime fields after each phase.
+  - Includes explicit test-side cleanup fallback for retained completion pointers.
+  - Wired into `run_scheduler_tests(...)`.
+
+### Why this matters
+- Previous regressions focused on wakeup enqueue/drain behavior; this closes the consume-side boundary seam where payload translation and completion teardown occur.
+- Adds deterministic protection against boundary-state drift and slot-reset regressions in offload completion consumption paths.
+
+### Validation
+- `c3c build`
+- `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1202 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `c3c clean && c3c build --sanitize=address`
+- `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1201 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `OMNI_FIBER_TEMP=1 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1201 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+
 ## 2026-03-05: Session 198 - Duplicate/Late Offload-Ready Boundary Regression
 
 ### Summary

@@ -2769,6 +2769,167 @@ fn void run_scheduler_duplicate_offload_ready_boundary_tests(Interp* interp, int
     }
 }
 
+fn void run_scheduler_consume_pending_offload_boundary_tests(Interp* interp, int* pass, int* fail) {
+    // Invariant: direct consume paths for pending offload (pre-completion error,
+    // completed success/error, and post-consume repeat error) preserve boundary/runtime state.
+    main::ScopeRegion* saved_scope = interp.current_scope;
+    main::ScopeRegion* saved_releasing = interp.releasing_scope;
+    Env* saved_jit_env = interp.jit_env;
+    Env* saved_match_env = interp.match_env;
+    Expr* saved_jit_tco_expr = interp.jit_tco_expr;
+    Env* saved_jit_tco_env = interp.jit_tco_env;
+    main::ScopeRegion* saved_tco_recycle = interp.tco_recycle_scope;
+    usz saved_tco_slot = interp.tco_scope_defer_slot;
+    bool saved_tco_active = interp.tco_scope_defer_active;
+    bool saved_escape_mode = interp.escape_env_mode;
+    PromotionContext* saved_active_ctx = interp.active_promotion_ctx;
+
+    bool ok = true;
+    usz failed_step = 0;
+    char[] failed_phase = "";
+
+    for (usz i = 0; i < 16; i++) {
+        void* saved_async = null;
+        scheduler_test_prepare_no_async(&saved_async);
+
+        g_scheduler.fiber_count = 1;
+        g_scheduler.current_fiber_id = NO_FIBER;
+        g_scheduler.fibers[0] = {};
+        g_scheduler.pending_offloads[0] = {};
+
+        // Phase A: consume before completion should fail.
+        Value* pre = scheduler_consume_pending_offload(0, interp);
+        bool pre_ok = pre != null && pre.tag == ERROR;
+        bool state_ok_pre = scheduler_runtime_boundary_fields_match(
+            interp,
+            saved_scope,
+            saved_releasing,
+            saved_jit_env,
+            saved_match_env,
+            saved_jit_tco_expr,
+            saved_jit_tco_env,
+            saved_tco_recycle,
+            saved_tco_slot,
+            saved_tco_active,
+            saved_escape_mode,
+            saved_active_ctx
+        );
+        if (!pre_ok || !state_ok_pre) {
+            ok = false;
+            failed_step = i * 3;
+            failed_phase = "pre";
+        }
+
+        OffloadCompletion* completion = null;
+        long expected_int = 0;
+        bool expect_error = (i & 1) == 1;
+        if (ok && expect_error) {
+            completion = scheduler_make_task_cancel_completion();
+        } else if (ok) {
+            completion = (OffloadCompletion*)mem::malloc(OffloadCompletion.sizeof);
+            if (completion != null) {
+                *completion = {};
+                completion.kind = OFFLOAD_RES_INT;
+                expected_int = 1000 + (long)i;
+                completion.int_result = expected_int;
+            }
+        }
+        if (ok && completion == null) {
+            ok = false;
+            failed_step = i * 3 + 1;
+            failed_phase = "alloc";
+        }
+
+        // Phase B: consume completed result/error.
+        if (ok) {
+            g_scheduler.pending_offloads[0].active = true;
+            g_scheduler.pending_offloads[0].completed = true;
+            g_scheduler.pending_offloads[0].completion = completion;
+            Value* consumed = scheduler_consume_pending_offload(0, interp);
+
+            bool consume_ok = expect_error
+                              ? (consumed != null && consumed.tag == ERROR)
+                              : (consumed != null && consumed.tag == INT && consumed.int_val == expected_int);
+            bool slot_reset = !g_scheduler.pending_offloads[0].active &&
+                              !g_scheduler.pending_offloads[0].completed &&
+                              g_scheduler.pending_offloads[0].completion == null;
+            bool state_ok_consume = scheduler_runtime_boundary_fields_match(
+                interp,
+                saved_scope,
+                saved_releasing,
+                saved_jit_env,
+                saved_match_env,
+                saved_jit_tco_expr,
+                saved_jit_tco_env,
+                saved_tco_recycle,
+                saved_tco_slot,
+                saved_tco_active,
+                saved_escape_mode,
+                saved_active_ctx
+            );
+            if (!consume_ok || !slot_reset || !state_ok_consume) {
+                ok = false;
+                failed_step = i * 3 + 1;
+                if (!consume_ok) {
+                    failed_phase = "consume-value";
+                } else if (!slot_reset) {
+                    failed_phase = "consume-reset";
+                } else {
+                    failed_phase = "consume-boundary";
+                }
+            }
+        }
+
+        // Phase C: consume after reset should fail again.
+        if (ok) {
+            Value* post = scheduler_consume_pending_offload(0, interp);
+            bool post_ok = post != null && post.tag == ERROR;
+            bool state_ok_post = scheduler_runtime_boundary_fields_match(
+                interp,
+                saved_scope,
+                saved_releasing,
+                saved_jit_env,
+                saved_match_env,
+                saved_jit_tco_expr,
+                saved_jit_tco_env,
+                saved_tco_recycle,
+                saved_tco_slot,
+                saved_tco_active,
+                saved_escape_mode,
+                saved_active_ctx
+            );
+            if (!post_ok || !state_ok_post) {
+                ok = false;
+                failed_step = i * 3 + 2;
+                failed_phase = "post";
+            }
+        }
+
+        if (g_scheduler.pending_offloads[0].completion != null) {
+            scheduler_free_offload_completion(g_scheduler.pending_offloads[0].completion);
+        }
+        g_scheduler.pending_offloads[0] = {};
+        g_scheduler.fibers[0] = {};
+        g_scheduler.fiber_count = 0;
+        scheduler_reset_wakeup_queue();
+        scheduler_test_restore_no_async(saved_async);
+
+        if (!ok) break;
+    }
+
+    if (ok) {
+        emit_pass_literal("[PASS] scheduler consume pending-offload boundary restore");
+        (*pass)++;
+    } else {
+        io::printfn(
+            "[FAIL] scheduler consume pending-offload boundary restore at step %d (%s)",
+            (int)failed_step,
+            (ZString)failed_phase
+        );
+        (*fail)++;
+    }
+}
+
 fn void run_scheduler_wakeup_ready_barrier_boundary_tests(Interp* interp, int* pass, int* fail) {
     // Invariant: drain_wakeups must stop at the first unready slot and preserve FIFO order.
     // Also verify interpreter boundary/runtime state remains unchanged.
@@ -3139,6 +3300,7 @@ fn void run_scheduler_tests(Interp* interp, int* pass, int* fail) {
     run_scheduler_wakeup_mixed_event_boundary_tests(interp, pass, fail);
     run_scheduler_invalid_offload_wakeup_boundary_tests(interp, pass, fail);
     run_scheduler_duplicate_offload_ready_boundary_tests(interp, pass, fail);
+    run_scheduler_consume_pending_offload_boundary_tests(interp, pass, fail);
     run_scheduler_wakeup_ready_barrier_boundary_tests(interp, pass, fail);
     run_scheduler_mixed_boundary_state_restore_tests(interp, pass, fail);
     run_scheduler_wakeup_offload_error_boundary_tests(interp, pass, fail);
