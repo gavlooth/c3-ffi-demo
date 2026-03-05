@@ -204,6 +204,26 @@ Validation:
 Next:
 - Begin focused metric/telemetry hardening for Fiber TEMP clone-share lifecycle (explicit counters for lifecycle clone/destroy pool flush behavior).
 
+## Fiber TEMP Phase 6b Progress (2026-03-05)
+
+Completed:
+- Added explicit lifecycle telemetry counters:
+  - context-pool create count,
+  - lifecycle clone callback count,
+  - lifecycle destroy callback count,
+  - deferred-destroy count (shared refcount path),
+  - destroy-time chunk flush count.
+- Extended summary output to include lifecycle telemetry fields.
+- Strengthened clone/discard stress test assertions to require lifecycle telemetry deltas under flag.
+
+Validation:
+- Normal: `Stack engine 19/0`, `Scope region 51/0`, `Unified 1182/0`, `Compiler 73/0`.
+- ASAN strict: `Stack engine 18/0`, `Scope region 51/0`, `Unified 1181/0`, `Compiler 73/0`.
+- Flagged summary includes lifecycle fields (`ctx_pools`, `lc_clone`, `lc_destroy`, `lc_defer`, `lc_flush`).
+
+Next:
+- Add a focused leakage/retention guard test around repeated create/destroy cycles to verify lifecycle flush counters and pooled-count stability over long runs.
+
 ## Fiber TEMP Phase 5b Progress (2026-03-05)
 
 Completed:

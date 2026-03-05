@@ -1,5 +1,58 @@
 # Changelog
 
+## 2026-03-05: Session 153 - Fiber TEMP Lifecycle Telemetry Hardening
+
+### Summary
+Added explicit Fiber TEMP lifecycle telemetry counters and assertions so clone-share lifecycle behavior is directly observable (not inferred from aggregate pool counters).
+
+### What changed
+- `src/scope_region.c3`
+  - Extended `FiberTempPoolStats` with:
+    - `ctx_pool_created`
+    - `lifecycle_clone_callbacks`
+    - `lifecycle_destroy_callbacks`
+    - `lifecycle_destroy_deferred`
+    - `lifecycle_destroy_flush_chunks`
+  - Wired counters into lifecycle callback paths:
+    - clone callback increments `lifecycle_clone_callbacks`
+    - destroy callback increments `lifecycle_destroy_callbacks`
+    - deferred destroy branch increments `lifecycle_destroy_deferred`
+    - per-chunk flush on terminal destroy increments `lifecycle_destroy_flush_chunks`
+    - context-pool attach increments `ctx_pool_created`
+  - Extended `OMNI_TEST_SUMMARY suite=fiber_temp_pool` output with:
+    - `ctx_pools`
+    - `lc_clone`
+    - `lc_destroy`
+    - `lc_defer`
+    - `lc_flush`
+- `src/stack_engine.c3`
+  - Strengthened `test_stack_ctx_fiber_temp_clone_discard_stress()`:
+    - under `OMNI_FIBER_TEMP=1`, now asserts deltas for:
+      - lifecycle clone callbacks,
+      - lifecycle destroy callbacks,
+      - deferred-destroy events,
+      - destroy-time chunk flushes,
+      in addition to existing context-return activity.
+
+### Why this matters
+- Converts Fiber TEMP lifecycle behavior into directly testable telemetry.
+- Increases confidence in clone-share correctness and destroy sequencing.
+- Supports faster diagnosis if future regressions appear in suspend/clone/discard paths.
+
+### Validation
+- Normal:
+  - `c3c build`
+  - `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - Result: pass (`Stack engine 19/0`, `Scope region 51/0`, `Unified 1182/0`, `Compiler 73/0`)
+- ASAN strict:
+  - `c3c clean && c3c build --sanitize=address`
+  - `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - Result: pass (`Stack engine 18/0`, `Scope region 51/0`, `Unified 1181/0`, `Compiler 73/0`)
+- Flagged summary:
+  - `OMNI_FIBER_TEMP=1 OMNI_TEST_SUMMARY=1 ...`
+  - Result includes:
+    - `OMNI_TEST_SUMMARY suite=fiber_temp_pool ... ctx_pools=33 lc_clone=32 lc_destroy=65 lc_defer=32 lc_flush=37 ...`
+
 ## 2026-03-05: Session 152 - Cancellation/Timeout Boundary Stress (Fiber TEMP)
 
 ### Summary

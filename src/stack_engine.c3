@@ -1569,6 +1569,10 @@ fn bool test_stack_ctx_fiber_temp_clone_discard_stress() {
 
     bool ok = true;
     usz ctx_returns_before = g_fiber_temp_pool_stats.ctx_return_count;
+    usz lifecycle_clone_before = g_fiber_temp_pool_stats.lifecycle_clone_callbacks;
+    usz lifecycle_destroy_before = g_fiber_temp_pool_stats.lifecycle_destroy_callbacks;
+    usz lifecycle_deferred_before = g_fiber_temp_pool_stats.lifecycle_destroy_deferred;
+    usz lifecycle_flush_before = g_fiber_temp_pool_stats.lifecycle_destroy_flush_chunks;
 
     for (usz iter = 0; iter < 32; iter++) {
         StackCtx* source = stack_ctx_create(&pool);
@@ -1614,7 +1618,15 @@ fn bool test_stack_ctx_fiber_temp_clone_discard_stress() {
 
     if (scope_fiber_temp_flag_enabled()) {
         usz ctx_returns_after = g_fiber_temp_pool_stats.ctx_return_count;
+        usz lifecycle_clone_after = g_fiber_temp_pool_stats.lifecycle_clone_callbacks;
+        usz lifecycle_destroy_after = g_fiber_temp_pool_stats.lifecycle_destroy_callbacks;
+        usz lifecycle_deferred_after = g_fiber_temp_pool_stats.lifecycle_destroy_deferred;
+        usz lifecycle_flush_after = g_fiber_temp_pool_stats.lifecycle_destroy_flush_chunks;
         ok = ok && ctx_returns_after > ctx_returns_before;
+        ok = ok && lifecycle_clone_after > lifecycle_clone_before;
+        ok = ok && lifecycle_destroy_after > lifecycle_destroy_before;
+        ok = ok && lifecycle_deferred_after > lifecycle_deferred_before;
+        ok = ok && lifecycle_flush_after > lifecycle_flush_before;
     }
 
     scope_release(parent_scope);

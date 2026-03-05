@@ -183,6 +183,11 @@ struct FiberTempPoolStats {
     usz peak_pool_count;
     usz ctx_take_hits;
     usz ctx_return_count;
+    usz ctx_pool_created;
+    usz lifecycle_clone_callbacks;
+    usz lifecycle_destroy_callbacks;
+    usz lifecycle_destroy_deferred;
+    usz lifecycle_destroy_flush_chunks;
     usz eligible_slow_allocs;
     usz bypass_large_allocs;
     usz bypass_escape_activity_allocs;
@@ -244,13 +249,16 @@ fn void scope_chunk_reclaim_temp_global(ScopeChunk* chunk) {
 fn void fiber_temp_ctx_pool_on_clone(void* arg) {
     FiberTempCtxPool* pool = (FiberTempCtxPool*)arg;
     if (pool == null) return;
+    g_fiber_temp_pool_stats.lifecycle_clone_callbacks++;
     pool.refcount++;
 }
 
 fn void fiber_temp_ctx_pool_on_destroy(void* arg) {
     FiberTempCtxPool* pool = (FiberTempCtxPool*)arg;
     if (pool == null) return;
+    g_fiber_temp_pool_stats.lifecycle_destroy_callbacks++;
     if (pool.refcount > 1) {
+        g_fiber_temp_pool_stats.lifecycle_destroy_deferred++;
         pool.refcount--;
         return;
     }
@@ -260,6 +268,7 @@ fn void fiber_temp_ctx_pool_on_destroy(void* arg) {
     pool.count = 0;
     while (chunk != null) {
         ScopeChunk* next = chunk.next;
+        g_fiber_temp_pool_stats.lifecycle_destroy_flush_chunks++;
         scope_chunk_reclaim_temp_global(chunk);
         chunk = next;
     }
@@ -293,6 +302,7 @@ fn FiberTempCtxPool* fiber_temp_ctx_pool_get_or_create() {
         mem::free(pool);
         return null;
     }
+    g_fiber_temp_pool_stats.ctx_pool_created++;
     return pool;
 }
 
@@ -1415,7 +1425,7 @@ fn void run_scope_region_tests() {
     if (scope_c_getenv("OMNI_TEST_SUMMARY") != null) {
         io::printfn("OMNI_TEST_SUMMARY suite=scope_region pass=%d fail=%d", (int)passed, (int)failed);
         io::printfn(
-            "OMNI_TEST_SUMMARY suite=fiber_temp_pool enabled=%d hits=%d misses=%d returns=%d drop_frees=%d pooled=%d peak=%d ctx_hits=%d ctx_returns=%d eligible_slow=%d bypass_large=%d bypass_escape=%d",
+            "OMNI_TEST_SUMMARY suite=fiber_temp_pool enabled=%d hits=%d misses=%d returns=%d drop_frees=%d pooled=%d peak=%d ctx_hits=%d ctx_returns=%d ctx_pools=%d lc_clone=%d lc_destroy=%d lc_defer=%d lc_flush=%d eligible_slow=%d bypass_large=%d bypass_escape=%d",
             (int)(scope_fiber_temp_flag_enabled() ? 1 : 0),
             (int)g_fiber_temp_pool_stats.take_hits,
             (int)g_fiber_temp_pool_stats.take_misses,
@@ -1425,6 +1435,11 @@ fn void run_scope_region_tests() {
             (int)g_fiber_temp_pool_stats.peak_pool_count,
             (int)g_fiber_temp_pool_stats.ctx_take_hits,
             (int)g_fiber_temp_pool_stats.ctx_return_count,
+            (int)g_fiber_temp_pool_stats.ctx_pool_created,
+            (int)g_fiber_temp_pool_stats.lifecycle_clone_callbacks,
+            (int)g_fiber_temp_pool_stats.lifecycle_destroy_callbacks,
+            (int)g_fiber_temp_pool_stats.lifecycle_destroy_deferred,
+            (int)g_fiber_temp_pool_stats.lifecycle_destroy_flush_chunks,
             (int)g_fiber_temp_pool_stats.eligible_slow_allocs,
             (int)g_fiber_temp_pool_stats.bypass_large_allocs,
             (int)g_fiber_temp_pool_stats.bypass_escape_activity_allocs
