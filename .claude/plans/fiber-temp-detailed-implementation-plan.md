@@ -98,6 +98,7 @@ Enablement substrate update:
 - Extended affinity enforcement into stack defer/lifecycle APIs:
   - defer register/pop/update and lifecycle attach/find/clone/destroy/clear now assert owner-thread access,
   - closes API-level misuse gap for stack-owned teardown metadata.
+- Added an opt-in stack-affinity misuse probe (`--stack-affinity-probe`) to exercise fail-fast ownership violations in a controlled, non-default path.
 
 ## 4. Phase Plan
 

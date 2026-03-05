@@ -272,6 +272,24 @@ Validation:
 Next:
 - Add an opt-in misuse harness to exercise fail-fast cross-thread stack API violations outside the default CI suite.
 
+## Fiber TEMP Phase 6f Progress (2026-03-05)
+
+Completed:
+- Added an explicit opt-in misuse probe for stack-affinity fail-fast verification:
+  - new CLI mode: `--stack-affinity-probe`,
+  - intentionally corrupts stack-context owner token and calls guarded destroy path,
+  - expected outcome: deterministic non-zero process termination via ownership violation.
+- This keeps default tests stable while giving a concrete harness for boundary-misuse verification.
+
+Validation:
+- Normal: `Stack engine 21/0`, `Scope region 51/0`, `Unified 1182/0`, `Compiler 73/0`.
+- ASAN strict: `Stack engine 20/0`, `Scope region 51/0`, `Unified 1181/0`, `Compiler 73/0`.
+- Flagged (`OMNI_FIBER_TEMP=1` + summary): pass with stable telemetry.
+- Probe run: `./build/main --stack-affinity-probe` exits non-zero (`132`) with expected fail-fast backtrace.
+
+Next:
+- Decide whether to add an opt-in harness wrapper (`OMNI_STACK_AFFINITY_HARNESS=1`) that auto-runs the probe subprocess and summarizes pass/fail in test mode.
+
 ## Fiber TEMP Phase 5b Progress (2026-03-05)
 
 Completed:

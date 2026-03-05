@@ -1,5 +1,44 @@
 # Changelog
 
+## 2026-03-05: Session 157 - Opt-In Stack Affinity Misuse Probe
+
+### Summary
+Added an explicit, opt-in CLI probe to validate stack-engine thread-affinity fail-fast behavior without affecting default test/CI flows.
+
+### What changed
+- `src/stack_engine.c3`
+  - Added `run_stack_engine_affinity_violation_probe()`.
+  - Probe behavior:
+    - creates a `StackPool` and `StackCtx`,
+    - deliberately corrupts `StackCtx.owner_thread_token`,
+    - invokes `stack_ctx_destroy(...)`, which must trigger fail-fast ownership violation.
+  - Returns a non-zero error code only if the expected fail-fast path does not trigger.
+- `src/entry.c3`
+  - Added `--stack-affinity-probe` command-line mode:
+    - `omni --stack-affinity-probe`
+  - Added help text entry for the new probe mode.
+
+### Why this matters
+- Gives a concrete harness for cross-thread misuse verification while keeping the normal suite deterministic and green.
+- Makes ownership-guard behavior auditable in automation and local debugging.
+- Supports Fiber TEMP/thread-boundary hardening evidence without introducing flaky in-process crash tests.
+
+### Validation
+- Normal:
+  - `c3c build`
+  - `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - Result: pass (`Stack engine 21/0`, `Scope region 51/0`, `Unified 1182/0`, `Compiler 73/0`)
+- ASAN strict:
+  - `c3c clean && c3c build --sanitize=address`
+  - `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - Result: pass (`Stack engine 20/0`, `Scope region 51/0`, `Unified 1181/0`, `Compiler 73/0`)
+- Flagged summary:
+  - `OMNI_FIBER_TEMP=1 OMNI_TEST_SUMMARY=1 ...`
+  - Result: pass (`stack_engine pass=20 fail=0`, stable `fiber_temp_pool` telemetry)
+- Probe execution:
+  - `LD_LIBRARY_PATH=/usr/local/lib ./build/main --stack-affinity-probe`
+  - Observed fail-fast ownership violation backtrace, process exit code `132` (expected non-zero).
+
 ## 2026-03-05: Session 156 - Stack API-Level Affinity Guards
 
 ### Summary

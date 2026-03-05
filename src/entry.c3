@@ -433,6 +433,7 @@ fn int print_help() {
     io::printn("");
     io::printn("Other:");
     io::printn("  omni --gen-e2e                    Generate end-to-end compiler tests");
+    io::printn("  omni --stack-affinity-probe       Deliberately trigger stack ownership fail-fast probe");
     io::printn("  omni --version, -v                Print version");
     io::printn("  omni --help, -h                   Print this help");
     return 0;
@@ -617,6 +618,11 @@ fn int run_test_mode() {
     return 0;
 }
 
+fn int run_stack_affinity_probe_mode() {
+    io::printn("Running stack affinity violation probe...");
+    return run_stack_engine_affinity_violation_probe();
+}
+
 /** Main entry point. */
 fn int main(int argc, char** argv) {
     int idx = find_flag_index(argc, argv, "--help", "-h", "-help");
@@ -646,6 +652,9 @@ fn int main(int argc, char** argv) {
 
     idx = find_flag_index(argc, argv, "--gen-e2e");
     if (idx >= 0) return run_gen_e2e_mode();
+
+    idx = find_flag_index(argc, argv, "--stack-affinity-probe");
+    if (idx >= 0) return run_stack_affinity_probe_mode();
 
     idx = find_flag_index(argc, argv, "--repl", "-repl");
     if (idx >= 0) return run_repl_mode();
