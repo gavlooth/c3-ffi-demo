@@ -72,6 +72,7 @@ jobs:
               return;
             }
             const marker = '<!-- omni-boundary-hardening-summary -->';
+            const expectedBotLogin = 'github-actions[bot]';
             const summary = fs.readFileSync('build/boundary_hardening_job_summary.md', 'utf8');
             const body = [
               marker,
@@ -93,6 +94,7 @@ jobs:
               if (!comments || comments.length === 0) break;
               const found = [...comments].reverse().find((c) =>
                 c?.user?.type === 'Bot' &&
+                c?.user?.login === expectedBotLogin &&
                 typeof c.body === 'string' &&
                 c.body.includes(marker)
               );

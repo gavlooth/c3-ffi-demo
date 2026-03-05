@@ -108,6 +108,7 @@ Enablement substrate update:
 - Added optional workflow-dispatch PR comment bridge for boundary summary publication (`pr_number` input).
 - Updated PR comment bridge to upsert (marker-based update) to avoid repeated comment spam.
 - Hardened upsert lookup with paginated PR comment scan for long threads.
+- Tightened upsert target identity to `github-actions[bot]` for deterministic bot-comment updates.
 
 ## 4. Phase Plan
 

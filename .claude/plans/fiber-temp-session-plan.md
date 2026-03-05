@@ -436,6 +436,19 @@ Validation:
 Next:
 - Optional: tighten target identity from generic `Bot` type to GitHub Actions bot account if needed.
 
+## Fiber TEMP Phase 6p Progress (2026-03-05)
+
+Completed:
+- Tightened PR comment upsert match criteria:
+  - requires `user.type == Bot` and `user.login == github-actions[bot]`
+  - marker + pagination behavior preserved.
+
+Validation:
+- CI/workflow-only change; no runtime impact.
+
+Next:
+- Optional: make expected bot login configurable via workflow input/env if alternate auth token is used.
+
 ## Fiber TEMP Phase 5b Progress (2026-03-05)
 
 Completed:

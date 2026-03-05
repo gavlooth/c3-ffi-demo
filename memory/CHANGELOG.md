@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-03-05: Session 167 - Strict Bot Identity Match for PR Comment Upsert
+
+### Summary
+Tightened boundary workflow PR-comment upsert targeting so only comments authored by the GitHub Actions bot are eligible for marker-based updates.
+
+### What changed
+- `.github/workflows/boundary-hardening.yml`
+  - PR comment lookup now requires:
+    - `user.type == "Bot"`
+    - `user.login == "github-actions[bot]"`
+    - marker presence (`<!-- omni-boundary-hardening-summary -->`)
+  - Existing pagination + marker-based upsert behavior remains unchanged.
+- `docs/PROJECT_TOOLING.md`
+  - Documented strict bot-identity match for upsert targeting.
+
+### Why this matters
+- Prevents accidental updates to other bot-authored comments containing similar text/markers.
+- Keeps PR-comment bridge behavior deterministic and bounded to this workflow.
+
+### Validation
+- Workflow script logic updated (CI-only change).
+- No runtime/test-path changes.
+
 ## 2026-03-05: Session 166 - Paginated PR Comment Upsert Lookup
 
 ### Summary
