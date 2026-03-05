@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026-03-05: Session 185 - TCO Recycle Error-Path Regression + Single-Scope Boundary Leave
+
+### Summary
+Added explicit regression coverage for the TCO recycle error-restore branch and replaced one remaining direct scope restore in single-scope JIT wrapper with boundary helper usage.
+
+### What changed
+- `src/lisp/jit_jit_eval_scopes.c3`
+  - In `jit_eval_in_single_scope(...)`, replaced:
+    - `interp.current_scope = saved_scope`
+    with:
+    - `boundary_leave_scope(interp, saved_scope)`
+  - Behavior unchanged; scope transition now goes through audited facade helper.
+- `src/lisp/tests_tests.c3`
+  - Added `run_memory_lifetime_tco_recycle_error_restore_test(...)`.
+  - Drives `jit_prepare_tco_recycle(...)` through the defer-retarget error branch (`tco_scope_defer_active=true` + missing `g_current_stack_ctx`) and verifies:
+    - error value returned,
+    - env pointer unchanged,
+    - `current_scope`, `tco_recycle_scope`, and `jit_env` restored as expected.
+  - Wired into `run_memory_lifetime_hot_budget_tests(...)`.
+
+### Why this matters
+- Covers a subtle, high-risk rollback path that previously lacked direct regression coverage.
+- Continues migration from ad-hoc scope assignment to boundary helper transitions.
+
+### Validation
+- `c3c build`
+- `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1190 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `c3c clean && c3c build --sanitize=address`
+- `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1189 passed, 0 failed` (JIT checks disabled under ASAN)
+  - `Compiler: 73 passed, 0 failed`
+
 ## 2026-03-05: Session 184 - Context-Switch Invariant Hooks in jit_common
 
 ### Summary

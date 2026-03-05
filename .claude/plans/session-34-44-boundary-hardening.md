@@ -107,6 +107,16 @@ Execution policy:
   - normal full suite: pass (`Unified 1189/0`, `Compiler 73/0`)
   - strict ASAN full suite: pass (`Unified 1188/0`, `Compiler 73/0`)
 
+### Session 185 Follow-up (2026-03-05): TCO Recycle Error-Path Coverage
+
+- Added targeted regression `run_memory_lifetime_tco_recycle_error_restore_test(...)` in `src/lisp/tests_tests.c3`.
+- Directly exercises `jit_prepare_tco_recycle(...)` error rollback branch (missing active stack context while defer retargeting is required) and verifies restore invariants.
+- Replaced one direct single-scope scope restore with facade helper call:
+  - `jit_eval_in_single_scope(...)` now uses `boundary_leave_scope(...)`.
+- Validation:
+  - normal full suite: pass (`Unified 1190/0`, `Compiler 73/0`)
+  - strict ASAN full suite: pass (`Unified 1189/0`, `Compiler 73/0`)
+
 ### Post-44 Continuation Snapshot (Sessions 45-68)
 
 - Boundary API expansion and caller migration completed across eval/jit/env/value/module paths.

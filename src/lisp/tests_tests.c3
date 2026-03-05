@@ -3728,11 +3728,70 @@ fn void run_memory_lifetime_tco_runtime_fields_restore_test(Interp* interp, int*
     }
 }
 
+fn void run_memory_lifetime_tco_recycle_error_restore_test(Interp* interp, int* pass, int* fail) {
+    // Invariant: TCO recycle error path restores state when defer retarget cannot run.
+    {
+        main::ScopeRegion* saved_scope = interp.current_scope;
+        main::ScopeRegion* saved_tco_recycle = interp.tco_recycle_scope;
+        usz saved_tco_slot = interp.tco_scope_defer_slot;
+        bool saved_tco_active = interp.tco_scope_defer_active;
+        Env* saved_jit_env = interp.jit_env;
+
+        main::ScopeRegion* cs = main::scope_create(saved_scope);
+        if (cs == null) {
+            io::printn("[FAIL] lifetime: tco recycle error path state restore");
+            (*fail)++;
+            return;
+        }
+
+        interp.current_scope = cs;
+        interp.tco_recycle_scope = cs;
+        interp.tco_scope_defer_slot = 0;
+        interp.tco_scope_defer_active = true;
+        interp.jit_env = interp.global_env;
+
+        SymbolId sym = interp.symbols.intern("__tco_recycle_err");
+        Env* env = make_env(interp, interp.global_env);
+        env_define_with_barrier(env, sym, make_int(interp, 1), interp);
+        Env* env_io = env;
+
+        bool stack_ctx_missing = (main::g_current_stack_ctx == null);
+        Value* err = jit_prepare_tco_recycle(&env_io, interp.global_env, interp);
+
+        bool err_ok = err != null && err.tag == ERROR;
+        bool env_ok = env_io == env;
+        bool restored_ok = interp.current_scope == cs &&
+                           interp.tco_recycle_scope == cs &&
+                           interp.jit_env == interp.global_env;
+        bool ok = stack_ctx_missing && err_ok && env_ok && restored_ok;
+
+        interp.current_scope = saved_scope;
+        interp.tco_recycle_scope = saved_tco_recycle;
+        interp.tco_scope_defer_slot = saved_tco_slot;
+        interp.tco_scope_defer_active = saved_tco_active;
+        interp.jit_env = saved_jit_env;
+        main::scope_release(cs);
+
+        if (ok) {
+            emit_pass_literal("[PASS] lifetime: tco recycle error path state restore");
+            (*pass)++;
+        } else {
+            io::printfn("[FAIL] lifetime: tco recycle error path state restore (stack_ctx_missing=%s err_ok=%s env_ok=%s restored_ok=%s)",
+                stack_ctx_missing ? "yes" : "no",
+                err_ok ? "yes" : "no",
+                env_ok ? "yes" : "no",
+                restored_ok ? "yes" : "no");
+            (*fail)++;
+        }
+    }
+}
+
 fn void run_memory_lifetime_hot_budget_tests(Interp* interp, int* pass, int* fail) {
     run_memory_lifetime_jit_copy_hot_budget_test(interp, pass, fail);
     run_memory_lifetime_tco_frame_budget_test(interp, pass, fail);
     run_memory_lifetime_tco_boundary_state_restore_test(interp, pass, fail);
     run_memory_lifetime_tco_runtime_fields_restore_test(interp, pass, fail);
+    run_memory_lifetime_tco_recycle_error_restore_test(interp, pass, fail);
 }
 
 fn void run_memory_lifetime_promotion_context_memo_test(Interp* interp, int* pass, int* fail) {

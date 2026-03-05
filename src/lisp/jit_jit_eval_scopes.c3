@@ -314,7 +314,7 @@ fn Value* jit_eval_in_single_scope(Expr* body, Env* call_env, Interp* interp) {
 
     main::ScopeRegion* active_scope = interp.current_scope;
 
-    interp.current_scope = saved_scope;
+    boundary_leave_scope(interp, saved_scope);
     Value* final = jit_finalize_scoped_result(
         result,
         result,
