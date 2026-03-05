@@ -439,6 +439,20 @@ Execution policy:
   - strict ASAN full suite: pass (`Unified 1207/0`, `Compiler 73/0`)
   - strict ASAN full suite with `OMNI_FIBER_TEMP=1`: pass (`Unified 1206/0`, `Compiler 73/0`)
 
+### Session 212 Follow-up (2026-03-05): Inactive Offload-Ready Payload Cleanup
+
+- Added scheduler regression `run_scheduler_inactive_offload_ready_payload_cleanup_boundary_tests(...)` in `src/lisp/tests_tests.c3`:
+  - enqueues `WAKEUP_OFFLOAD_READY` with in-range fiber id targeting an inactive pending-offload slot,
+  - verifies drain convergence, inactive-slot reset stability, and boundary/runtime field stability.
+- Wired into `run_scheduler_tests(...)`.
+- Outcome:
+  - closes coverage gap for in-range inactive payload cleanup path (`scheduler_handle_wakeup_offload_ready`),
+  - strengthens payload lifetime guarantees on scheduler wakeup boundaries.
+- Validation:
+  - normal full suite: pass (`Unified 1206/0`, `Compiler 73/0`)
+  - strict ASAN full suite: pass (`Unified 1208/0`, `Compiler 73/0`)
+  - strict ASAN full suite with `OMNI_FIBER_TEMP=1`: pass (`Unified 1207/0`, `Compiler 73/0`)
+
 ### Post-44 Continuation Snapshot (Sessions 45-68)
 
 - Boundary API expansion and caller migration completed across eval/jit/env/value/module paths.

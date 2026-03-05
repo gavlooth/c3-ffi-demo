@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026-03-05: Session 212 - Inactive Offload-Ready Payload Cleanup Regression
+
+### Summary
+Added scheduler regression coverage for in-range inactive pending-offload wakeup events, locking in payload cleanup semantics in `drain_wakeups()`.
+
+### What changed
+- `src/lisp/tests_tests.c3`
+  - Added:
+    - `run_scheduler_inactive_offload_ready_payload_cleanup_boundary_tests(...)`
+  - New coverage loop:
+    - prepares single-fiber no-async scheduler state with inactive `pending_offloads[0]`,
+    - enqueues `WAKEUP_OFFLOAD_READY` with `fiber_id=0` and completion payload,
+    - drains wakeups and verifies queue convergence (`head == tail`),
+    - verifies pending-offload slot remains inactive/reset and fiber state remains `FIBER_READY`,
+    - verifies interpreter boundary/runtime state snapshot remains unchanged.
+  - Wired into `run_scheduler_tests(...)`.
+
+### Why this matters
+- Existing tests covered invalid-id cleanup and duplicate/late active-slot behavior, but not the in-range inactive-slot cleanup path.
+- This closes a payload-lifetime gap and guards against leaks in a subtle producer/consumer edge path.
+
+### Validation
+- `c3c build`
+- `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1206 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `c3c build --sanitize=address`
+- `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1208 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `OMNI_FIBER_TEMP=1 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1207 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+
 ## 2026-03-05: Session 211 - Wakeup Full-Queue Payload Ownership Regression
 
 ### Summary
