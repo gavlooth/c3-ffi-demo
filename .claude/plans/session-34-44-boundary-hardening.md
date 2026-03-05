@@ -500,6 +500,22 @@ Execution policy:
   - strict ASAN full suite: pass (`Unified 1211/0`, `Compiler 73/0`)
   - strict ASAN full suite with `OMNI_FIBER_TEMP=1`: pass (`Unified 1210/0`, `Compiler 73/0`)
 
+### Session 216 Follow-up (2026-03-05): Offload-Ready Barrier Payload Path
+
+- Added scheduler regression `run_scheduler_wakeup_offload_ready_barrier_boundary_tests(...)` in `src/lisp/tests_tests.c3`:
+  - stages unready slot-0 `WAKEUP_OFFLOAD_READY` payload + ready slot-1 event,
+  - verifies drain barrier stop (no premature processing),
+  - releases slot-0 readiness, verifies ordered delivery and pending-offload completion,
+  - consumes completion and verifies slot reset + boundary/runtime stability.
+- Wired into `run_scheduler_tests(...)`.
+- Outcome:
+  - extends ready-barrier hardening to payload-bearing wakeup events,
+  - guards against offload completion loss/free-order regressions under ready-gated drains.
+- Validation:
+  - normal full suite: pass (`Unified 1210/0`, `Compiler 73/0`)
+  - strict ASAN full suite: pass (`Unified 1212/0`, `Compiler 73/0`)
+  - strict ASAN full suite with `OMNI_FIBER_TEMP=1`: pass (`Unified 1211/0`, `Compiler 73/0`)
+
 ### Post-44 Continuation Snapshot (Sessions 45-68)
 
 - Boundary API expansion and caller migration completed across eval/jit/env/value/module paths.

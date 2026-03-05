@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-03-05: Session 216 - Offload-Ready Barrier Payload Regression
+
+### Summary
+Added scheduler regression coverage for wakeup ready-barrier semantics on `WAKEUP_OFFLOAD_READY` payload events, including later delivery and consume path cleanup.
+
+### What changed
+- `src/lisp/tests_tests.c3`
+  - Added:
+    - `run_scheduler_wakeup_offload_ready_barrier_boundary_tests(...)`
+  - New coverage sequence:
+    - prepares blocked in-range pending-offload slot,
+    - manually stages two wakeup events with slot-0 `WAKEUP_OFFLOAD_READY` payload marked unready and slot-1 ready,
+    - verifies first drain stops at unready slot (no premature processing),
+    - releases readiness, drains again, verifies completion delivery + fiber state transition,
+    - consumes pending offload (`scheduler_consume_pending_offload`) and verifies slot reset,
+    - verifies interpreter boundary/runtime snapshot stability across all phases.
+  - Wired into `run_scheduler_tests(...)`.
+
+### Why this matters
+- Existing ready-barrier coverage focused on TCP-read events.
+- This locks in payload event ordering/ownership semantics under ready-barrier gating and prevents regressions that could drop or prematurely free offload completions.
+
+### Validation
+- `c3c build`
+- `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1210 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `c3c build --sanitize=address`
+- `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1212 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `OMNI_FIBER_TEMP=1 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1211 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+
 ## 2026-03-05: Session 215 - Thread Timeout-Then-Join Boundary Regression
 
 ### Summary

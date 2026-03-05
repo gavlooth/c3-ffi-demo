@@ -2901,6 +2901,85 @@ fn void run_scheduler_offload_worker_retry_full_wakeup_boundary_tests(Interp* in
     }
 }
 
+fn void run_scheduler_wakeup_offload_ready_barrier_boundary_tests(Interp* interp, int* pass, int* fail) {
+    // Invariant: drain_wakeups must respect wakeup_ready barrier for
+    // WAKEUP_OFFLOAD_READY payload events; once unblocked, completion delivery
+    // and consume path must preserve boundary/runtime state.
+    SchedulerBoundarySnapshot saved = scheduler_capture_runtime_boundary_snapshot(interp);
+
+    void* saved_async = null;
+    scheduler_test_prepare_blocked_pending_offload(&saved_async);
+
+    OffloadCompletion* completion = (OffloadCompletion*)mem::malloc(OffloadCompletion.sizeof);
+    if (completion == null) {
+        scheduler_test_cleanup_single_fiber_no_async(saved_async);
+        io::printn("[FAIL] scheduler wakeup offload-ready barrier boundary restore (alloc)");
+        (*fail)++;
+        return;
+    }
+    *completion = {};
+    completion.kind = OFFLOAD_RES_NIL;
+
+    WakeupEvent ev0 = {};
+    ev0.fiber_id = 0;
+    ev0.type = WAKEUP_OFFLOAD_READY;
+    ev0.status = 0;
+    ev0.payload = completion;
+    WakeupEvent ev1 = {};
+    ev1.fiber_id = MAX_FIBERS + 222;
+    ev1.type = WAKEUP_POLL_ERROR;
+    ev1.status = -13;
+    ev1.payload = null;
+
+    g_scheduler.wakeup_ring[0] = ev0;
+    g_scheduler.wakeup_ring[1] = ev1;
+    g_scheduler.wakeup_ready[0].store(false);
+    g_scheduler.wakeup_ready[1].store(true);
+    g_scheduler.wakeup_tail.store(0);
+    g_scheduler.wakeup_head.store(2);
+
+    drain_wakeups();
+    usz tail_after_block = g_scheduler.wakeup_tail.load();
+    bool blocked_ok = tail_after_block == 0 &&
+                      g_scheduler.pending_offloads[0].active &&
+                      !g_scheduler.pending_offloads[0].completed &&
+                      g_scheduler.pending_offloads[0].completion == null &&
+                      g_scheduler.fibers[0].state == FIBER_BLOCKED;
+    bool state_ok_first = scheduler_runtime_boundary_matches_snapshot(interp, &saved);
+
+    g_scheduler.wakeup_ready[0].store(true);
+    drain_wakeups();
+    usz head_after_release = g_scheduler.wakeup_head.load();
+    usz tail_after_release = g_scheduler.wakeup_tail.load();
+    bool delivered_ok = head_after_release == tail_after_release &&
+                        g_scheduler.pending_offloads[0].active &&
+                        g_scheduler.pending_offloads[0].completed &&
+                        g_scheduler.pending_offloads[0].completion == completion &&
+                        g_scheduler.fibers[0].state == FIBER_READY;
+    bool state_ok_second = scheduler_runtime_boundary_matches_snapshot(interp, &saved);
+
+    Value* consumed = scheduler_consume_pending_offload(0, interp);
+    bool consume_ok = consumed != null &&
+                      consumed.tag == NIL &&
+                      !g_scheduler.pending_offloads[0].active &&
+                      !g_scheduler.pending_offloads[0].completed &&
+                      g_scheduler.pending_offloads[0].completion == null;
+    bool state_ok_third = scheduler_runtime_boundary_matches_snapshot(interp, &saved);
+
+    bool ok = blocked_ok && delivered_ok && consume_ok &&
+              state_ok_first && state_ok_second && state_ok_third;
+
+    scheduler_test_cleanup_single_fiber_no_async(saved_async);
+
+    if (ok) {
+        emit_pass_literal("[PASS] scheduler wakeup offload-ready barrier boundary restore");
+        (*pass)++;
+    } else {
+        io::printn("[FAIL] scheduler wakeup offload-ready barrier boundary restore");
+        (*fail)++;
+    }
+}
+
 fn void run_scheduler_duplicate_offload_ready_boundary_tests(Interp* interp, int* pass, int* fail) {
     // Invariant: duplicate/late WAKEUP_OFFLOAD_READY events for one active pending
     // offload retain the first completion payload, safely discard extras, and
@@ -3822,6 +3901,7 @@ fn void run_scheduler_tests(Interp* interp, int* pass, int* fail) {
     run_scheduler_wakeup_full_payload_ownership_boundary_tests(interp, pass, fail);
     run_scheduler_inactive_offload_ready_payload_cleanup_boundary_tests(interp, pass, fail);
     run_scheduler_offload_worker_retry_full_wakeup_boundary_tests(interp, pass, fail);
+    run_scheduler_wakeup_offload_ready_barrier_boundary_tests(interp, pass, fail);
     run_scheduler_duplicate_offload_ready_boundary_tests(interp, pass, fail);
     run_scheduler_consume_pending_offload_boundary_tests(interp, pass, fail);
     run_scheduler_consume_pending_tcp_read_boundary_tests(interp, pass, fail);
