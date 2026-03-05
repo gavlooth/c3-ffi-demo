@@ -3925,9 +3925,89 @@ fn void run_memory_lifetime_promotion_abort_fallback_test(Interp* interp, int* p
     }
 }
 
+fn void run_memory_lifetime_promotion_abort_nested_releasing_copy_test(Interp* interp, int* pass, int* fail) {
+    // Invariant: nested boundary_copy_from_releasing_scope interleavings under
+    // aborted promotion context restore boundary state and avoid memo aliasing.
+    {
+        main::ScopeRegion* saved_scope = interp.current_scope;
+        main::ScopeRegion* parent = main::scope_create(saved_scope);
+        main::ScopeRegion* child = main::scope_create(parent);
+        main::ScopeRegion* sibling = main::scope_create(parent);
+        if (parent == null || child == null || sibling == null) {
+            if (sibling != null) main::scope_release(sibling);
+            if (child != null) main::scope_release(child);
+            if (parent != null) main::scope_release(parent);
+            io::printn("[FAIL] lifetime: promotion abort nested releasing copy");
+            (*fail)++;
+            return;
+        }
+
+        interp.current_scope = child;
+        Value* src = make_cons(interp, make_int(interp, 21), make_nil(interp));
+
+        interp.current_scope = parent;
+        main::ScopeRegion* saved_releasing = interp.releasing_scope;
+        usz base_site = copy_to_parent_site_calls(COPY_SITE_RUN_JIT_RESULT);
+        PromotionContext ctx = {};
+        promotion_context_begin(interp, &ctx, 0);
+
+        Value* first = boundary_copy_from_releasing_scope(
+            src, interp, child, COPY_SITE_RUN_JIT_RESULT);
+        main::ScopeRegion* enter_saved = boundary_enter_scope(interp, sibling);
+        Value* second = boundary_copy_from_releasing_scope(
+            src, interp, child, COPY_SITE_RUN_JIT_RESULT);
+        boundary_leave_scope(interp, enter_saved);
+
+        usz site_delta = copy_to_parent_site_calls(COPY_SITE_RUN_JIT_RESULT) - base_site;
+        bool state_ok = interp.current_scope == parent &&
+                        interp.releasing_scope == saved_releasing;
+        bool copies_ok = first != null &&
+                         second != null &&
+                         first != second &&
+                         first.tag == CONS &&
+                         second.tag == CONS &&
+                         first.cons_val.car != null &&
+                         second.cons_val.car != null &&
+                         first.cons_val.car.tag == INT &&
+                         second.cons_val.car.tag == INT &&
+                         first.cons_val.car.int_val == 21 &&
+                         second.cons_val.car.int_val == 21 &&
+                         !main::is_in_scope((void*)first, child) &&
+                         !main::is_in_scope((void*)second, child) &&
+                         main::is_in_scope((void*)first, parent) &&
+                         main::is_in_scope((void*)second, sibling);
+        bool budget_ok = ctx.aborted && ctx.epoch != 0 && site_delta >= 2;
+        promotion_context_end(interp, &ctx);
+
+        bool post_ctx_ok = interp.active_promotion_ctx == null;
+
+        interp.releasing_scope = saved_releasing;
+        interp.current_scope = saved_scope;
+        main::scope_release(sibling);
+        main::scope_release(child);
+        main::scope_release(parent);
+
+        bool ok = state_ok && copies_ok && budget_ok && post_ctx_ok;
+        if (ok) {
+            emit_pass_literal("[PASS] lifetime: promotion abort nested releasing copy");
+            (*pass)++;
+        } else {
+            io::printfn("[FAIL] lifetime: promotion abort nested releasing copy (state_ok=%s copies_ok=%s budget_ok=%s post_ctx_ok=%s site_delta=%d aborted=%s)",
+                state_ok ? "yes" : "no",
+                copies_ok ? "yes" : "no",
+                budget_ok ? "yes" : "no",
+                post_ctx_ok ? "yes" : "no",
+                (long)site_delta,
+                ctx.aborted ? "yes" : "no");
+            (*fail)++;
+        }
+    }
+}
+
 fn void run_memory_lifetime_promotion_context_tests(Interp* interp, int* pass, int* fail) {
     run_memory_lifetime_promotion_context_memo_test(interp, pass, fail);
     run_memory_lifetime_promotion_abort_fallback_test(interp, pass, fail);
+    run_memory_lifetime_promotion_abort_nested_releasing_copy_test(interp, pass, fail);
 }
 
 fn void run_memory_lifetime_regression_tests(Interp* interp, int* pass, int* fail) {

@@ -127,6 +127,16 @@ Execution policy:
   - normal full suite: pass (`Unified 1191/0`, `Compiler 73/0`)
   - strict ASAN full suite: pass (`Unified 1190/0`, `Compiler 73/0`)
 
+### Session 187 Follow-up (2026-03-05): Nested Releasing-Copy Interleaving Under Abort
+
+- Added regression `run_memory_lifetime_promotion_abort_nested_releasing_copy_test(...)` in `src/lisp/tests_tests.c3`.
+- Coverage target:
+  - nested `boundary_copy_from_releasing_scope(...)` calls under a budget-aborted promotion context,
+  - verifies boundary state restore, expected target-scope placement, non-aliasing fallback copies, and clean promotion-context teardown.
+- Validation:
+  - normal full suite: pass (`Unified 1192/0`, `Compiler 73/0`)
+  - strict ASAN full suite: pass (`Unified 1191/0`, `Compiler 73/0`)
+
 ### Post-44 Continuation Snapshot (Sessions 45-68)
 
 - Boundary API expansion and caller migration completed across eval/jit/env/value/module paths.

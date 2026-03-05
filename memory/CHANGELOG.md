@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-03-05: Session 187 - Nested Releasing-Copy Interleaving Regression Under Promotion Abort
+
+### Summary
+Added targeted regression coverage for nested `boundary_copy_from_releasing_scope(...)` interleavings while promotion context is budget-aborted, verifying boundary-state restoration and non-memoized copy behavior.
+
+### What changed
+- `src/lisp/tests_tests.c3`
+  - Added `run_memory_lifetime_promotion_abort_nested_releasing_copy_test(...)`.
+  - Scenario:
+    - starts a `PromotionContext` with budget `0` (forced abort),
+    - performs two `boundary_copy_from_releasing_scope(...)` calls across nested scope interleaving (`boundary_enter_scope`/`boundary_leave_scope`),
+    - validates:
+      - boundary state restored after each interleaving,
+      - copies are distinct (no memo aliasing under aborted context),
+      - copies land in expected target scopes (parent vs sibling),
+      - source-scope aliasing is not retained,
+      - promotion context teardown leaves no active context.
+  - Wired into `run_memory_lifetime_promotion_context_tests(...)`.
+
+### Why this matters
+- Closes a subtle interleaving gap around aborted promotion epochs and releasing-scope copy boundaries.
+- Strengthens guarantees that budget-abort fallback behavior remains deterministic and state-safe across nested scope transitions.
+
+### Validation
+- `c3c build`
+- `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1192 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `c3c clean && c3c build --sanitize=address`
+- `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1191 passed, 0 failed` (JIT checks disabled under ASAN)
+  - `Compiler: 73 passed, 0 failed`
+
 ## 2026-03-05: Session 186 - run_program Error-Path Boundary-State Regression
 
 ### Summary
