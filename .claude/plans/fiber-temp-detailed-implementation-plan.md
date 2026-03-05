@@ -95,6 +95,9 @@ Enablement substrate update:
   - `StackPool` and `StackCtx` now carry owner-thread tokens,
   - create/destroy/init/switch/suspend/resume/clone/shutdown paths enforce ownership,
   - targeted ownership-state test added to stack-engine suite.
+- Extended affinity enforcement into stack defer/lifecycle APIs:
+  - defer register/pop/update and lifecycle attach/find/clone/destroy/clear now assert owner-thread access,
+  - closes API-level misuse gap for stack-owned teardown metadata.
 
 ## 4. Phase Plan
 

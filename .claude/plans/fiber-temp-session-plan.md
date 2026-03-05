@@ -258,6 +258,20 @@ Validation:
 Next:
 - Expand thread-boundary stress to explicitly cover reject/fail-fast behavior for cross-thread stack-engine misuse in a non-production test harness.
 
+## Fiber TEMP Phase 6e Progress (2026-03-05)
+
+Completed:
+- Extended thread-affinity guards to all stack defer/lifecycle API entry points (not only top-level context lifecycle calls).
+- Added owner checks for defer register/pop/update and lifecycle attach/find/clone/destroy/clear paths, closing an internal safety gap for stack-owned teardown metadata.
+
+Validation:
+- Normal: `Stack engine 21/0`, `Scope region 51/0`, `Unified 1182/0`, `Compiler 73/0`.
+- ASAN strict: `Stack engine 20/0`, `Scope region 51/0`, `Unified 1181/0`, `Compiler 73/0`.
+- Flagged (`OMNI_FIBER_TEMP=1` + summary): pass with stable Fiber TEMP telemetry.
+
+Next:
+- Add an opt-in misuse harness to exercise fail-fast cross-thread stack API violations outside the default CI suite.
+
 ## Fiber TEMP Phase 5b Progress (2026-03-05)
 
 Completed:

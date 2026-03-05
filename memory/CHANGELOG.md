@@ -1,5 +1,43 @@
 # Changelog
 
+## 2026-03-05: Session 156 - Stack API-Level Affinity Guards
+
+### Summary
+Extended stack engine thread-affinity enforcement from top-level lifecycle functions into all defer/lifecycle API surfaces, so misuse is blocked at the first boundary call rather than only at create/resume/destroy sites.
+
+### What changed
+- `src/stack_engine.c3`
+  - Added owner-thread checks to defer/lifecycle APIs:
+    - `stack_ctx_defer(...)`
+    - `stack_ctx_undefer(...)`
+    - `stack_ctx_defer_update_arg(...)`
+    - `stack_ctx_lifecycle_attach(...)`
+    - `stack_ctx_find_lifecycle_arg(...)`
+    - `stack_ctx_run_lifecycle_destroy(...)`
+    - `stack_ctx_clear_lifecycle_storage(...)`
+    - `stack_ctx_clone_lifecycle_entries(...)`
+    - `stack_ctx_run_deferred_destroy(...)`
+    - `stack_ctx_clear_defer_storage(...)`
+  - No behavior change for valid single-thread owner paths; guards only tighten invalid cross-thread usage.
+
+### Why this matters
+- Completes the thread-affinity safety boundary for stack-owned lifetime state.
+- Protects defer/lifecycle metadata integrity (critical for Fiber TEMP context caches and teardown correctness).
+- Reduces chance of latent corruption from accidental internal misuse.
+
+### Validation
+- Normal:
+  - `c3c build`
+  - `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - Result: pass (`Stack engine 21/0`, `Scope region 51/0`, `Unified 1182/0`, `Compiler 73/0`)
+- ASAN strict:
+  - `c3c clean && c3c build --sanitize=address`
+  - `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - Result: pass (`Stack engine 20/0`, `Scope region 51/0`, `Unified 1181/0`, `Compiler 73/0`)
+- Flagged summary:
+  - `OMNI_FIBER_TEMP=1 OMNI_TEST_SUMMARY=1 ...`
+  - Result: pass (`stack_engine pass=20 fail=0`, `fiber_temp_pool` telemetry unchanged/stable).
+
 ## 2026-03-05: Session 155 - Stack Engine Thread-Affinity Hardening
 
 ### Summary
