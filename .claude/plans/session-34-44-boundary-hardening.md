@@ -211,6 +211,18 @@ Execution policy:
   - normal full suite with `OMNI_FIBER_TEMP=1`: pass (`Unified 1196/0`, `Compiler 73/0`)
   - strict ASAN repeated full-run probe (3 runs): all pass (`Unified 1195/0`, `Compiler 73/0` each).
 
+### Session 194 Follow-up (2026-03-05): Wakeup Wraparound Boundary-State Regression
+
+- Added scheduler regression `run_scheduler_wakeup_wraparound_boundary_tests(...)` in `src/lisp/tests_tests.c3`:
+  - repeatedly fills wakeup ring to capacity and verifies overflow enqueue rejection,
+  - drains queue and verifies head/tail convergence each cycle,
+  - asserts interpreter boundary/runtime field restoration after each fill+drain cycle.
+- Wired into `run_scheduler_tests(...)`.
+- Validation:
+  - normal full suite: pass (`Unified 1197/0`, `Compiler 73/0`)
+  - strict ASAN full suite: pass (`Unified 1196/0`, `Compiler 73/0`)
+  - strict ASAN full suite with `OMNI_FIBER_TEMP=1`: pass (`Unified 1196/0`, `Compiler 73/0`)
+
 ### Post-44 Continuation Snapshot (Sessions 45-68)
 
 - Boundary API expansion and caller migration completed across eval/jit/env/value/module paths.

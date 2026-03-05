@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026-03-05: Session 194 - Scheduler Wakeup Wraparound Boundary-State Regression
+
+### Summary
+Added a dedicated scheduler regression that stresses wakeup-ring saturation and drain behavior while asserting interpreter boundary/runtime state restoration across repeated cycles.
+
+### What changed
+- `src/lisp/tests_tests.c3`
+  - Added:
+    - `run_scheduler_wakeup_wraparound_boundary_tests(...)`
+  - New coverage loop repeatedly:
+    - disables async-handle wakeups for deterministic ring-only exercise,
+    - fills wakeup ring to `WAKEUP_RING_SIZE`,
+    - asserts overflow enqueue is rejected,
+    - drains queue and verifies `head == tail`,
+    - validates boundary/runtime fields are unchanged after each cycle.
+  - Wired into `run_scheduler_tests(...)`.
+
+### Why this matters
+- Functional wraparound behavior was already covered, but boundary-state invariants were not.
+- This locks in that wakeup queue saturation/drain paths do not leak state into interpreter lifetime/ownership fields.
+
+### Validation
+- `c3c build`
+- `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1197 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `c3c clean && c3c build --sanitize=address`
+- `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1196 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `OMNI_FIBER_TEMP=1 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1196 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+
 ## 2026-03-05: Session 193 - Scheduler Wakeup/Offload Expected-Error Boundary Regression
 
 ### Summary
