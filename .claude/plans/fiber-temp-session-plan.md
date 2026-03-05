@@ -326,6 +326,26 @@ Validation:
 Next:
 - Wire this script (or equivalent env profile) into external CI where available.
 
+## Fiber TEMP Phase 6i Progress (2026-03-05)
+
+Completed:
+- Added machine-checkable summary assertions to `scripts/run_boundary_hardening.sh`.
+- The runner now captures normal/ASAN logs and enforces:
+  - `stack_engine/scope_region/unified/compiler fail=0`
+  - `stack_affinity_harness fail=0` when harness is enabled
+  - `fiber_temp_pool enabled=1` when Fiber TEMP is enabled
+- Added assertion toggle:
+  - `OMNI_BOUNDARY_ASSERT_SUMMARY=0` to disable assertion checks.
+
+Validation:
+- `scripts/run_boundary_hardening.sh` passed with Stage 5 assertions.
+- Produced log artifacts:
+  - `build/boundary_hardening_normal.log`
+  - `build/boundary_hardening_asan.log`
+
+Next:
+- Reuse these logs in external CI to publish concise summary artifacts.
+
 ## Fiber TEMP Phase 5b Progress (2026-03-05)
 
 Completed:

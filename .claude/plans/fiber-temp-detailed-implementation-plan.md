@@ -101,6 +101,7 @@ Enablement substrate update:
 - Added an opt-in stack-affinity misuse probe (`--stack-affinity-probe`) to exercise fail-fast ownership violations in a controlled, non-default path.
 - Added optional harness wrapper (`OMNI_STACK_AFFINITY_HARNESS=1`) in default test mode to execute probe as a subprocess and emit machine-readable pass/fail summary.
 - Added reusable boundary-hardening runner script (`scripts/run_boundary_hardening.sh`) to execute normal + ASAN profile with Fiber TEMP and affinity harness defaults.
+- Added summary assertion pass in boundary runner to enforce required suite signals (`fail=0`) and feature flags (`fiber_temp_pool enabled=1` when enabled).
 
 ## 4. Phase Plan
 

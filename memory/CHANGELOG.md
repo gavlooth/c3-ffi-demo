@@ -1,5 +1,41 @@
 # Changelog
 
+## 2026-03-05: Session 160 - Boundary Runner Summary Assertions
+
+### Summary
+Upgraded the boundary-hardening runner with machine-checkable summary assertions so it fails fast when required suite summaries are missing or report failures.
+
+### What changed
+- `scripts/run_boundary_hardening.sh`
+  - Added staged log capture:
+    - `build/boundary_hardening_normal.log`
+    - `build/boundary_hardening_asan.log`
+  - Added summary parsing/assertion helpers:
+    - verifies required suites have `fail=0`:
+      - `stack_engine`, `scope_region`, `unified`, `compiler`
+      - `stack_affinity_harness` when affinity harness is enabled
+    - verifies `fiber_temp_pool enabled=1` when Fiber TEMP is enabled
+  - Added profile guard:
+    - `OMNI_BOUNDARY_ASSERT_SUMMARY=1` requires `OMNI_BOUNDARY_SUMMARY=1`
+  - Added Stage 5 assertion phase and explicit diagnostics on missing/bad summary lines.
+- `docs/PROJECT_TOOLING.md`
+  - Documented summary assertions and new toggle:
+    - `OMNI_BOUNDARY_ASSERT_SUMMARY=0` to skip assertions
+  - Documented boundary profile log artifacts.
+
+### Why this matters
+- Turns boundary hardening into a deterministic contract, not just a long log scan.
+- Improves CI/readability by surfacing concise failure reasons for missing or bad summary lines.
+- Ensures affinity harness and Fiber TEMP signals are actively validated when enabled.
+
+### Validation
+- Ran `scripts/run_boundary_hardening.sh` end-to-end.
+- Result:
+  - normal stage pass (`stack_engine 21/0`, `scope_region 51/0`, `unified 1182/0`, `compiler 73/0`)
+  - ASAN stage pass (`stack_engine 20/0`, `scope_region 51/0`, `unified 1181/0`, `compiler 73/0`)
+  - Stage 5 summary assertions passed.
+  - Harness summary pass in both stages (`stack_affinity_harness pass=1 fail=0`).
+
 ## 2026-03-05: Session 159 - Boundary-Hardening Runner Script
 
 ### Summary

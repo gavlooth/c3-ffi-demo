@@ -62,6 +62,7 @@ Runs a full hardening matrix:
 - `OMNI_FIBER_TEMP=1` enabled,
 - `OMNI_STACK_AFFINITY_HARNESS=1` enabled (subprocess misuse probe),
 - summary output via `OMNI_TEST_SUMMARY=1`.
+- summary assertions (required suites must report `fail=0`).
 
 Toggles:
 
@@ -69,6 +70,12 @@ Toggles:
 - `OMNI_BOUNDARY_ENABLE_AFFINITY_HARNESS=0` to disable misuse probe.
 - `OMNI_BOUNDARY_QUIET=0` for verbose suite output.
 - `OMNI_BOUNDARY_SUMMARY=0` to disable summary lines.
+- `OMNI_BOUNDARY_ASSERT_SUMMARY=0` to skip summary verification.
+
+Artifacts:
+
+- `build/boundary_hardening_normal.log`
+- `build/boundary_hardening_asan.log`
 
 ---
 
