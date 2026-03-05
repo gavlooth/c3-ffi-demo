@@ -888,3 +888,44 @@ Future work is optimization/tuning only (for example longer soak/benchmark runs)
 not correctness migration.
 
 **Operational Confidence:** **0.95**.
+
+---
+
+## 22. Revision XV (Fiber-Temp Completion Marker and Architecture Freeze)
+
+### Scope
+This section records the closure state as of 2026-03-05 for the fiber-temp and
+boundary-hardening execution track.
+
+### Closure Status
+
+The project phase is complete for the intended architecture target:
+* Region/boundary ownership remains authoritative (`TEMP`/`ESCAPE` +
+  retain/release boundary policy).
+* Fiber TEMP is implemented as an optional backing strategy for eligible TEMP
+  allocations, guarded by `OMNI_FIBER_TEMP`.
+* Stack teardown semantics are generic/defer-based and clone-safe.
+* Scheduler/offload boundary regressions for wakeup ordering, payload ownership,
+  cancellation, timeout, and interleaving are covered and green.
+
+### Explicit Non-Goal (By Design)
+
+Fiber TEMP is not a new ownership authority and is not intended to replace the
+region model. Eligibility and bypass gates are expected behavior:
+* `eligible_slow_allocs`
+* `bypass_large_allocs`
+* `bypass_escape_activity_allocs`
+
+These counters indicate safe routing decisions, not incomplete migration.
+
+### Validation Snapshot (2026-03-05)
+
+* Normal full suite: `Unified 1212 passed, 0 failed`; `Compiler 73 passed, 0 failed`
+* ASAN full suite: `Unified 1211 passed, 0 failed`; `Compiler 73 passed, 0 failed`
+* ASAN + `OMNI_FIBER_TEMP=1` repeated soak: clean across repeated runs
+
+### Operational Posture
+
+No correctness blockers remain for this phase. Remaining work is optional:
+test decomposition, CI ergonomics, and incremental perf tuning under existing
+ownership guardrails.

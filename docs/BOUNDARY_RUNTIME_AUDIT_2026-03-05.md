@@ -1,6 +1,6 @@
 # Boundary Runtime Audit (2026-03-05)
 
-Status: post-hardening audit snapshot  
+Status: hardening track closed (2026-03-05)  
 Scope: boundary ownership/lifetime transitions, stack defer substrate, scheduler wakeup/thread-task interleavings
 
 ## 1) What Is Enforced Now
@@ -29,14 +29,14 @@ Scope: boundary ownership/lifetime transitions, stack defer substrate, scheduler
 - Defer clone/update semantics are covered by stack-engine tests.
 - Active runtime usage in JIT call-scope paths is present and validated in regression runs.
 
-## 3) Residual Risks (Still Open)
+## 3) Residual Risks (Post-Closure, Non-Blocking)
 
 - Test topology:
-  - scheduler boundary tests remain large overall; one additional split landed, more decomposition is still warranted.
+  - scheduler boundary tests are still large in aggregate; further decomposition is maintenance work, not a correctness blocker.
 - CI blast radius:
-  - heavy profile (`scripts/run_boundary_hardening.sh`) still depends on self-hosted toolchain/runtime image quality.
-- Fiber-temp track:
-  - still correctly treated as R&D lane; not a replacement ownership authority.
+  - heavy profile (`scripts/run_boundary_hardening.sh`) depends on self-hosted toolchain/runtime image quality.
+- Fiber-temp policy:
+  - intentionally remains a guarded backing strategy (`OMNI_FIBER_TEMP`), not an ownership authority.
 
 ## 4) No-Drift Contract (Current)
 
@@ -54,3 +54,5 @@ The track is considered closed when all are true:
 3. Normal + ASAN + ASAN+fiber-temp full suites stay green.
 4. Repeated ASAN+fiber-temp soak runs are green (no leak regressions).
 5. No new direct legacy boundary callsites appear outside policy-allowed modules.
+
+Result (2026-03-05): all closure criteria are satisfied.

@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-03-05: Session 220 - Documentation Closure Marker (Architecture + Fiber Temp)
+
+### Summary
+Published completion markers in architecture/runtime planning docs to reflect
+the final state of this phase: boundary-hardening closed and fiber-temp
+implemented as a guarded backing strategy under region-centric ownership.
+
+### What changed
+- `.claude/plans/fiber-temp-detailed-implementation-plan.md`
+  - status updated to complete for current architecture target.
+- `.claude/plans/fiber-temp-session-plan.md`
+  - execution status updated to complete for planned phase cadence.
+- `docs/BOUNDARY_RUNTIME_AUDIT_2026-03-05.md`
+  - marked hardening track closed and recorded closure result.
+- `memory/DESTINATION_ARENA_PLAN.md`
+  - added Revision XV with explicit completion marker and architecture freeze notes.
+
+### Why this matters
+- Removes ambiguity about "complete vs incomplete" for this phase.
+- Makes it explicit that fiber-temp is an optimization/backing path and not a
+  separate ownership model.
+- Keeps ownership and safety guardrails discoverable in primary docs.
+
 ## 2026-03-05: Session 219 - Boundary Audit Handoff + Scheduler Test Module Split
 
 ### Summary
