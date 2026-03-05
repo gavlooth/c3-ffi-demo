@@ -504,6 +504,28 @@ Execution policy:
   - normal full suite green,
   - strict ASAN suite green.
 
+### Session 174 Follow-up (2026-03-05): Env-Copy Internal Decision/Mutation Decomposition
+
+- Decomposed `eval_env_copy.c3` internals into policy vs mutation helpers.
+- New decision helpers:
+  - `copy_env_should_reuse_value(...)`
+  - `copy_env_copy_by_boundary_policy(...)`
+  - `copy_env_should_clone_closure(...)`
+  - `copy_env_is_terminal_frame(...)`
+- New mutation/materialization helpers:
+  - `copy_env_clone_closure_payload(...)`
+  - `copy_env_rewrite_persistent_parent(...)`
+  - `copy_env_materialize_frame(...)`
+- Routed core env-copy paths through helper split:
+  - `copy_env_value_fast(...)`
+  - `copy_env_clone_closure_if_needed(...)`
+  - `copy_env_to_scope_inner(...)`
+- Scope:
+  - behavior-preserving decomposition only, no API/semantics changes.
+- Validation:
+  - normal full suite green,
+  - strict ASAN suite green.
+
 ## Global Gates (run after every commit)
 
 ```bash

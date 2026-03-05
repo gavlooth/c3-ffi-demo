@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026-03-05: Session 174 - Env-Copy Decision/Mutation Split
+
+### Summary
+Decomposed `eval_env_copy` internals into explicit decision and mutation helpers, keeping behavior unchanged while reducing boundary/lifetime bug surface.
+
+### What changed
+- `src/lisp/eval_env_copy.c3`
+  - Added decision/policy helpers:
+    - `copy_env_should_reuse_value(...)`
+    - `copy_env_copy_by_boundary_policy(...)`
+    - `copy_env_should_clone_closure(...)`
+    - `copy_env_is_terminal_frame(...)`
+  - Added mutation/materialization helpers:
+    - `copy_env_clone_closure_payload(...)`
+    - `copy_env_rewrite_persistent_parent(...)`
+    - `copy_env_materialize_frame(...)`
+  - Routed existing paths to the new helpers:
+    - `copy_env_value_fast(...)`
+    - `copy_env_clone_closure_if_needed(...)`
+    - `copy_env_to_scope_inner(...)`
+
+### Why this matters
+- Separates policy decisions from mutating operations in one of the highest-risk boundary paths.
+- Makes env-copy behavior easier to audit and less prone to accidental branching drift.
+- Advances the boundary-hardening plan without introducing new runtime semantics.
+
+### Validation
+- `c3c build`
+- `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+- `c3c clean && c3c build --sanitize=address`
+- `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+
 ## 2026-03-05: Session 173 - Shared Boundary Decision Helpers
 
 ### Summary

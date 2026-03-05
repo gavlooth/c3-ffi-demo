@@ -3,6 +3,15 @@ module lisp;
 import std::io;
 import main;
 
+fn bool copy_env_should_reuse_value(Value* v, Interp* interp) @inline {
+    return boundary_can_reuse_value(v, interp);
+}
+
+fn Value* copy_env_copy_by_boundary_policy(Value* v, Interp* interp, PromotionContext* ctx) @inline {
+    if (copy_env_should_reuse_value(v, interp)) return v;
+    return boundary_copy_to_parent_site_ctx(v, interp, COPY_SITE_COPY_ENV_TO_SCOPE, ctx);
+}
+
 fn Value* copy_env_value_fast(Value* v, Interp* interp, PromotionContext* ctx = null) {
     if (v == null) return null;
     switch (v.tag) {
@@ -27,46 +36,48 @@ fn Value* copy_env_value_fast(Value* v, Interp* interp, PromotionContext* ctx = 
             // Root-lifetime or external-lifetime objects can be shared.
             return v;
         case INSTANCE:
-            if (boundary_can_reuse_value(v, interp)) return v;
-            return boundary_copy_to_parent_site_ctx(v, interp, COPY_SITE_COPY_ENV_TO_SCOPE, ctx);
         case FFI_HANDLE:
-            if (boundary_can_reuse_value(v, interp)) return v;
-            return boundary_copy_to_parent_site_ctx(v, interp, COPY_SITE_COPY_ENV_TO_SCOPE, ctx);
+            return copy_env_copy_by_boundary_policy(v, interp, ctx);
         default:
-            if (boundary_can_reuse_value(v, interp)) return v;
-            return boundary_copy_to_parent_site_ctx(v, interp, COPY_SITE_COPY_ENV_TO_SCOPE, ctx);
+            return copy_env_copy_by_boundary_policy(v, interp, ctx);
     }
 }
 
-fn Value* copy_env_clone_closure_if_needed(Value* val, Interp* interp) {
-    if (val == null || val.tag != CLOSURE || val.closure_val.env_scope == null) return val;
-    if (in_target_scope_chain((void*)val, interp) ||
-        val.closure_val.scope_gen == interp.current_scope.generation) {
-        return val;
-    }
+fn bool copy_env_should_clone_closure(Value* val, Interp* interp) @inline {
+    if (val == null || val.tag != CLOSURE || val.closure_val.env_scope == null) return false;
+    if (copy_env_should_reuse_value(val, interp)) return false;
+    return val.closure_val.scope_gen != interp.current_scope.generation;
+}
 
-    Value* result = interp.alloc_value();
+fn void copy_env_clone_closure_payload(Value* result, Value* src, Interp* interp) {
     result.tag = CLOSURE;
     result.closure_val = (Closure*)interp.current_scope.alloc(Closure.sizeof);
-    *result.closure_val = *val.closure_val;
+    *result.closure_val = *src.closure_val;
     result.closure_val.scope_gen = interp.current_scope.generation;
 
-    if (val.closure_val.param_count > 0) {
-        result.closure_val.params = (SymbolId*)interp.current_scope.alloc(SymbolId.sizeof * val.closure_val.param_count);
-        for (usz p = 0; p < val.closure_val.param_count; p++) {
-            result.closure_val.params[p] = val.closure_val.params[p];
+    if (src.closure_val.param_count > 0) {
+        result.closure_val.params = (SymbolId*)interp.current_scope.alloc(SymbolId.sizeof * src.closure_val.param_count);
+        for (usz p = 0; p < src.closure_val.param_count; p++) {
+            result.closure_val.params[p] = src.closure_val.params[p];
         }
     } else {
         result.closure_val.params = null;
     }
 
-    if (val.closure_val.type_sig != null) {
+    if (src.closure_val.type_sig != null) {
         result.closure_val.type_sig = (MethodSignature*)interp.current_scope.alloc(MethodSignature.sizeof);
-        *result.closure_val.type_sig = *val.closure_val.type_sig;
+        *result.closure_val.type_sig = *src.closure_val.type_sig;
     }
+
     if (result.closure_val.env_scope != null) {
         result.closure_val.env_scope.refcount++;
     }
+}
+
+fn Value* copy_env_clone_closure_if_needed(Value* val, Interp* interp) {
+    if (!copy_env_should_clone_closure(val, interp)) return val;
+    Value* result = interp.alloc_value();
+    copy_env_clone_closure_payload(result, val, interp);
     main::scope_register_dtor(interp.current_scope, (void*)result, &scope_dtor_closure);
     return result;
 }
@@ -125,28 +136,40 @@ fn void copy_env_copy_bindings(
     }
 }
 
-fn Env* copy_env_to_scope_inner(Env* env, Interp* interp, usz depth, PromotionContext* active_ctx) {
-    if (env == null || env == interp.global_env) return env;
-    if (depth >= 256) return null;
+fn bool copy_env_is_terminal_frame(Env* env, Interp* interp, usz depth) @inline {
+    if (env == null || env == interp.global_env) return true;
+    return depth >= 256;
+}
 
-    // Persistent env nodes (mutable boxes allocated in root_region) are kept
-    // as-is to preserve sharing between JIT stack slots and closure captures.
-    // Their parent chain still needs fixing up since it may point to child-scope envs.
-    if (env.persistent) {
-        env.parent = copy_env_to_scope_inner(env.parent, interp, depth + 1, active_ctx);
-        return env;
-    }
+fn Env* copy_env_rewrite_persistent_parent(Env* env, Interp* interp, usz depth, PromotionContext* active_ctx) {
+    env.parent = copy_env_to_scope_inner(env.parent, interp, depth + 1, active_ctx);
+    return env;
+}
 
+fn Env* copy_env_materialize_frame(Env* env, Interp* interp, usz depth, PromotionContext* active_ctx) {
     Env* new_env = copy_env_alloc_frame(env, interp);
     copy_env_copy_bindings(env, new_env, interp, active_ctx);
     new_env.parent = copy_env_to_scope_inner(env.parent, interp, depth + 1, active_ctx);
-
-    // Rebuild hash table if source had one.
     if (env.hash_table != null) {
         new_env.build_hash_table();
     }
     main::scope_register_dtor(interp.current_scope, (void*)new_env, &scope_dtor_env);
     return new_env;
+}
+
+fn Env* copy_env_to_scope_inner(Env* env, Interp* interp, usz depth, PromotionContext* active_ctx) {
+    if (copy_env_is_terminal_frame(env, interp, depth)) {
+        if (depth >= 256) return null;
+        return env;
+    }
+
+    // Persistent env nodes (mutable boxes allocated in root_region) are kept
+    // as-is to preserve sharing between JIT stack slots and closure captures.
+    // Their parent chain still needs fixing up since it may point to child-scope envs.
+    if (env.persistent) {
+        return copy_env_rewrite_persistent_parent(env, interp, depth, active_ctx);
+    }
+    return copy_env_materialize_frame(env, interp, depth, active_ctx);
 }
 
 /**
