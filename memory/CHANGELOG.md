@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-03-05: Session 163 - CI Job Summary Rendering for Boundary Profile
+
+### Summary
+Added a concise Markdown summary renderer for boundary hardening results and wired it into the GitHub workflow job summary.
+
+### What changed
+- Added script:
+  - `scripts/emit_boundary_job_summary.sh`
+  - Reads normal/ASAN boundary logs and emits a compact Markdown table with:
+    - per-stage pass/fail status
+    - `fail` fields for key suites
+    - harness failure field
+    - Fiber TEMP enabled field
+- Updated workflow:
+  - `.github/workflows/boundary-hardening.yml`
+  - Added `if: always()` step to append summary output to `$GITHUB_STEP_SUMMARY` using the new script.
+- Updated `docs/PROJECT_TOOLING.md` CI section to note job-summary publication.
+
+### Why this matters
+- Fast triage in CI without opening artifacts first.
+- Keeps detailed logs/artifacts while surfacing the most important boundary signals inline.
+- Maintains plan alignment: operationalizing boundary profile outputs rather than adding new runtime surface.
+
+### Validation
+- Local dry-run of summary renderer:
+  - `scripts/emit_boundary_job_summary.sh build/boundary_hardening_normal.log build/boundary_hardening_asan.log`
+  - Output table showed expected PASS + `fail=0` fields.
+- Full boundary profile re-run:
+  - `scripts/run_boundary_hardening.sh` passed normal + ASAN + assertions + JSON artifact emission.
+
 ## 2026-03-05: Session 162 - External CI Wiring for Boundary Profile
 
 ### Summary

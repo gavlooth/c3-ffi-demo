@@ -89,7 +89,8 @@ Repository workflow:
 The workflow is `workflow_dispatch` only and expects a self-hosted Linux runner with `c3c` and runtime dependencies preinstalled. It:
 
 1. runs `scripts/run_boundary_hardening.sh`,
-2. uploads:
+2. publishes a compact Markdown summary to the GitHub job summary via `scripts/emit_boundary_job_summary.sh`,
+3. uploads:
    - `build/boundary_hardening_normal.log`
    - `build/boundary_hardening_asan.log`
    - `build/boundary_hardening_summary.json`

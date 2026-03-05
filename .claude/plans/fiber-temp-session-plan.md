@@ -380,6 +380,21 @@ Validation:
 Next:
 - Optionally add a PR/comment bot step to surface key summary fields from `boundary_hardening_summary.json`.
 
+## Fiber TEMP Phase 6l Progress (2026-03-05)
+
+Completed:
+- Added CI job-summary renderer:
+  - `scripts/emit_boundary_job_summary.sh`
+  - workflow now publishes compact boundary result table to `$GITHUB_STEP_SUMMARY`.
+- This complements artifact upload with immediate, in-page diagnostics.
+
+Validation:
+- Local summary-renderer dry-run showed expected PASS rows and fail-field values.
+- `scripts/run_boundary_hardening.sh` remains green end-to-end.
+
+Next:
+- Optional: add a lightweight PR comment bridge consuming the same renderer output.
+
 ## Fiber TEMP Phase 5b Progress (2026-03-05)
 
 Completed:

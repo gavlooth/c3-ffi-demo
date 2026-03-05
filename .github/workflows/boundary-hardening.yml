@@ -34,3 +34,10 @@ jobs:
             build/boundary_hardening_normal.log
             build/boundary_hardening_asan.log
             build/boundary_hardening_summary.json
+
+      - name: Publish boundary summary to job summary
+        if: always()
+        run: |
+          scripts/emit_boundary_job_summary.sh \
+            build/boundary_hardening_normal.log \
+            build/boundary_hardening_asan.log >> "$GITHUB_STEP_SUMMARY"
