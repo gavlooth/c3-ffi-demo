@@ -102,6 +102,7 @@ Enablement substrate update:
 - Added optional harness wrapper (`OMNI_STACK_AFFINITY_HARNESS=1`) in default test mode to execute probe as a subprocess and emit machine-readable pass/fail summary.
 - Added reusable boundary-hardening runner script (`scripts/run_boundary_hardening.sh`) to execute normal + ASAN profile with Fiber TEMP and affinity harness defaults.
 - Added summary assertion pass in boundary runner to enforce required suite signals (`fail=0`) and feature flags (`fiber_temp_pool enabled=1` when enabled).
+- Added JSON summary artifact emission (`scripts/parse_boundary_summary.sh`) for normal/ASAN boundary profile logs.
 
 ## 4. Phase Plan
 

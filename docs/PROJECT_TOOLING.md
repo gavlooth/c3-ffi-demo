@@ -71,11 +71,14 @@ Toggles:
 - `OMNI_BOUNDARY_QUIET=0` for verbose suite output.
 - `OMNI_BOUNDARY_SUMMARY=0` to disable summary lines.
 - `OMNI_BOUNDARY_ASSERT_SUMMARY=0` to skip summary verification.
+- `OMNI_BOUNDARY_EMIT_JSON=0` to skip JSON artifact emission.
+- `OMNI_BOUNDARY_SUMMARY_JSON=/path/to/file.json` to customize JSON artifact path.
 
 Artifacts:
 
 - `build/boundary_hardening_normal.log`
 - `build/boundary_hardening_asan.log`
+- `build/boundary_hardening_summary.json`
 
 ---
 

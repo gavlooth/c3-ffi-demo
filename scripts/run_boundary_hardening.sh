@@ -9,6 +9,8 @@ cd "$(dirname "$0")/.."
 : "${OMNI_BOUNDARY_QUIET:=1}"
 : "${OMNI_BOUNDARY_SUMMARY:=1}"
 : "${OMNI_BOUNDARY_ASSERT_SUMMARY:=1}"
+: "${OMNI_BOUNDARY_EMIT_JSON:=1}"
+: "${OMNI_BOUNDARY_SUMMARY_JSON:=build/boundary_hardening_summary.json}"
 
 normal_log="build/boundary_hardening_normal.log"
 asan_log="build/boundary_hardening_asan.log"
@@ -136,7 +138,16 @@ if [[ "$OMNI_BOUNDARY_ASSERT_SUMMARY" == "1" ]]; then
   echo "Summary assertions passed."
 fi
 
+if [[ "$OMNI_BOUNDARY_EMIT_JSON" == "1" && "$OMNI_BOUNDARY_SUMMARY" == "1" ]]; then
+  echo ""
+  echo "=== Boundary Hardening: Stage 6 (summary artifact) ==="
+  scripts/parse_boundary_summary.sh "$normal_log" "$asan_log" "$OMNI_BOUNDARY_SUMMARY_JSON"
+fi
+
 echo ""
 echo "Boundary hardening profile passed."
 echo "  normal log: $normal_log"
 echo "  asan log:   $asan_log"
+if [[ "$OMNI_BOUNDARY_EMIT_JSON" == "1" && "$OMNI_BOUNDARY_SUMMARY" == "1" ]]; then
+  echo "  summary:    $OMNI_BOUNDARY_SUMMARY_JSON"
+fi

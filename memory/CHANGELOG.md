@@ -1,5 +1,43 @@
 # Changelog
 
+## 2026-03-05: Session 161 - Boundary JSON Summary Artifact
+
+### Summary
+Added a machine-readable summary artifact for the boundary-hardening profile and wired it into the runner after assertions pass.
+
+### What changed
+- `scripts/parse_boundary_summary.sh` (new, executable)
+  - Parses `OMNI_TEST_SUMMARY` lines from:
+    - normal log
+    - ASAN log
+  - Emits structured JSON summary containing:
+    - `stack_engine`, `scope_region`, `unified`, `compiler`
+    - `stack_affinity_harness`
+    - `fiber_temp_pool` counters and enabled flag
+  - Default output: `build/boundary_hardening_summary.json`
+- `scripts/run_boundary_hardening.sh`
+  - Added Stage 6 summary artifact generation via parser script.
+  - Added toggles:
+    - `OMNI_BOUNDARY_EMIT_JSON` (default `1`)
+    - `OMNI_BOUNDARY_SUMMARY_JSON` (default `build/boundary_hardening_summary.json`)
+  - Final output now reports summary JSON path.
+- `docs/PROJECT_TOOLING.md`
+  - Documented JSON artifact and new toggles.
+
+### Why this matters
+- Provides a stable artifact for CI upload and trend processing.
+- Avoids manual log scraping for boundary-hardening signals.
+- Complements Stage 5 assertions with reusable machine-readable output.
+
+### Validation
+- Ran `scripts/run_boundary_hardening.sh` end-to-end.
+- Result:
+  - normal stage pass (`stack_engine 21/0`, `scope_region 51/0`, `unified 1182/0`, `compiler 73/0`)
+  - ASAN stage pass (`stack_engine 20/0`, `scope_region 51/0`, `unified 1181/0`, `compiler 73/0`)
+  - Stage 5 assertions passed
+  - Stage 6 emitted: `build/boundary_hardening_summary.json`
+- Verified JSON content includes expected suite and fiber-temp fields for both normal and ASAN sections.
+
 ## 2026-03-05: Session 160 - Boundary Runner Summary Assertions
 
 ### Summary

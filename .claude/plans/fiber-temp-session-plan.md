@@ -346,6 +346,24 @@ Validation:
 Next:
 - Reuse these logs in external CI to publish concise summary artifacts.
 
+## Fiber TEMP Phase 6j Progress (2026-03-05)
+
+Completed:
+- Added machine-readable boundary summary emission:
+  - new parser script `scripts/parse_boundary_summary.sh`,
+  - runner Stage 6 emits `build/boundary_hardening_summary.json`.
+- Added runner controls:
+  - `OMNI_BOUNDARY_EMIT_JSON`
+  - `OMNI_BOUNDARY_SUMMARY_JSON`
+
+Validation:
+- `scripts/run_boundary_hardening.sh` passed:
+  - Stage 5 assertions pass,
+  - Stage 6 JSON artifact generated and verified for both normal/ASAN sections.
+
+Next:
+- Hook `build/boundary_hardening_summary.json` as a CI artifact in external workflow.
+
 ## Fiber TEMP Phase 5b Progress (2026-03-05)
 
 Completed:
