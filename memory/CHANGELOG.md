@@ -1,5 +1,41 @@
 # Changelog
 
+## 2026-03-05: Session 152 - Cancellation/Timeout Boundary Stress (Fiber TEMP)
+
+### Summary
+Added targeted scheduler stress coverage for cancellation/timeout boundaries with Fiber TEMP enabled, including destroy-before-complete offload fiber scenarios.
+
+### What changed
+- `src/lisp/tests_tests.c3`
+  - Added `run_scheduler_fiber_temp_cancel_timeout_boundary_tests(...)`:
+    - repeats timeout-immediate, cancel+join, and timeout-success thread-task patterns,
+    - under `OMNI_FIBER_TEMP=1`, asserts Fiber TEMP context counters (`ctx_take_hits`, `ctx_return_count`) remain unchanged for thread-only operations.
+  - Added `run_scheduler_offload_cancel_boundary_tests(...)`:
+    - repeats `spawn(offload 'sleep-ms ...)` + `fiber-cancel` + `run-fibers`,
+    - validates destroy-before-complete style scheduler path remains stable.
+  - Wired both into `run_scheduler_tests(...)`.
+
+### Why this matters
+- Directly exercises the cancellation/timeouts risk area in the Fiber TEMP roadmap.
+- Confirms thread/offload boundaries do not leak context-local Fiber TEMP behavior where no stack context is active.
+- Adds deterministic stress coverage for one of the trickiest lifecycle boundaries (cancel before completion).
+
+### Validation
+- Normal:
+  - `c3c build`
+  - `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - Result: pass (`Stack engine 19/0`, `Scope region 51/0`, `Unified 1182/0`, `Compiler 73/0`)
+- ASAN strict:
+  - `c3c clean && c3c build --sanitize=address`
+  - `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - Result: pass (`Stack engine 18/0`, `Scope region 51/0`, `Unified 1181/0`, `Compiler 73/0`)
+- Flagged summary:
+  - `OMNI_FIBER_TEMP=1 OMNI_TEST_SUMMARY=1 ...`
+  - Result includes:
+    - `OMNI_TEST_SUMMARY suite=stack_engine pass=19 fail=0`
+    - `OMNI_TEST_SUMMARY suite=scope_region pass=51 fail=0`
+    - `OMNI_TEST_SUMMARY suite=fiber_temp_pool enabled=1 hits=66 misses=4 returns=109 drop_frees=0 pooled=6 peak=6 ctx_hits=33 ctx_returns=70 eligible_slow=2 bypass_large=0 bypass_escape=2`
+
 ## 2026-03-05: Session 151 - Scheduler Wakeup/Offload Interleaving Stress
 
 ### Summary

@@ -189,6 +189,21 @@ Validation:
 Next:
 - Start focused audit of Fiber TEMP behavior at scheduler cancellation/timeouts boundaries (especially destroy-before-complete paths).
 
+## Fiber TEMP Phase 6 Progress (2026-03-05)
+
+Completed:
+- Added targeted scheduler cancellation/timeout stress under Fiber TEMP:
+  - timeout-immediate and cancel+join thread paths (with context-metric invariants),
+  - timeout-success control path.
+- Added repeated offload-fiber cancel stress (`spawn(offload ...)`, `fiber-cancel`, `run-fibers`) to cover destroy-before-complete behavior.
+
+Validation:
+- Normal: `Stack engine 19/0`, `Scope region 51/0`, `Unified 1182/0`, `Compiler 73/0`.
+- ASAN strict: `Stack engine 18/0`, `Scope region 51/0`, `Unified 1181/0`, `Compiler 73/0`.
+
+Next:
+- Begin focused metric/telemetry hardening for Fiber TEMP clone-share lifecycle (explicit counters for lifecycle clone/destroy pool flush behavior).
+
 ## Fiber TEMP Phase 5b Progress (2026-03-05)
 
 Completed:
