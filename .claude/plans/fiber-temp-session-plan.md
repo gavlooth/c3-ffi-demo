@@ -122,6 +122,25 @@ Validation:
 Next:
 - Re-attempt Fiber TEMP per-context ownership using lifecycle callbacks (not defer stack), keeping default behavior unchanged when flag is off.
 
+## Fiber TEMP Phase 3 Progress (2026-03-05)
+
+Completed:
+- Wired per-`StackCtx` Fiber TEMP chunk caches through lifecycle hooks:
+  - context-local take/reclaim path added,
+  - clone-aware shared context state via lifecycle clone callback,
+  - lifecycle destroy callback flushes residual chunks to global pool.
+- Extended metrics and tests:
+  - summary now includes `ctx_hits` and `ctx_returns`,
+  - stack-context exercise test now asserts `ctx_returns` delta under the flag.
+
+Validation:
+- Normal: `Stack engine 18/0`, `Scope region 51/0`, `Unified 1178/0`, `Compiler 73/0`.
+- ASAN strict: `Stack engine 17/0`, `Scope region 51/0`, `Unified 1177/0`, `Compiler 73/0`.
+- Flagged: `ctx_hits=1`, `ctx_returns=6`, no assertion failures.
+
+Next:
+- Stress clone/discard permutations with Fiber TEMP enabled to verify shared-context cache behavior under multi-shot continuation patterns.
+
 ## Session Rules
 
 Global rule for every session:

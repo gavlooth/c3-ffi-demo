@@ -83,6 +83,7 @@ Phase 2 initial gate status:
 
 Enablement substrate update:
 - Added a defer-independent `StackCtx` lifecycle callback channel (attach/find/clone/destroy) so persistent per-context resources can be owned safely without interfering with LIFO `stack_ctx_undefer(...)` behavior.
+- Fiber TEMP now uses lifecycle-backed per-context chunk caches (with clone-share refcount) before global fallback.
 
 ## 4. Phase Plan
 

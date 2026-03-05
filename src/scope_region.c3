@@ -181,14 +181,23 @@ struct FiberTempPoolStats {
     usz return_count;
     usz drop_frees;
     usz peak_pool_count;
+    usz ctx_take_hits;
+    usz ctx_return_count;
     usz eligible_slow_allocs;
     usz bypass_large_allocs;
     usz bypass_escape_activity_allocs;
 }
 
+struct FiberTempCtxPool {
+    ScopeChunk* chunks;
+    usz         count;
+    uint        refcount;
+}
+
 ScopeChunk* g_fiber_temp_chunk_pool = null;
 usz g_fiber_temp_chunk_pool_count = 0;
 const usz FIBER_TEMP_CHUNK_POOL_MAX = 2048;
+const usz FIBER_TEMP_CTX_POOL_MAX = 64;
 const usz FIBER_TEMP_ELIGIBLE_MAX_ALLOC = 4096;
 FiberTempPoolStats g_fiber_temp_pool_stats;
 
@@ -215,8 +224,112 @@ fn void fiber_temp_pool_record_peak() @inline {
     }
 }
 
+fn void scope_chunk_reclaim_temp_global(ScopeChunk* chunk) {
+    if (chunk == null) return;
+    scope_global_lock();
+    if (g_fiber_temp_chunk_pool_count < FIBER_TEMP_CHUNK_POOL_MAX) {
+        chunk.next = g_fiber_temp_chunk_pool;
+        g_fiber_temp_chunk_pool = chunk;
+        g_fiber_temp_chunk_pool_count++;
+        g_fiber_temp_pool_stats.return_count++;
+        fiber_temp_pool_record_peak();
+        scope_global_unlock();
+        return;
+    }
+    g_fiber_temp_pool_stats.drop_frees++;
+    scope_global_unlock();
+    mem::free(chunk);
+}
+
+fn void fiber_temp_ctx_pool_on_clone(void* arg) {
+    FiberTempCtxPool* pool = (FiberTempCtxPool*)arg;
+    if (pool == null) return;
+    pool.refcount++;
+}
+
+fn void fiber_temp_ctx_pool_on_destroy(void* arg) {
+    FiberTempCtxPool* pool = (FiberTempCtxPool*)arg;
+    if (pool == null) return;
+    if (pool.refcount > 1) {
+        pool.refcount--;
+        return;
+    }
+
+    ScopeChunk* chunk = pool.chunks;
+    pool.chunks = null;
+    pool.count = 0;
+    while (chunk != null) {
+        ScopeChunk* next = chunk.next;
+        scope_chunk_reclaim_temp_global(chunk);
+        chunk = next;
+    }
+    mem::free(pool);
+}
+
+fn FiberTempCtxPool* fiber_temp_ctx_pool_find_current() @inline {
+    if (g_current_stack_ctx == null) return null;
+    return (FiberTempCtxPool*)stack_ctx_find_lifecycle_arg(
+        g_current_stack_ctx,
+        &fiber_temp_ctx_pool_on_destroy,
+        &fiber_temp_ctx_pool_on_clone
+    );
+}
+
+fn FiberTempCtxPool* fiber_temp_ctx_pool_get_or_create() {
+    if (g_current_stack_ctx == null) return null;
+    FiberTempCtxPool* existing = fiber_temp_ctx_pool_find_current();
+    if (existing != null) return existing;
+
+    FiberTempCtxPool* pool = (FiberTempCtxPool*)mem::malloc(FiberTempCtxPool.sizeof);
+    if (pool == null) return null;
+    pool.chunks = null;
+    pool.count = 0;
+    pool.refcount = 1;
+
+    StackCtxDeferOps ops;
+    ops.destroy_fn = &fiber_temp_ctx_pool_on_destroy;
+    ops.clone_fn = &fiber_temp_ctx_pool_on_clone;
+    if (!stack_ctx_lifecycle_attach(g_current_stack_ctx, &ops, (void*)pool)) {
+        mem::free(pool);
+        return null;
+    }
+    return pool;
+}
+
+fn ScopeChunk* fiber_temp_chunk_take_from_ctx_pool(FiberTempCtxPool* pool, usz min_bytes) {
+    if (pool == null) return null;
+    ScopeChunk* prev = null;
+    ScopeChunk* cur = pool.chunks;
+    while (cur != null) {
+        if (cur.capacity >= min_bytes) {
+            ScopeChunk* next = cur.next;
+            if (prev != null) {
+                prev.next = next;
+            } else {
+                pool.chunks = next;
+            }
+            pool.count--;
+            cur.next = null;
+            return cur;
+        }
+        prev = cur;
+        cur = cur.next;
+    }
+    return null;
+}
+
 fn ScopeChunk* fiber_temp_chunk_try_take(usz min_bytes) {
     if (!scope_fiber_temp_flag_enabled()) return null;
+
+    FiberTempCtxPool* ctx_pool = fiber_temp_ctx_pool_find_current();
+    if (ctx_pool != null) {
+        ScopeChunk* local = fiber_temp_chunk_take_from_ctx_pool(ctx_pool, min_bytes);
+        if (local != null) {
+            g_fiber_temp_pool_stats.take_hits++;
+            g_fiber_temp_pool_stats.ctx_take_hits++;
+            return local;
+        }
+    }
 
     scope_global_lock();
     ScopeChunk* prev = null;
@@ -250,19 +363,17 @@ fn void scope_chunk_reclaim_temp(ScopeChunk* chunk) {
         return;
     }
 
-    scope_global_lock();
-    if (g_fiber_temp_chunk_pool_count < FIBER_TEMP_CHUNK_POOL_MAX) {
-        chunk.next = g_fiber_temp_chunk_pool;
-        g_fiber_temp_chunk_pool = chunk;
-        g_fiber_temp_chunk_pool_count++;
+    FiberTempCtxPool* ctx_pool = fiber_temp_ctx_pool_get_or_create();
+    if (ctx_pool != null && ctx_pool.count < FIBER_TEMP_CTX_POOL_MAX) {
+        chunk.next = ctx_pool.chunks;
+        ctx_pool.chunks = chunk;
+        ctx_pool.count++;
         g_fiber_temp_pool_stats.return_count++;
-        fiber_temp_pool_record_peak();
-        scope_global_unlock();
+        g_fiber_temp_pool_stats.ctx_return_count++;
         return;
     }
-    g_fiber_temp_pool_stats.drop_frees++;
-    scope_global_unlock();
-    mem::free(chunk);
+
+    scope_chunk_reclaim_temp_global(chunk);
 }
 
 fn void scope_temp_chunk_release(ScopeRegion* scope, ScopeChunk* chunk) @inline {
@@ -1304,7 +1415,7 @@ fn void run_scope_region_tests() {
     if (scope_c_getenv("OMNI_TEST_SUMMARY") != null) {
         io::printfn("OMNI_TEST_SUMMARY suite=scope_region pass=%d fail=%d", (int)passed, (int)failed);
         io::printfn(
-            "OMNI_TEST_SUMMARY suite=fiber_temp_pool enabled=%d hits=%d misses=%d returns=%d drop_frees=%d pooled=%d peak=%d eligible_slow=%d bypass_large=%d bypass_escape=%d",
+            "OMNI_TEST_SUMMARY suite=fiber_temp_pool enabled=%d hits=%d misses=%d returns=%d drop_frees=%d pooled=%d peak=%d ctx_hits=%d ctx_returns=%d eligible_slow=%d bypass_large=%d bypass_escape=%d",
             (int)(scope_fiber_temp_flag_enabled() ? 1 : 0),
             (int)g_fiber_temp_pool_stats.take_hits,
             (int)g_fiber_temp_pool_stats.take_misses,
@@ -1312,6 +1423,8 @@ fn void run_scope_region_tests() {
             (int)g_fiber_temp_pool_stats.drop_frees,
             (int)g_fiber_temp_chunk_pool_count,
             (int)g_fiber_temp_pool_stats.peak_pool_count,
+            (int)g_fiber_temp_pool_stats.ctx_take_hits,
+            (int)g_fiber_temp_pool_stats.ctx_return_count,
             (int)g_fiber_temp_pool_stats.eligible_slow_allocs,
             (int)g_fiber_temp_pool_stats.bypass_large_allocs,
             (int)g_fiber_temp_pool_stats.bypass_escape_activity_allocs
