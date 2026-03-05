@@ -284,6 +284,23 @@ Execution policy:
   - strict ASAN full suite: pass (`Unified 1201/0`, `Compiler 73/0`)
   - strict ASAN full suite with `OMNI_FIBER_TEMP=1`: pass (`Unified 1201/0`, `Compiler 73/0`)
 
+### Session 200 Follow-up (2026-03-05): Pending-TCP-Read Consume Path Boundary Checks
+
+- Added scheduler helpers in `src/lisp/tests_tests.c3`:
+  - `scheduler_seed_completed_tcp_read_case(...)`
+  - `scheduler_tcp_case_value_ok(...)`
+- Added scheduler regression `run_scheduler_consume_pending_tcp_read_boundary_tests(...)`:
+  - exercises direct `scheduler_consume_pending_tcp_read(...)` pre-completion error path,
+  - exercises completed consume variants (timeout/error/empty/non-empty),
+  - verifies returned value semantics and pending-read slot reset,
+  - verifies post-reset consume returns expected error,
+  - verifies boundary/runtime field stability after each phase.
+- Wired into `run_scheduler_tests(...)`.
+- Validation:
+  - normal full suite: pass (`Unified 1203/0`, `Compiler 73/0`)
+  - strict ASAN full suite: pass (`Unified 1202/0`, `Compiler 73/0`)
+  - strict ASAN full suite with `OMNI_FIBER_TEMP=1`: pass (`Unified 1202/0`, `Compiler 73/0`)
+
 ### Post-44 Continuation Snapshot (Sessions 45-68)
 
 - Boundary API expansion and caller migration completed across eval/jit/env/value/module paths.

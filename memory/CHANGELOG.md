@@ -1,5 +1,47 @@
 # Changelog
 
+## 2026-03-05: Session 200 - Pending-TCP-Read Consume Boundary Regression
+
+### Summary
+Added direct consume-path scheduler regression coverage for `scheduler_consume_pending_tcp_read(...)`, asserting boundary/runtime state stability across pre-completion error, completed timeout/error/empty/non-empty cases, and post-consume repeat-error paths.
+
+### What changed
+- `src/lisp/tests_tests.c3`
+  - Added helpers:
+    - `scheduler_seed_completed_tcp_read_case(...)`
+    - `scheduler_tcp_case_value_ok(...)`
+  - Added:
+    - `run_scheduler_consume_pending_tcp_read_boundary_tests(...)`
+  - New coverage (looped stress):
+    - Phase A: consume before completion must return `ERROR`.
+    - Phase B: consume completed case, rotating across:
+      - timed out (`ERROR`),
+      - explicit read error (`ERROR`),
+      - empty read (`STRING` length 0),
+      - non-empty read (`STRING "pong"`).
+    - Verifies pending slot reset (`active/completed false`, `buffer null`) after consume.
+    - Phase C: consume after reset must return `ERROR` again.
+  - Verifies interpreter boundary/runtime fields after each phase.
+  - Includes explicit fallback cleanup if test-local buffer remains.
+  - Wired into `run_scheduler_tests(...)`.
+
+### Why this matters
+- Prior scheduler hardening covered wakeup enqueue/drain and offload consume seams.
+- This closes the symmetric tcp-read consume seam where result translation, buffer ownership release, and slot reset must remain deterministic and boundary-safe.
+
+### Validation
+- `c3c build`
+- `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1203 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `c3c clean && c3c build --sanitize=address`
+- `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1202 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `OMNI_FIBER_TEMP=1 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1202 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+
 ## 2026-03-05: Session 199 - Pending-Offload Consume Boundary Regression
 
 ### Summary
