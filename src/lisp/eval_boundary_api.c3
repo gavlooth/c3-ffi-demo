@@ -25,6 +25,31 @@ fn void boundary_restore_interp_state(Interp* interp, BoundaryInterpState saved)
     interp.releasing_scope = saved.releasing_scope;
 }
 
+<*
+@require interp != null : "boundary_ptr_in_target_scope_chain: null interp"
+*>
+fn bool boundary_ptr_in_target_scope_chain(void* ptr, Interp* interp) @inline {
+    if (ptr == null) return false;
+    return in_target_scope_chain(ptr, interp);
+}
+
+<*
+@require interp != null : "boundary_value_in_releasing_scope: null interp"
+*>
+fn bool boundary_value_in_releasing_scope(Value* v, Interp* interp) @inline {
+    if (v == null || interp.releasing_scope == null) return false;
+    return main::is_in_scope((void*)v, interp.releasing_scope);
+}
+
+<*
+@require interp != null : "boundary_can_reuse_value: null interp"
+*>
+fn bool boundary_can_reuse_value(Value* v, Interp* interp) @inline {
+    if (v == null) return false;
+    if (boundary_value_in_releasing_scope(v, interp)) return false;
+    return boundary_ptr_in_target_scope_chain((void*)v, interp);
+}
+
 // =============================================================================
 // SECTION 2.4: FRAME PUSH/POP (audited boundary facade)
 // =============================================================================

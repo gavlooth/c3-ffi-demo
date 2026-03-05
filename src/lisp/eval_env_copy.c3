@@ -27,13 +27,13 @@ fn Value* copy_env_value_fast(Value* v, Interp* interp, PromotionContext* ctx = 
             // Root-lifetime or external-lifetime objects can be shared.
             return v;
         case INSTANCE:
-            if (in_target_scope_chain((void*)v, interp)) return v;
+            if (boundary_can_reuse_value(v, interp)) return v;
             return boundary_copy_to_parent_site_ctx(v, interp, COPY_SITE_COPY_ENV_TO_SCOPE, ctx);
         case FFI_HANDLE:
-            if (in_target_scope_chain((void*)v, interp)) return v;
+            if (boundary_can_reuse_value(v, interp)) return v;
             return boundary_copy_to_parent_site_ctx(v, interp, COPY_SITE_COPY_ENV_TO_SCOPE, ctx);
         default:
-            if (in_target_scope_chain((void*)v, interp)) return v;
+            if (boundary_can_reuse_value(v, interp)) return v;
             return boundary_copy_to_parent_site_ctx(v, interp, COPY_SITE_COPY_ENV_TO_SCOPE, ctx);
     }
 }

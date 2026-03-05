@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-03-05: Session 173 - Shared Boundary Decision Helpers
+
+### Summary
+Reduced duplicated ownership/scope decision logic by introducing shared boundary helper predicates and routing promotion/copy/env-copy callsites through them.
+
+### What changed
+- `src/lisp/eval_boundary_api.c3`
+  - Added shared decision helpers:
+    - `boundary_ptr_in_target_scope_chain(...)`
+    - `boundary_value_in_releasing_scope(...)`
+    - `boundary_can_reuse_value(...)`
+- `src/lisp/eval_promotion_copy.c3`
+  - Replaced repeated reuse/copy conditions in:
+    - `copy_cons_to_parent(...)`
+    - `needs_wrapper_copy(...)`
+    - `copy_to_parent_try_fast_reuse(...)`
+  - Behavior preserved; fast-reuse/defensive-copy stats semantics unchanged.
+- `src/lisp/eval_env_copy.c3`
+  - Routed reusable-value checks through `boundary_can_reuse_value(...)`.
+- `src/lisp/eval_promotion_context.c3`
+  - Routed wrapper reuse gate through `boundary_can_reuse_value(...)`.
+- `src/lisp/eval_promotion_escape.c3`
+  - Routed target-chain fast-path check through `boundary_ptr_in_target_scope_chain(...)`.
+
+### Why this matters
+- Moves repeated boundary decisions toward a centralized policy surface.
+- Lowers drift risk from divergent ad-hoc conditions in copy/promote/env-copy paths.
+- Advances the main hardening plan item: split decision logic from mutation logic.
+
+### Validation
+- `c3c build`
+- `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+- `c3c clean && c3c build --sanitize=address`
+- `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+
 ## 2026-03-05: Session 172 - Boundary State Save/Restore Centralization
 
 ### Summary

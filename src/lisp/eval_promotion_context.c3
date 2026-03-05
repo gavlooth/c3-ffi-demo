@@ -99,10 +99,9 @@ fn Value* copy_value_if_owned_by_scope(Value* v, Interp* interp, main::ScopeRegi
             return v;
         case INSTANCE:
         case FFI_HANDLE:
-            if (in_target_scope_chain((void*)v, interp)) return v;
+            if (boundary_can_reuse_value(v, interp)) return v;
             return copy_to_parent_site_ctx(v, interp, site, interp.active_promotion_ctx);
         default:
             return copy_to_parent_site_ctx(v, interp, site, interp.active_promotion_ctx);
     }
 }
-

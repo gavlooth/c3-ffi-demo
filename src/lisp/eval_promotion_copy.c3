@@ -26,9 +26,7 @@ fn Value* copy_cons_to_parent(Value* v, Interp* interp) {
         current_new.cons_val.car = copy_to_parent(current_old.cons_val.car, interp);
         Value* old_cdr = current_old.cons_val.cdr;
         if (old_cdr != null && old_cdr.tag == CONS) {
-            if (interp.releasing_scope != null &&
-                !main::is_in_scope((void*)old_cdr, interp.releasing_scope) &&
-                in_target_scope_chain((void*)old_cdr, interp)) {
+            if (boundary_can_reuse_value(old_cdr, interp)) {
                 // Safe fast-path: tail already lives in a surviving scope chain.
                 current_new.cons_val.cdr = old_cdr;
                 break;
@@ -84,9 +82,7 @@ fn Value* copy_closure_to_parent(Value* v, Interp* interp) {
 }
 
 fn bool needs_wrapper_copy(Value* v, Interp* interp) @inline {
-    return interp.releasing_scope != null &&
-        main::is_in_scope((void*)v, interp.releasing_scope) ||
-        !in_target_scope_chain((void*)v, interp);
+    return !boundary_can_reuse_value(v, interp);
 }
 
 fn Value* copy_instance_to_parent(Value* v, Interp* interp) {
@@ -110,10 +106,7 @@ fn Value* copy_ffi_handle_to_parent(Value* v, Interp* interp) {
 }
 
 fn bool copy_to_parent_try_fast_reuse(Value* v, Interp* interp, Value** out) {
-    if (interp.releasing_scope == null) return false;
-    if (main::is_in_scope((void*)v, interp.releasing_scope)) return false;
-
-    if (in_target_scope_chain((void*)v, interp)) {
+    if (boundary_can_reuse_value(v, interp)) {
         g_copy_to_parent_stats.fast_reuse_hits++;
         *out = v;
         return true;
@@ -224,4 +217,3 @@ fn Value* copy_to_parent_site(Value* v, Interp* interp, uint site) {
     if (site < COPY_SITE_COUNT) g_copy_to_parent_stats.site_calls[(usz)site]++;
     return copy_to_parent(v, interp);
 }
-

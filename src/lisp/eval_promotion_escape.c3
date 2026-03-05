@@ -142,7 +142,7 @@ fn bool promote_to_escape_fast_path(Value* v, Interp* interp, Value** out) {
         return true;
     }
     if (v.scope_gen != interp.current_scope.generation) {
-        if (in_target_scope_chain((void*)v, interp)) {
+        if (boundary_ptr_in_target_scope_chain((void*)v, interp)) {
             *out = v;
             return true;
         }

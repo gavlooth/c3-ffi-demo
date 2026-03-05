@@ -487,6 +487,23 @@ Execution policy:
   - normal full suite green,
   - strict ASAN suite green.
 
+### Session 173 Follow-up (2026-03-05): Shared Decision Predicate Routing
+
+- Added shared boundary decision predicates in `eval_boundary_api.c3`:
+  - `boundary_ptr_in_target_scope_chain(...)`
+  - `boundary_value_in_releasing_scope(...)`
+  - `boundary_can_reuse_value(...)`
+- Routed repeated decision branches through shared helpers:
+  - `eval_promotion_copy.c3` (`copy_cons_to_parent`, `needs_wrapper_copy`, `copy_to_parent_try_fast_reuse`)
+  - `eval_env_copy.c3`
+  - `eval_promotion_context.c3`
+  - `eval_promotion_escape.c3` fast-path target-chain check
+- Scope:
+  - behavior-preserving policy consolidation only (no API changes).
+- Validation:
+  - normal full suite green,
+  - strict ASAN suite green.
+
 ## Global Gates (run after every commit)
 
 ```bash
