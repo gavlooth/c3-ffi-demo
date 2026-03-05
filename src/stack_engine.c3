@@ -372,6 +372,7 @@ struct StackCtx {
     StackCtx*          pool_next;   // Free-list link for StackPool
     StackCtxBootstrap  boot;        // Bootstrap info for first switch
     void*          user_data;   // Application-level data (e.g. CoroutineThunkState*)
+    void*          owner_thread_token; // Thread-affinity token for this context
     StackCtxDeferEntry[STACK_CTX_DEFER_INLINE_CAP] defer_inline; // Inline fast-path storage
     StackCtxDeferEntry* defer_heap; // Overflow storage when inline slots are exceeded
     usz            defer_count; // Number of active defer entries
@@ -392,11 +393,38 @@ struct StackPool {
     usz    max_pool;    // Max cached before freeing
     uint   next_id;     // Monotonic ID counter
     usz    stack_size;  // Default stack size for this pool
+    void*  owner_thread_token; // Thread-affinity token for this pool
 }
 
 const usz STACK_POOL_MAX = 64;
 
+tlocal char g_stack_thread_marker;
+
+fn void* stack_current_thread_token() @inline {
+    return (void*)&g_stack_thread_marker;
+}
+
+fn void stack_thread_violation(char[] op) @inline {
+    io::eprintfn("stack-engine thread-affinity violation in %s", op);
+    unreachable("stack-engine used from non-owner thread");
+}
+
+fn void stack_require_pool_owner(StackPool* pool, char[] op) @inline {
+    if (pool == null) return;
+    if (pool.owner_thread_token != stack_current_thread_token()) {
+        stack_thread_violation(op);
+    }
+}
+
+fn void stack_require_ctx_owner(StackCtx* c, char[] op) @inline {
+    if (c == null) return;
+    if (c.owner_thread_token != stack_current_thread_token()) {
+        stack_thread_violation(op);
+    }
+}
+
 fn void stack_pool_init(StackPool* pool) {
+    pool.owner_thread_token = stack_current_thread_token();
     pool.free_list = null;
     pool.pool_size = 0;
     pool.max_pool = STACK_POOL_MAX;
@@ -406,10 +434,12 @@ fn void stack_pool_init(StackPool* pool) {
 }
 
 fn void stack_pool_shutdown(StackPool* pool) {
+    stack_require_pool_owner(pool, "stack_pool_shutdown");
     // Free all cached coros and unregister their guard pages
     StackCtx* c = pool.free_list;
     while (c != null) {
         StackCtx* next = c.pool_next;
+        stack_require_ctx_owner(c, "stack_pool_shutdown_ctx");
         if (c.defer_heap != null) {
             mem::free(c.defer_heap);
             c.defer_heap = null;
@@ -664,6 +694,7 @@ fn void stack_ctx_clear_defer_storage(StackCtx* c) {
  * Create a coroutine. Pops from pool if available, else allocates fresh.
  */
 fn StackCtx* stack_ctx_create(StackPool* pool) {
+    stack_require_pool_owner(pool, "stack_ctx_create");
     StackCtx* c;
 
     if (pool.free_list != null) {
@@ -696,6 +727,7 @@ fn StackCtx* stack_ctx_create(StackPool* pool) {
     c.asan_fake_stack = null;
     c.pool_next = null;
     c.user_data = null;
+    c.owner_thread_token = stack_current_thread_token();
     c.defer_heap = null;
     c.defer_count = 0;
     c.defer_capacity = STACK_CTX_DEFER_INLINE_CAP;
@@ -709,6 +741,8 @@ fn StackCtx* stack_ctx_create(StackPool* pool) {
 }
 
 fn void stack_ctx_destroy(StackCtx* c, StackPool* pool) {
+    stack_require_ctx_owner(c, "stack_ctx_destroy");
+    stack_require_pool_owner(pool, "stack_ctx_destroy");
     stack_ctx_run_deferred_destroy(c);
     stack_ctx_run_lifecycle_destroy(c);
     stack_ctx_clear_defer_storage(c);
@@ -812,6 +846,7 @@ fn void stack_ctx_trampoline() {
  * @param arg   Argument passed to entry
  */
 fn void stack_ctx_init(StackCtx* c, StackCtxEntryFn entry, void* arg) {
+    stack_require_ctx_owner(c, "stack_ctx_init");
     // Start RSP at top of usable stack, 16-byte aligned
     usz sp = (usz)c.stack.stack_top;
     sp &= ~(usz)15;  // Align to 16
@@ -851,6 +886,7 @@ fn void stack_ctx_init(StackCtx* c, StackCtxEntryFn entry, void* arg) {
  * @param parent_ctx Where to save the caller's context
  */
 fn void stack_ctx_switch_to(StackCtx* c, StackContext* parent_ctx) {
+    stack_require_ctx_owner(c, "stack_ctx_switch_to");
     c.parent_ctx = parent_ctx;
 
     // Set bootstrap for first switch (trampoline reads this)
@@ -891,6 +927,7 @@ tlocal StackCtx* g_current_stack_ctx;
 fn void stack_ctx_suspend() {
     StackCtx* c = g_current_stack_ctx;
     assert(c != null, "stack_ctx_suspend: not inside a coroutine");
+    stack_require_ctx_owner(c, "stack_ctx_suspend");
     c.status = CTX_SUSPENDED;
     // D1: Save FPU state before switch to parent
     fpu_save(&c.ctx.mxcsr, &c.ctx.x87cw);
@@ -906,6 +943,7 @@ fn void stack_ctx_suspend() {
  * Resume a suspended coroutine. Updates tracking and switches.
  */
 fn void stack_ctx_resume(StackCtx* c, StackContext* parent_ctx) {
+    stack_require_ctx_owner(c, "stack_ctx_resume");
     assert(c.status == CTX_SUSPENDED, "stack_ctx_resume: context not suspended");
     c.parent_ctx = parent_ctx;
     c.status = CTX_RUNNING;
@@ -950,6 +988,8 @@ fn void stack_ctx_resume(StackCtx* c, StackContext* parent_ctx) {
  * @return New coroutine (caller owns), or null on failure
  */
 fn StackCtx* stack_ctx_clone(StackCtx* source, StackPool* pool) {
+    stack_require_ctx_owner(source, "stack_ctx_clone_source");
+    stack_require_pool_owner(pool, "stack_ctx_clone_pool");
     if (source.status != CTX_SUSPENDED) return null;
     if (source.stack.base == null || source.stack.stack_top == null || source.stack.usable_size == 0) return null;
 
@@ -1400,6 +1440,22 @@ fn bool test_fpu_preservation() {
     ok = ok && (x87cw_before == x87cw_after);
 
     stack_ctx_destroy(c, &pool);
+    stack_pool_shutdown(&pool);
+    return ok;
+}
+
+fn bool test_stack_ctx_thread_affinity_state() {
+    StackPool pool;
+    stack_pool_init(&pool);
+
+    bool ok = pool.owner_thread_token == stack_current_thread_token();
+    StackCtx* c = stack_ctx_create(&pool);
+    ok = ok && c != null;
+    if (c != null) {
+        ok = ok && c.owner_thread_token == stack_current_thread_token();
+        stack_ctx_destroy(c, &pool);
+    }
+
     stack_pool_shutdown(&pool);
     return ok;
 }
@@ -2013,6 +2069,9 @@ fn void run_stack_engine_tests() {
 
     if (test_pool_lifecycle()) { stack_print_pass("pool create/recycle"); pass++; }
     else { io::printfn("  FAIL: pool create/recycle"); fail++; }
+
+    if (test_stack_ctx_thread_affinity_state()) { stack_print_pass("stack thread-affinity ownership"); pass++; }
+    else { io::printfn("  FAIL: stack thread-affinity ownership"); fail++; }
 
     if (test_basic_coro()) { stack_print_pass("basic context run + complete"); pass++; }
     else { io::printfn("  FAIL: basic context run + complete"); fail++; }

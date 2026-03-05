@@ -91,6 +91,10 @@ Enablement substrate update:
 - Added targeted cancellation/timeout + offload-cancel stress coverage for destroy-before-complete scheduler boundaries.
 - Added explicit Fiber TEMP lifecycle telemetry counters and clone/discard delta assertions (context-pool creation, lifecycle clone/destroy/deferred/flush events).
 - Added long-run retention guard test for repeated clone/discard lifecycle cycles with bounded pooled-count invariant.
+- Added stack-engine thread-affinity hardening:
+  - `StackPool` and `StackCtx` now carry owner-thread tokens,
+  - create/destroy/init/switch/suspend/resume/clone/shutdown paths enforce ownership,
+  - targeted ownership-state test added to stack-engine suite.
 
 ## 4. Phase Plan
 

@@ -241,6 +241,23 @@ Validation:
 Next:
 - Begin a small rollout hygiene pass: tighten docs around Fiber TEMP enablement policy (explicitly experimental/flagged) and enumerate remaining production gates.
 
+## Fiber TEMP Phase 6d Progress (2026-03-05)
+
+Completed:
+- Hardened stack engine thread-affinity boundaries so `StackPool`/`StackCtx` ownership is explicit and enforced:
+  - added owner thread tokens on pool and context structs,
+  - added runtime guards for create/destroy/init/switch/suspend/resume/clone and pool shutdown paths.
+- Added targeted stack-engine ownership-state test:
+  - `test_stack_ctx_thread_affinity_state()` verifies pool/context ownership tokens are initialized to the current thread.
+
+Validation:
+- Normal: `Stack engine 21/0`, `Scope region 51/0`, `Unified 1182/0`, `Compiler 73/0`.
+- ASAN strict: `Stack engine 20/0`, `Scope region 51/0`, `Unified 1181/0`, `Compiler 73/0`.
+- Flagged (`OMNI_FIBER_TEMP=1` + summary): pass, with stable lifecycle telemetry counters.
+
+Next:
+- Expand thread-boundary stress to explicitly cover reject/fail-fast behavior for cross-thread stack-engine misuse in a non-production test harness.
+
 ## Fiber TEMP Phase 5b Progress (2026-03-05)
 
 Completed:

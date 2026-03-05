@@ -1,5 +1,52 @@
 # Changelog
 
+## 2026-03-05: Session 155 - Stack Engine Thread-Affinity Hardening
+
+### Summary
+Hardened stack engine ownership boundaries by adding explicit thread-affinity guards to `StackPool` and `StackCtx` operations. This makes cross-thread misuse fail fast instead of silently corrupting stack/lifecycle state.
+
+### What changed
+- `src/stack_engine.c3`
+  - Added owner token fields:
+    - `StackPool.owner_thread_token`
+    - `StackCtx.owner_thread_token`
+  - Added thread-affinity helpers:
+    - `stack_current_thread_token()`
+    - `stack_require_pool_owner(...)`
+    - `stack_require_ctx_owner(...)`
+  - Enforced affinity checks in hot lifecycle operations:
+    - `stack_pool_shutdown(...)`
+    - `stack_ctx_create(...)`
+    - `stack_ctx_destroy(...)`
+    - `stack_ctx_init(...)`
+    - `stack_ctx_switch_to(...)`
+    - `stack_ctx_suspend(...)`
+    - `stack_ctx_resume(...)`
+    - `stack_ctx_clone(...)`
+  - Added targeted test:
+    - `test_stack_ctx_thread_affinity_state()` verifies pool/context ownership tokens are initialized to the current thread.
+  - Wired test into `run_stack_engine_tests(...)`.
+
+### Why this matters
+- Aligns stack engine safety posture with existing `ScopeRegion` owner-thread checks.
+- Protects Fiber TEMP lifecycle callbacks and stack context pooling from accidental cross-thread teardown/use.
+- Reduces risk of non-deterministic memory/lifetime failures by turning ownership violations into immediate failures.
+
+### Validation
+- Normal:
+  - `c3c build`
+  - `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - Result: pass (`Stack engine 21/0`, `Scope region 51/0`, `Unified 1182/0`, `Compiler 73/0`)
+- ASAN strict:
+  - `c3c clean && c3c build --sanitize=address`
+  - `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - Result: pass (`Stack engine 20/0`, `Scope region 51/0`, `Unified 1181/0`, `Compiler 73/0`)
+- Flagged summary:
+  - `OMNI_FIBER_TEMP=1 OMNI_TEST_SUMMARY=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - Result includes:
+    - `OMNI_TEST_SUMMARY suite=stack_engine pass=20 fail=0`
+    - `OMNI_TEST_SUMMARY suite=fiber_temp_pool enabled=1 hits=322 misses=4 returns=493 drop_frees=0 pooled=6 peak=6 ctx_hits=161 ctx_returns=326 ctx_pools=161 lc_clone=160 lc_destroy=321 lc_defer=160 lc_flush=165 eligible_slow=2 bypass_large=0 bypass_escape=2`
+
 ## 2026-03-05: Session 154 - Fiber TEMP Long-Run Retention Guard
 
 ### Summary
