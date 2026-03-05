@@ -34,6 +34,14 @@ fn void run_clear_stale_raise_state(Interp* interp) @inline {
     interp.raise_msg[0] = 0;
 }
 
+fn void run_clear_stale_jit_tco_state(Interp* interp) @inline {
+    // JIT TCO bounce state is transient to one evaluation and must not leak
+    // across top-level run boundaries.
+    interp.flags.jit_tco_bounce = false;
+    interp.jit_tco_expr = null;
+    interp.jit_tco_env = null;
+}
+
 fn bool run_execute_expr(Expr* expr, Interp* interp, Value** result_value, EvalResult* result_error) {
     if (run_jit_enabled(interp)) {
         JitFn f = jit_compile(expr, interp);
@@ -98,6 +106,8 @@ fn Value* run_promote_result(Value* jit_result, Interp* interp, main::ScopeRegio
  */
 fn EvalResult run_program(char[] source, Interp* interp) {
     run_clear_stale_raise_state(interp);
+    run_clear_stale_jit_tco_state(interp);
+    defer run_clear_stale_jit_tco_state(interp);
 
     Lexer lex;
     lex.init(source);
@@ -118,6 +128,7 @@ fn EvalResult run_program(char[] source, Interp* interp) {
 
     foreach (expr : exprs) {
         run_clear_stale_raise_state(interp);
+        run_clear_stale_jit_tco_state(interp);
 
         // GC JIT states between top-level expressions (safe: no JIT code on stack)
         jit_gc();
@@ -156,6 +167,8 @@ fn EvalResult run_program(char[] source, Interp* interp) {
  */
 fn EvalResult run(char[] source, Interp* interp) {
     run_clear_stale_raise_state(interp);
+    run_clear_stale_jit_tco_state(interp);
+    defer run_clear_stale_jit_tco_state(interp);
     boundary_assert_interp_scope_chain(interp);
 
     // GC JIT states between top-level evaluations (safe: no JIT code on stack)

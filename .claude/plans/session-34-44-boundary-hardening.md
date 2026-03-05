@@ -180,6 +180,19 @@ Execution policy:
   - normal full suite: pass (`Unified 1194/0`, `Compiler 73/0`)
   - strict ASAN repeated full-run probe (3 runs): all pass (`Unified 1193/0`, `Compiler 73/0` each).
 
+### Session 192 Follow-up (2026-03-05): Scheduler Mixed Boundary-State Coverage + Top-Level TCO Transient Cleanup
+
+- Added scheduler regression `run_scheduler_mixed_boundary_state_restore_tests(...)` in `src/lisp/tests_tests.c3`:
+  - mixes success (`thread-join` + `offload`/`await`) and expected-error (`thread-cancel` + `thread-join`) paths,
+  - verifies boundary/runtime fields are restored after each cycle.
+- Regression initially exposed stale `jit_tco_expr` / `jit_tco_env` leakage after top-level error exits.
+- Runtime fix in `src/lisp/eval_run_pipeline.c3`:
+  - introduced `run_clear_stale_jit_tco_state(...)`,
+  - applied at run entry and via `defer` on exit in `run(...)` and `run_program(...)`.
+- Validation:
+  - normal full suite: pass (`Unified 1195/0`, `Compiler 73/0`)
+  - strict ASAN repeated full-run probe (3 runs): all pass (`Unified 1194/0`, `Compiler 73/0` each).
+
 ### Post-44 Continuation Snapshot (Sessions 45-68)
 
 - Boundary API expansion and caller migration completed across eval/jit/env/value/module paths.

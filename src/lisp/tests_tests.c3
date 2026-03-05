@@ -2316,6 +2316,173 @@ fn void run_scheduler_boundary_stress_tests(Interp* interp, int* pass, int* fail
     }
 }
 
+fn bool scheduler_runtime_boundary_fields_match(
+    Interp* interp,
+    main::ScopeRegion* current_scope,
+    main::ScopeRegion* releasing_scope,
+    Env* jit_env,
+    Env* match_env,
+    Expr* jit_tco_expr,
+    Env* jit_tco_env,
+    main::ScopeRegion* tco_recycle_scope,
+    usz tco_scope_defer_slot,
+    bool tco_scope_defer_active,
+    bool escape_env_mode,
+    PromotionContext* active_promotion_ctx
+) @inline {
+    return interp.current_scope == current_scope &&
+           interp.releasing_scope == releasing_scope &&
+           interp.jit_env == jit_env &&
+           interp.match_env == match_env &&
+           interp.jit_tco_expr == jit_tco_expr &&
+           interp.jit_tco_env == jit_tco_env &&
+           interp.tco_recycle_scope == tco_recycle_scope &&
+           interp.tco_scope_defer_slot == tco_scope_defer_slot &&
+           interp.tco_scope_defer_active == tco_scope_defer_active &&
+           interp.escape_env_mode == escape_env_mode &&
+           interp.active_promotion_ctx == active_promotion_ctx;
+}
+
+fn void run_scheduler_mixed_boundary_state_restore_tests(Interp* interp, int* pass, int* fail) {
+    // Invariant: mixed scheduler thread/offload paths (success + expected error)
+    // preserve interpreter boundary/runtime state across iterations.
+    main::ScopeRegion* saved_scope = interp.current_scope;
+    main::ScopeRegion* saved_releasing = interp.releasing_scope;
+    Env* saved_jit_env = interp.jit_env;
+    Env* saved_match_env = interp.match_env;
+    Expr* saved_jit_tco_expr = interp.jit_tco_expr;
+    Env* saved_jit_tco_env = interp.jit_tco_env;
+    main::ScopeRegion* saved_tco_recycle = interp.tco_recycle_scope;
+    usz saved_tco_slot = interp.tco_scope_defer_slot;
+    bool saved_tco_active = interp.tco_scope_defer_active;
+    bool saved_escape_mode = interp.escape_env_mode;
+    PromotionContext* saved_active_ctx = interp.active_promotion_ctx;
+
+    bool ok = true;
+    usz failed_step = 0;
+    char[] fail_phase = "";
+    bool d_current_scope = true;
+    bool d_releasing_scope = true;
+    bool d_jit_env = true;
+    bool d_match_env = true;
+    bool d_jit_tco_expr = true;
+    bool d_jit_tco_env = true;
+    bool d_tco_recycle = true;
+    bool d_tco_slot = true;
+    bool d_tco_active = true;
+    bool d_escape_mode = true;
+    bool d_active_ctx = true;
+    for (usz i = 0; i < 12; i++) {
+        EvalResult success_r = run(
+            "(begin "
+            "  (define sb-t (thread-spawn 'sleep-ms 1)) "
+            "  (define sb-f (spawn (lambda () (offload 'sleep-ms 1)))) "
+            "  (thread-join sb-t) "
+            "  (await sb-f) "
+            "  true)",
+            interp);
+        bool success_ok = !success_r.error.has_error &&
+                          success_r.value != null &&
+                          success_r.value.tag != ERROR &&
+                          success_r.value.tag != NIL;
+        bool success_state_ok = scheduler_runtime_boundary_fields_match(
+            interp,
+            saved_scope,
+            saved_releasing,
+            saved_jit_env,
+            saved_match_env,
+            saved_jit_tco_expr,
+            saved_jit_tco_env,
+            saved_tco_recycle,
+            saved_tco_slot,
+            saved_tco_active,
+            saved_escape_mode,
+            saved_active_ctx
+        );
+        if (!success_ok || !success_state_ok) {
+            ok = false;
+            failed_step = i * 2;
+            fail_phase = "success";
+            d_current_scope = interp.current_scope == saved_scope;
+            d_releasing_scope = interp.releasing_scope == saved_releasing;
+            d_jit_env = interp.jit_env == saved_jit_env;
+            d_match_env = interp.match_env == saved_match_env;
+            d_jit_tco_expr = interp.jit_tco_expr == saved_jit_tco_expr;
+            d_jit_tco_env = interp.jit_tco_env == saved_jit_tco_env;
+            d_tco_recycle = interp.tco_recycle_scope == saved_tco_recycle;
+            d_tco_slot = interp.tco_scope_defer_slot == saved_tco_slot;
+            d_tco_active = interp.tco_scope_defer_active == saved_tco_active;
+            d_escape_mode = interp.escape_env_mode == saved_escape_mode;
+            d_active_ctx = interp.active_promotion_ctx == saved_active_ctx;
+            break;
+        }
+
+        // Expected-error path should also preserve boundary/runtime fields.
+        EvalResult error_r = run(
+            "(begin "
+            "  (define sb-c (thread-spawn 'sleep-ms 20)) "
+            "  (thread-cancel sb-c) "
+            "  (thread-join sb-c))",
+            interp);
+        bool error_ok = error_r.error.has_error ||
+                        (error_r.value != null && error_r.value.tag == ERROR);
+        bool error_state_ok = scheduler_runtime_boundary_fields_match(
+            interp,
+            saved_scope,
+            saved_releasing,
+            saved_jit_env,
+            saved_match_env,
+            saved_jit_tco_expr,
+            saved_jit_tco_env,
+            saved_tco_recycle,
+            saved_tco_slot,
+            saved_tco_active,
+            saved_escape_mode,
+            saved_active_ctx
+        );
+        if (!error_ok || !error_state_ok) {
+            ok = false;
+            failed_step = i * 2 + 1;
+            fail_phase = "error";
+            d_current_scope = interp.current_scope == saved_scope;
+            d_releasing_scope = interp.releasing_scope == saved_releasing;
+            d_jit_env = interp.jit_env == saved_jit_env;
+            d_match_env = interp.match_env == saved_match_env;
+            d_jit_tco_expr = interp.jit_tco_expr == saved_jit_tco_expr;
+            d_jit_tco_env = interp.jit_tco_env == saved_jit_tco_env;
+            d_tco_recycle = interp.tco_recycle_scope == saved_tco_recycle;
+            d_tco_slot = interp.tco_scope_defer_slot == saved_tco_slot;
+            d_tco_active = interp.tco_scope_defer_active == saved_tco_active;
+            d_escape_mode = interp.escape_env_mode == saved_escape_mode;
+            d_active_ctx = interp.active_promotion_ctx == saved_active_ctx;
+            break;
+        }
+    }
+
+    if (ok) {
+        emit_pass_literal("[PASS] scheduler mixed boundary/runtime state restore");
+        (*pass)++;
+    } else {
+        io::printfn(
+            "[FAIL] scheduler mixed boundary/runtime state restore at step %d (%s) [scope=%s releasing=%s jit_env=%s match_env=%s tco_expr=%s tco_env=%s tco_recycle=%s tco_slot=%s tco_active=%s escape=%s active_ctx=%s]",
+            (int)failed_step,
+            (ZString)fail_phase,
+            d_current_scope ? "ok" : "drift",
+            d_releasing_scope ? "ok" : "drift",
+            d_jit_env ? "ok" : "drift",
+            d_match_env ? "ok" : "drift",
+            d_jit_tco_expr ? "ok" : "drift",
+            d_jit_tco_env ? "ok" : "drift",
+            d_tco_recycle ? "ok" : "drift",
+            d_tco_slot ? "ok" : "drift",
+            d_tco_active ? "ok" : "drift",
+            d_escape_mode ? "ok" : "drift",
+            d_active_ctx ? "ok" : "drift"
+        );
+        (*fail)++;
+    }
+}
+
 fn void run_scheduler_tests(Interp* interp, int* pass, int* fail) {
     io::printn("\n--- Scheduler Tests ---");
     run_scheduler_spawn_and_await_tests(interp, pass, fail);
@@ -2328,6 +2495,7 @@ fn void run_scheduler_tests(Interp* interp, int* pass, int* fail) {
     run_scheduler_cancel_tests(interp, pass, fail);
     run_scheduler_fairness_tests(interp, pass, fail);
     run_scheduler_boundary_stress_tests(interp, pass, fail);
+    run_scheduler_mixed_boundary_state_restore_tests(interp, pass, fail);
 }
 
 fn void run_scheduler_tests_isolated(int* pass, int* fail) {

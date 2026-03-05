@@ -1,5 +1,43 @@
 # Changelog
 
+## 2026-03-05: Session 192 - Scheduler Mixed Boundary-State Regression + Top-Level JIT-TCO Cleanup
+
+### Summary
+Added mixed scheduler boundary-state regression coverage and fixed top-level transient JIT-TCO state leakage across `run` error exits.
+
+### What changed
+- `src/lisp/tests_tests.c3`
+  - Added scheduler regression:
+    - `run_scheduler_mixed_boundary_state_restore_tests(...)`
+  - Covers mixed success + expected-error scheduler cycles:
+    - success path: `thread-spawn` + `thread-join` + fiber `offload` + `await`
+    - error path: `thread-cancel` followed by `thread-join` (expected error)
+  - Verifies boundary/runtime fields remain unchanged across iterations:
+    - `current_scope`, `releasing_scope`
+    - `jit_env`, `match_env`
+    - `jit_tco_expr`, `jit_tco_env`
+    - `tco_recycle_scope`, `tco_scope_defer_slot`, `tco_scope_defer_active`
+    - `escape_env_mode`, `active_promotion_ctx`
+  - Wired into `run_scheduler_tests(...)`.
+- `src/lisp/eval_run_pipeline.c3`
+  - Added top-level transient cleanup hardening:
+    - `run_clear_stale_jit_tco_state(...)`
+    - entry clear + `defer` clear in both `run(...)` and `run_program(...)`.
+  - Fixes drift where `jit_tco_expr` / `jit_tco_env` could remain set after error exits and leak into subsequent runs.
+
+### Why this matters
+- Extends boundary-hardening coverage into mixed scheduler/offload flows, including expected error paths.
+- Centralizes top-level transient reset policy for JIT-TCO fields, removing a subtle cross-run state leak.
+
+### Validation
+- `c3c build`
+- `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1195 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `c3c clean && c3c build --sanitize=address`
+- ASAN repeated full-run probe (`detect_leaks=1:halt_on_error=1:abort_on_error=1`, 3 runs):
+  - all passed (`Unified 1194/0`, `Compiler 73/0` each run).
+
 ## 2026-03-05: Session 191 - Deduce Memory-DB Isolation Regression + Path Entropy Hardening
 
 ### Summary
