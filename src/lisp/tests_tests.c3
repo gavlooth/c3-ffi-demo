@@ -2985,9 +2985,60 @@ fn void run_memory_lifetime_cons_barrier_fallback_gate_test(Interp* interp, int*
     }
 }
 
+fn void run_memory_lifetime_escape_disjoint_fallback_test(Interp* interp, int* pass, int* fail) {
+    // Invariant: disjoint-scope values take defensive copy fallback before escape-lane promotion.
+    {
+        main::ScopeRegion* saved = interp.current_scope;
+        main::ScopeRegion* target = main::scope_create(saved);
+        main::ScopeRegion* foreign = main::scope_create(saved);
+
+        interp.current_scope = foreign;
+        Value* src = make_cons(interp, make_int(interp, 33), make_nil(interp));
+
+        interp.current_scope = target;
+        usz base_site = copy_to_parent_site_calls(COPY_SITE_GENERIC);
+        Value* escaped = promote_to_escape(src, interp);
+        usz site_delta = copy_to_parent_site_calls(COPY_SITE_GENERIC) - base_site;
+
+        bool pre_ok = escaped != null &&
+                      escaped != src &&
+                      escaped.tag == CONS &&
+                      escaped.scope_gen == target.escape_generation &&
+                      escaped.cons_val.car != null &&
+                      escaped.cons_val.car.tag == INT &&
+                      escaped.cons_val.car.int_val == 33 &&
+                      delta_in_range(site_delta, 1, 2) &&
+                      !main::is_in_scope((void*)escaped, foreign);
+
+        main::scope_release(foreign);
+
+        bool post_ok = escaped != null &&
+                       escaped.tag == CONS &&
+                       escaped.cons_val.car != null &&
+                       escaped.cons_val.car.tag == INT &&
+                       escaped.cons_val.car.int_val == 33;
+
+        interp.current_scope = saved;
+        main::scope_release(target);
+
+        bool ok = pre_ok && post_ok;
+        if (ok) {
+            emit_pass_literal("[PASS] lifetime: escape disjoint fallback copy gate");
+            (*pass)++;
+        } else {
+            io::printfn("[FAIL] lifetime: escape disjoint fallback copy gate (site_delta=%d pre_ok=%s post_ok=%s)",
+                (long)site_delta,
+                pre_ok ? "yes" : "no",
+                post_ok ? "yes" : "no");
+            (*fail)++;
+        }
+    }
+}
+
 fn void run_memory_lifetime_root_fallback_tests(Interp* interp, int* pass, int* fail) {
     run_memory_lifetime_root_boundary_promotion_test(interp, pass, fail);
     run_memory_lifetime_cons_barrier_fallback_gate_test(interp, pass, fail);
+    run_memory_lifetime_escape_disjoint_fallback_test(interp, pass, fail);
 }
 
 fn void run_memory_lifetime_boundary_scope_restore_tests(Interp* interp, int* pass, int* fail) {

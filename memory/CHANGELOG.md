@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026-03-05: Session 176 - Escape-Promotion Route Map + Disjoint Fallback Regression
+
+### Summary
+Decomposed escape-promotion dispatch into an explicit route map and added a regression test for disjoint-lifetime fallback-copy behavior before ESCAPE-lane promotion.
+
+### What changed
+- `src/lisp/eval_promotion_escape.c3`
+  - Introduced route enum and dispatch split:
+    - `enum PromoteEscapeRoute`
+    - `promote_escape_route_for_tag(...)`
+    - `promote_to_escape_by_route(...)`
+  - `promote_to_escape_by_tag(...)` now composes route selection + route execution.
+  - Behavior preserved for all value tags.
+- `src/lisp/tests_tests.c3`
+  - Added `run_memory_lifetime_escape_disjoint_fallback_test(...)`.
+  - Verifies:
+    - disjoint value does not alias source (`escaped != src`),
+    - fallback copy site counter (`COPY_SITE_GENERIC`) increments as expected,
+    - escaped value survives source-scope release.
+  - Wired into `run_memory_lifetime_root_fallback_tests(...)`.
+
+### Why this matters
+- Continues decision-vs-mutation separation in high-risk boundary paths.
+- Makes promotion policy easier to audit and less likely to regress silently.
+- Adds explicit coverage for the defensive fallback path that protects against disjoint lifetime aliasing.
+
+### Validation
+- `c3c build`
+- `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+- `c3c clean && c3c build --sanitize=address`
+- `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+
 ## 2026-03-05: Session 175 - Promotion-Copy Decomposition + Wrapper Boundary Regression
 
 ### Summary

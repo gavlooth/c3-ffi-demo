@@ -199,43 +199,97 @@ fn Value* promote_escape_coroutine(Value* v, Interp* interp, PromotionContext* c
     return result;
 }
 
-fn Value* promote_to_escape_by_tag(Value* v, Interp* interp, PromotionContext* ctx) {
-    switch (v.tag) {
+enum PromoteEscapeRoute : char {
+    PE_ROUTE_SCALAR,
+    PE_ROUTE_STRING_OR_ERROR,
+    PE_ROUTE_CONS,
+    PE_ROUTE_CLOSURE,
+    PE_ROUTE_PARTIAL_PRIM,
+    PE_ROUTE_CONTINUATION,
+    PE_ROUTE_ITERATOR,
+    PE_ROUTE_COROUTINE,
+    PE_ROUTE_SHARED_WRAPPER,
+    PE_ROUTE_INSTANCE,
+    PE_ROUTE_FFI_HANDLE,
+    PE_ROUTE_PASSTHROUGH,
+}
+
+fn PromoteEscapeRoute promote_escape_route_for_tag(ValueTag tag) @inline {
+    switch (tag) {
         case NIL:
         case INT:
         case DOUBLE:
         case SYMBOL:
-            return promote_escape_scalar(v, interp, ctx);
+            return PE_ROUTE_SCALAR;
         case STRING:
         case ERROR:
-            return promote_escape_string_or_error(v, interp, ctx);
+            return PE_ROUTE_STRING_OR_ERROR;
         case CONS:
-            return promote_escape_cons(v, interp, ctx);
+            return PE_ROUTE_CONS;
         case CLOSURE:
-            return promote_escape_closure(v, interp, ctx);
+            return PE_ROUTE_CLOSURE;
         case PARTIAL_PRIM:
-            return promote_escape_partial_prim(v, interp, ctx);
+            return PE_ROUTE_PARTIAL_PRIM;
         case CONTINUATION:
-            return promote_escape_continuation(v, interp, ctx);
+            return PE_ROUTE_CONTINUATION;
         case ITERATOR:
-            return promote_escape_iterator(v, interp, ctx);
+            return PE_ROUTE_ITERATOR;
         case COROUTINE:
-            return promote_escape_coroutine(v, interp, ctx);
+            return PE_ROUTE_COROUTINE;
         case PRIMITIVE:
         case HASHMAP:
         case ARRAY:
         case METHOD_TABLE:
         case TYPE_INFO:
         case MODULE:
+            return PE_ROUTE_SHARED_WRAPPER;
+        case INSTANCE:
+            return PE_ROUTE_INSTANCE;
+        case FFI_HANDLE:
+            return PE_ROUTE_FFI_HANDLE;
+        default:
+            return PE_ROUTE_PASSTHROUGH;
+    }
+}
+
+fn Value* promote_to_escape_by_route(
+    Value* v,
+    Interp* interp,
+    PromotionContext* ctx,
+    PromoteEscapeRoute route
+) {
+    switch (route) {
+        case PE_ROUTE_SCALAR:
+            return promote_escape_scalar(v, interp, ctx);
+        case PE_ROUTE_STRING_OR_ERROR:
+            return promote_escape_string_or_error(v, interp, ctx);
+        case PE_ROUTE_CONS:
+            return promote_escape_cons(v, interp, ctx);
+        case PE_ROUTE_CLOSURE:
+            return promote_escape_closure(v, interp, ctx);
+        case PE_ROUTE_PARTIAL_PRIM:
+            return promote_escape_partial_prim(v, interp, ctx);
+        case PE_ROUTE_CONTINUATION:
+            return promote_escape_continuation(v, interp, ctx);
+        case PE_ROUTE_ITERATOR:
+            return promote_escape_iterator(v, interp, ctx);
+        case PE_ROUTE_COROUTINE:
+            return promote_escape_coroutine(v, interp, ctx);
+        case PE_ROUTE_SHARED_WRAPPER:
             // Wrapper promotion into ESCAPE lane; backing data/ownership remains unchanged.
             return promote_escape_shared_wrapper(v, interp, ctx);
-        case INSTANCE:
+        case PE_ROUTE_INSTANCE:
             return promote_escape_instance(v, interp, ctx);
-        case FFI_HANDLE:
+        case PE_ROUTE_FFI_HANDLE:
             return promote_escape_ffi_handle(v, interp, ctx);
         default:
             return v;
     }
+}
+
+fn Value* promote_to_escape_by_tag(Value* v, Interp* interp, PromotionContext* ctx) {
+    PromoteEscapeRoute route = promote_escape_route_for_tag(v.tag);
+    return promote_to_escape_by_route(v, interp, ctx, route);
 }
 
 fn void promote_to_escape_memo(Value* old_v, Value* new_v, Interp* interp, PromotionContext* ctx) {

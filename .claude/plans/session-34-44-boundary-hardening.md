@@ -544,6 +544,21 @@ Execution policy:
   - normal full suite green,
   - strict ASAN suite green.
 
+### Session 176 Follow-up (2026-03-05): Escape Route-Map Decomposition + Disjoint Fallback Test
+
+- Decomposed `promote_to_escape_by_tag(...)` into explicit route selection + execution:
+  - `PromoteEscapeRoute`
+  - `promote_escape_route_for_tag(...)`
+  - `promote_to_escape_by_route(...)`
+- Kept behavior unchanged while making tag-policy mapping explicit and auditable.
+- Added regression coverage:
+  - `run_memory_lifetime_escape_disjoint_fallback_test(...)`
+  - verifies disjoint value fallback copy path + post-release survival.
+- Wired new test into `run_memory_lifetime_root_fallback_tests(...)`.
+- Validation:
+  - normal full suite green,
+  - strict ASAN suite green.
+
 ## Global Gates (run after every commit)
 
 ```bash
