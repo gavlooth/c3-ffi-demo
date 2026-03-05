@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026-03-05: Session 191 - Deduce Memory-DB Isolation Regression + Path Entropy Hardening
+
+### Summary
+Strengthened deduce in-memory DB reliability with two complementary changes: higher-entropy memory path generation and explicit regression coverage proving handle/database isolation.
+
+### What changed
+- `src/lisp/deduce.c3`
+  - Added robust memory-path construction helpers:
+    - `deduce_append_slice(...)`
+    - `deduce_append_hex(...)`
+    - `deduce_build_memory_path(...)`
+  - Introduced process-sequence entropy (`g_deduce_memory_open_seq` + `getpid`) in `/tmp/deduce-*` names, alongside full-width pointer suffix.
+  - `prim_deduce_open(...)` now uses `deduce_build_memory_path(...)` and fails explicitly if path build fails.
+- `src/lisp/tests_tests.c3`
+  - Added `run_deduce_memory_open_isolation_test(...)`.
+  - Opens two `'memory` databases, defines the same schema in each, inserts into one, and verifies counts diverge (`1` vs `0`) to confirm storage isolation.
+  - Wired into `run_deduce_group_tests(...)`.
+
+### Why this matters
+- Reduces residual order/process-collision risk in deduce memory DB temp naming.
+- Adds concrete behavior guardrail proving two memory-open handles do not alias backing storage.
+
+### Validation
+- `c3c build`
+- `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1194 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `c3c clean && c3c build --sanitize=address`
+- ASAN repeated full-run probe (`detect_leaks=1:halt_on_error=1:abort_on_error=1`, 3 runs):
+  - all passed (`Unified 1193/0`, `Compiler 73/0` each run).
+
 ## 2026-03-05: Session 190 - Deduce Reopen Stress Test De-Flaking (Single-Expression Handle Check)
 
 ### Summary

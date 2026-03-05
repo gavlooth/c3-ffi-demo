@@ -170,6 +170,16 @@ Execution policy:
   - normal full suite: pass (`Unified 1193/0`, `Compiler 73/0`)
   - strict ASAN repeated full-run probe (3 runs): all pass (`Unified 1192/0`, `Compiler 73/0` each).
 
+### Session 191 Follow-up (2026-03-05): Deduce Memory-Open Isolation Guardrail
+
+- Runtime hardening in `src/lisp/deduce.c3`:
+  - added process-sequence entropy in `'memory` temp DB path generation (`getpid` + monotonic seq + full-width pointer suffix).
+- Regression added in `src/lisp/tests_tests.c3`:
+  - `run_deduce_memory_open_isolation_test(...)` verifies two memory-open handles are storage-isolated (insert into A does not appear in B).
+- Validation:
+  - normal full suite: pass (`Unified 1194/0`, `Compiler 73/0`)
+  - strict ASAN repeated full-run probe (3 runs): all pass (`Unified 1193/0`, `Compiler 73/0` each).
+
 ### Post-44 Continuation Snapshot (Sessions 45-68)
 
 - Boundary API expansion and caller migration completed across eval/jit/env/value/module paths.

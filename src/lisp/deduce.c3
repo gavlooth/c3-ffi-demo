@@ -38,6 +38,7 @@ extern fn int mdb_del(MdbTxn* txn, MdbDbi dbi, MdbVal* key, MdbVal* data) @exter
 extern fn int mdb_cursor_open(MdbTxn* txn, MdbDbi dbi, MdbCursor** cursor) @extern("mdb_cursor_open");
 extern fn int mdb_cursor_get(MdbCursor* cursor, MdbVal* key, MdbVal* data, int op) @extern("mdb_cursor_get");
 extern fn void mdb_cursor_close(MdbCursor* cursor) @extern("mdb_cursor_close");
+extern fn int c_getpid() @extern("getpid");
 
 const uint MDB_CREATE = 0x40000;
 const uint MDB_NOSUBDIR = 0x4000;
@@ -58,6 +59,7 @@ struct DeduceDb {
 }
 
 const char[] DEDUCE_HEX_DIGITS = "0123456789abcdef";
+usz g_deduce_memory_open_seq = 0;
 
 fn usz deduce_format_usz_hex(char[] out, usz value) {
     if (out.len == 0) return 0;
@@ -80,6 +82,43 @@ fn usz deduce_format_usz_hex(char[] out, usz value) {
         out[i] = rev[count - 1 - i];
     }
     return count;
+}
+
+fn bool deduce_append_slice(char[256]* out, usz* idx, char[] src) {
+    if (*idx + src.len >= out.len) return false;
+    for (usz i = 0; i < src.len; i++) {
+        (*out)[*idx + i] = src[i];
+    }
+    *idx += src.len;
+    return true;
+}
+
+fn bool deduce_append_hex(char[256]* out, usz* idx, usz value) {
+    char[2 * usz.sizeof] hex_buf;
+    usz hlen = deduce_format_usz_hex(&hex_buf, value);
+    if (*idx + hlen >= out.len) return false;
+    for (usz i = 0; i < hlen; i++) {
+        (*out)[*idx + i] = hex_buf[i];
+    }
+    *idx += hlen;
+    return true;
+}
+
+fn bool deduce_build_memory_path(char[256]* out, DeduceDb* db) {
+    if (out == null || db == null) return false;
+    usz idx = 0;
+    if (!deduce_append_slice(out, &idx, "/tmp/deduce-")) return false;
+    if (!deduce_append_hex(out, &idx, (usz)c_getpid())) return false;
+    if (idx + 1 >= out.len) return false;
+    (*out)[idx++] = '-';
+    g_deduce_memory_open_seq++;
+    if (!deduce_append_hex(out, &idx, g_deduce_memory_open_seq)) return false;
+    if (idx + 1 >= out.len) return false;
+    (*out)[idx++] = '-';
+    if (!deduce_append_hex(out, &idx, (usz)db)) return false;
+    if (idx >= out.len) return false;
+    (*out)[idx] = 0;
+    return true;
 }
 
 fn void deduce_db_finalizer(void* handle) {
@@ -136,14 +175,11 @@ fn Value* prim_deduce_open(Value*[] args, Env* env, Interp* interp) {
 
     if (args[0].tag == SYMBOL) {
         // 'memory → use unique temp path with NOSUBDIR
-        // Generate unique name from full-width pointer bits (no 32-bit truncation).
-        // This avoids rare ASAN-address collisions from low-word-only formatting.
-        char[2 * usz.sizeof] suffix;
-        usz slen = deduce_format_usz_hex(&suffix, (usz)db);
-        char[] base = "/tmp/deduce-";
-        for (usz i = 0; i < base.len; i++) path_buf[i] = base[i];
-        for (usz i = 0; i < slen; i++) path_buf[base.len + i] = suffix[i];
-        path_buf[base.len + slen] = 0;
+        if (!deduce_build_memory_path(&path_buf, db)) {
+            mdb_env_close(db.env);
+            mem::free(db);
+            return raise_error(interp, "deduce-open: failed to build memory path");
+        }
         flags = MDB_NOSUBDIR;
     } else if (is_string(args[0])) {
         char[] path = args[0].str_chars[:args[0].str_len];

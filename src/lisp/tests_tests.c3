@@ -2355,6 +2355,91 @@ fn void setup_deduce_person_relation(Interp* interp) {
     setup(interp, "(deduce 'fact! person \"Bob\" 25)");
 }
 
+fn Value* setup_deduce_relation_for_db(
+    Interp* interp,
+    Value* db_val,
+    SymbolId rel_name,
+    SymbolId col1,
+    SymbolId col2
+) {
+    if (interp == null || db_val == null || db_val.tag != FFI_HANDLE || db_val.ffi_val == null) return null;
+
+    Value* name_sym = interp.alloc_value();
+    name_sym.tag = SYMBOL;
+    name_sym.sym_val = rel_name;
+
+    Value* c1_sym = interp.alloc_value();
+    c1_sym.tag = SYMBOL;
+    c1_sym.sym_val = col1;
+
+    Value* c2_sym = interp.alloc_value();
+    c2_sym.tag = SYMBOL;
+    c2_sym.sym_val = col2;
+
+    Value* spec = make_cons(interp, name_sym, make_cons(interp, c1_sym, make_cons(interp, c2_sym, make_nil(interp))));
+    Value*[1] fargs;
+    fargs[0] = make_cons(interp, db_val, spec);
+    return prim_define_relation(fargs[..], null, interp);
+}
+
+fn void run_deduce_memory_open_isolation_test(Interp* interp, int* pass, int* fail) {
+    EvalResult ra = run("(deduce 'open 'memory)", interp);
+    EvalResult rb = run("(deduce 'open 'memory)", interp);
+    bool open_ok = !ra.error.has_error &&
+                   !rb.error.has_error &&
+                   ra.value != null && rb.value != null &&
+                   ra.value.tag == FFI_HANDLE &&
+                   rb.value.tag == FFI_HANDLE &&
+                   ra.value.ffi_val != null &&
+                   rb.value.ffi_val != null &&
+                   ra.value.ffi_val != rb.value.ffi_val;
+    if (!open_ok) {
+        io::printn("[FAIL] deduce memory open isolation (open)");
+        (*fail)++;
+        return;
+    }
+
+    SymbolId rel_a_sym = interp.symbols.intern("person_a_iso");
+    SymbolId rel_b_sym = interp.symbols.intern("person_b_iso");
+    SymbolId name_sym = interp.symbols.intern("name");
+    SymbolId age_sym = interp.symbols.intern("age");
+
+    Value* rel_a = setup_deduce_relation_for_db(interp, ra.value, rel_a_sym, name_sym, age_sym);
+    Value* rel_b = setup_deduce_relation_for_db(interp, rb.value, rel_b_sym, name_sym, age_sym);
+    bool rel_ok = rel_a != null && rel_b != null &&
+                  rel_a.tag == FFI_HANDLE && rel_b.tag == FFI_HANDLE &&
+                  rel_a.ffi_val != null && rel_b.ffi_val != null;
+    if (!rel_ok) {
+        io::printn("[FAIL] deduce memory open isolation (relation setup)");
+        (*fail)++;
+        return;
+    }
+
+    env_define_with_barrier(interp.global_env, rel_a_sym, rel_a, interp);
+    env_define_with_barrier(interp.global_env, rel_b_sym, rel_b, interp);
+
+    EvalResult ins = run("(deduce 'fact! person_a_iso \"Alice\" 30)", interp);
+    EvalResult ca = run("(deduce 'count person_a_iso)", interp);
+    EvalResult cb = run("(deduce 'count person_b_iso)", interp);
+
+    bool count_ok = !ins.error.has_error &&
+                    !ca.error.has_error &&
+                    !cb.error.has_error &&
+                    is_int(ca.value) && ca.value.int_val == 1 &&
+                    is_int(cb.value) && cb.value.int_val == 0;
+
+    if (count_ok) {
+        emit_pass_literal("[PASS] deduce memory open isolation");
+        (*pass)++;
+    } else {
+        io::printfn("[FAIL] deduce memory open isolation (ins_err=%s count_a=%d count_b=%d)",
+            ins.error.has_error ? "yes" : "no",
+            is_int(ca.value) ? (int)ca.value.int_val : -1,
+            is_int(cb.value) ? (int)cb.value.int_val : -1);
+        (*fail)++;
+    }
+}
+
 fn void run_deduce_scan_tests(Interp* interp, int* pass, int* fail) {
     {
         EvalResult r = run("(length (deduce 'scan person))", interp);
@@ -2506,6 +2591,7 @@ fn void run_deduce_reopen_stress_test(Interp* interp, int* pass, int* fail) {
 
 fn void run_deduce_group_tests(Interp* interp, int* pass, int* fail) {
     run_deduce_open_smoke_test(interp, pass, fail);
+    run_deduce_memory_open_isolation_test(interp, pass, fail);
     run_deduce_reopen_stress_test(interp, pass, fail);
     setup_deduce_person_relation(interp);
     run_deduce_query_tests(interp, pass, fail);
