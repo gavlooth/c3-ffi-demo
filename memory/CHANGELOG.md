@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-03-05: Session 224 - Remove Constructor/Type Aliases (`Array`/`Dict`/`List`/`Set`, `typeof`)
+
+### Summary
+Reverted constructor/type alias exposure and standardized docs/tests back to the
+canonical primitive names only.
+
+### What changed
+- Runtime primitives:
+  - removed `List` alias for `list`
+  - removed `Array` alias for `array`
+  - removed `Dict` alias for `dict`
+  - removed `Set` alias for `set`
+  - removed `typeof` alias for `type-of`
+  - file: `src/lisp/eval_init_primitives.c3`
+- Tests:
+  - removed alias-specific coverage for constructor/type aliases.
+  - file: `src/lisp/tests_advanced_tests.c3`
+- Docs:
+  - reverted examples/tables to canonical names (`list`, `array`, `dict`,
+    `set`, `type-of`) and removed alias mentions.
+  - files:
+    - `docs/LANGUAGE_SPEC.md`
+    - `docs/reference/06-effects.md`
+    - `docs/reference/11-appendix-primitives.md`
+    - `docs/reference/12-appendix-stdlib.md`
+
+### Validation
+- `c3c build`
+- `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+
 ## 2026-03-05: Session 223 - Constructor/Type Alias Polish (`Array`/`Dict`/`List`/`Set`, `typeof`)
 
 ### Summary

@@ -215,8 +215,8 @@ Lazy sequences that compute values on demand.
 ### Consuming Iterators
 
 ```lisp
-(List (take 5 (range-from 0)))          ;; => (0 1 2 3 4)
-(Array (take 5 (range-from 0)))         ;; => [0 1 2 3 4]
+(list (take 5 (range-from 0)))          ;; => (0 1 2 3 4)
+(array (take 5 (range-from 0)))         ;; => [0 1 2 3 4]
 (foldl + 0 (iterator '(1 2 3 4 5)))     ;; => 15
 ```
 
@@ -224,7 +224,7 @@ Lazy sequences that compute values on demand.
 
 ```lisp
 ;; First 3 even squares starting from 1
-(List
+(list
   (take 3
     (filter even?
       (map (lambda (x) (* x x))

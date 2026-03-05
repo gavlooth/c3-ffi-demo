@@ -56,7 +56,7 @@ Functions and macros defined in `stdlib/stdlib.lisp`.
 
 Note: `map`, `filter`, `take`, `drop`, `zip`, and `foldl` are dispatched and
 operate lazily when passed an `Iterator`.
-Force an iterator with constructors: `(List it)` or `(Array it)`.
+Force an iterator with constructors: `(list it)` or `(array it)`.
 
 ### Utilities
 

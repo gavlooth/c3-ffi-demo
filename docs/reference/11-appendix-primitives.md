@@ -53,7 +53,7 @@ These support user extension via method tables.
 | `cdr` | 1 | Rest |
 | `null?` | 1 | Is nil? |
 | `pair?` | 1 | Is cons? |
-| `list` / `List` | variadic | Create list / convert collection->list (array/iterator) |
+| `list` | variadic | Create list / convert collection->list (array/iterator) |
 
 **Boolean:**
 
@@ -95,7 +95,7 @@ These support user extension via method tables.
 
 | Name | Arity | Description |
 |------|-------|-------------|
-| `type-of` / `typeof` | 1 | Type name as symbol |
+| `type-of` | 1 | Type name as symbol |
 | `is?` | 2 | Type/subtype check |
 | `instance?` | 1 | Is type instance? |
 | `continuation?` | 1 | Is continuation? |
@@ -147,11 +147,11 @@ These support user extension via method tables.
 
 | Name | Arity | Description |
 |------|-------|-------------|
-| `array` / `Array` | variadic | Create array / convert collection->array (list/iterator) |
+| `array` | variadic | Create array / convert collection->array (list/iterator) |
 | `array-set!` | 3 | Set element at index |
-| `dict` / `Dict` | variadic | Create dict |
+| `dict` | variadic | Create dict |
 | `dict-set!` | 3 | Set key-value |
-| `set` / `Set` | variadic | Create set |
+| `set` | variadic | Create set |
 | `set-add` | 2 | Add to set |
 | `set-remove` | 2 | Remove from set |
 | `set-contains?` | 2 | Set membership |

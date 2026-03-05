@@ -884,17 +884,14 @@ fn void run_advanced_stdlib_numeric_float_math_tests(Interp* interp, int* pass, 
 fn void run_advanced_stdlib_numeric_array_set_tests(Interp* interp, int* pass, int* fail) {
     // === ARRAY TESTS (Phase 8) ===
     test_eq(interp, "length array", "(length (array 1 2 3))", 3, pass, fail);
-    test_eq(interp, "length Array alias", "(length (Array 1 2 3))", 3, pass, fail);
     test_eq(interp, "ref array", "(ref (array 10 20 30) 1)", 20, pass, fail);
     test_eq(interp, "array from list", "(ref (array '(10 20 30)) 1)", 20, pass, fail);
-    test_eq(interp, "Array from list", "(ref (Array '(10 20 30)) 1)", 20, pass, fail);
     setup(interp, "(define test-arr (array 1 2 3))");
     setup(interp, "(array-set! test-arr 1 99)");
     test_eq(interp, "array-set!", "(ref test-arr 1)", 99, pass, fail);
     test_truthy(interp, "array?", "(array? (array 1 2))", pass, fail);
     test_nil(interp, "array? non-arr", "(array? 42)", pass, fail);
     test_truthy(interp, "list from array", "(= (list [1 2 3]) '(1 2 3))", pass, fail);
-    test_truthy(interp, "List alias from array", "(= (List [1 2 3]) '(1 2 3))", pass, fail);
     test_eq(interp, "array from list 2", "(ref (array '(10 20 30)) 2)", 30, pass, fail);
     test_eq(interp, "array nil→empty", "(length (array nil))", 0, pass, fail);
     setup(interp, "(define push-arr (array 1 2))");
@@ -907,7 +904,6 @@ fn void run_advanced_stdlib_numeric_array_set_tests(Interp* interp, int* pass, i
 
     // === SET TESTS (Phase 9) ===
     test_eq(interp, "set-size", "(set-size (set 1 2 3))", 3, pass, fail);
-    test_eq(interp, "set-size Set alias", "(set-size (Set 1 2 3))", 3, pass, fail);
     test_truthy(interp, "set-contains?", "(set-contains? (set 1 2 3) 2)", pass, fail);
     test_nil(interp, "set-contains? miss", "(set-contains? (set 1 2 3) 5)", pass, fail);
     setup(interp, "(define test-set (set 1 2))");
@@ -923,7 +919,6 @@ fn void run_advanced_stdlib_numeric_array_set_tests(Interp* interp, int* pass, i
     test_eq(interp, "read-string", "(read-string \"(+ 1 2)\")", 3, pass, fail);
     test_truthy(interp, "symbol->string", "(= (symbol->string 'hello) \"hello\")", pass, fail);
     test_truthy(interp, "string->symbol", "(= (string->symbol \"abc\") 'abc)", pass, fail);
-    test_eq(interp, "Dict alias ref", "(ref (Dict 'a 1 'b 2) 'b)", 2, pass, fail);
 }
 
 fn void run_advanced_stdlib_sort_bitwise_hof_tests(Interp* interp, int* pass, int* fail) {
@@ -1039,14 +1034,12 @@ fn void run_advanced_type_parametric_core_hierarchy_tests(Interp* interp, int* p
 
     // type-of primitive
     test_truthy(interp, "type-of int", "(= (type-of 42) 'Int)", pass, fail);
-    test_truthy(interp, "typeof alias int", "(= (typeof 42) 'Int)", pass, fail);
     test_truthy(interp, "type-of double", "(= (type-of 3.14) 'Double)", pass, fail);
     test_truthy(interp, "type-of string", "(= (type-of \"hello\") 'String)", pass, fail);
     test_truthy(interp, "type-of symbol", "(= (type-of 'foo) 'Symbol)", pass, fail);
     test_truthy(interp, "type-of nil", "(= (type-of nil) 'Nil)", pass, fail);
     test_truthy(interp, "type-of list", "(= (type-of '(1 2 3)) 'List)", pass, fail);
     test_truthy(interp, "type-of array", "(= (type-of (array 1 2 3)) 'Array)", pass, fail);
-    test_truthy(interp, "type-of Array alias", "(= (type-of (Array 1 2 3)) 'Array)", pass, fail);
     test_truthy(interp, "type-of closure", "(= (type-of (lambda (x) x)) 'Closure)", pass, fail);
     test_truthy(interp, "type-of true", "(= (type-of true) 'Bool)", pass, fail);
 
