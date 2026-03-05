@@ -43,6 +43,20 @@ Execution policy:
   - normal full suite: pass (`Unified 1186/0`, `Compiler 73/0`)
   - strict ASAN full suite: pass (`Unified 1185/0`, `Compiler 73/0`)
 
+### Session 180 Follow-up (2026-03-05): TCO Env-Copy Boundary Restore Consolidation
+
+- Consolidated manual boundary-state save/restore in:
+  - `jit_copy_tco_env_chain_for_recycle(...)` (`src/lisp/jit_jit_eval_scopes.c3`)
+- Migration:
+  - replaced ad-hoc `releasing_scope` save/restore with
+    `boundary_save_interp_state(...)` + `defer boundary_restore_interp_state(...)`.
+- Added regression:
+  - `run_memory_lifetime_tco_boundary_state_restore_test(...)` in `src/lisp/tests_tests.c3`
+  - ensures long named-let/TCO flow restores `current_scope` and `releasing_scope` exactly.
+- Validation:
+  - normal full suite: pass (`Unified 1187/0`, `Compiler 73/0`)
+  - strict ASAN full suite: pass (`Unified 1186/0`, `Compiler 73/0`)
+
 ### Post-44 Continuation Snapshot (Sessions 45-68)
 
 - Boundary API expansion and caller migration completed across eval/jit/env/value/module paths.

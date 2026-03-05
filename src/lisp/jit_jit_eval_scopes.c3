@@ -93,13 +93,15 @@ fn Env* jit_copy_tco_env_chain_for_recycle(
     Interp* interp,
     main::ScopeRegion* releasing_scope
 ) {
-    main::ScopeRegion* saved_releasing = interp.releasing_scope;
+    boundary_assert_interp_scope_chain(interp);
+    BoundaryInterpState saved = boundary_save_interp_state(interp);
+    defer boundary_restore_interp_state(interp, saved);
     interp.releasing_scope = releasing_scope;
     PromotionContext bounce_ctx = {};
     promotion_context_begin(interp, &bounce_ctx, PROMOTION_CTX_BUDGET_TCO);
     Env* copied = copy_tco_env_chain(env, interp);
     promotion_context_end(interp, &bounce_ctx);
-    interp.releasing_scope = saved_releasing;
+    boundary_assert_interp_scope_chain(interp);
     return copied;
 }
 

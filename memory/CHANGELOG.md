@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026-03-05: Session 180 - TCO Env-Copy Boundary Restore Consolidation + Regression
+
+### Summary
+Replaced manual `releasing_scope` save/restore in the JIT TCO recycle env-copy helper with audited boundary-state facade calls, and added a regression to lock in interpreter boundary-state restoration through long TCO loops.
+
+### What changed
+- `src/lisp/jit_jit_eval_scopes.c3`
+  - `jit_copy_tco_env_chain_for_recycle(...)` now uses:
+    - `boundary_assert_interp_scope_chain(...)`
+    - `boundary_save_interp_state(...)`
+    - `defer boundary_restore_interp_state(...)`
+  - Removed manual `saved_releasing`/restore wiring.
+- `src/lisp/tests_tests.c3`
+  - Added `run_memory_lifetime_tco_boundary_state_restore_test(...)`.
+  - Verifies:
+    - long named-let/TCO run still evaluates correctly,
+    - `interp.current_scope` and `interp.releasing_scope` are exactly restored after run.
+  - Wired into `run_memory_lifetime_hot_budget_tests(...)`.
+
+### Why this matters
+- Shrinks distributed boundary restore logic in one of the more subtle TCO/lifetime paths.
+- Converts manual state mutation to centralized, audited boundary primitives.
+- Adds direct regression coverage for "TCO recycle path must leave boundary state unchanged."
+
+### Validation
+- `c3c build`
+- `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1187 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `c3c clean && c3c build --sanitize=address`
+- `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1186 passed, 0 failed` (JIT checks disabled under ASAN)
+  - `Compiler: 73 passed, 0 failed`
+
 ## 2026-03-05: Session 179 - Boundary Invariant Hook Sweep (REPL/Macro Root-Scope Helpers)
 
 ### Summary

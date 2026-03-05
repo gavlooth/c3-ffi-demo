@@ -3598,9 +3598,46 @@ fn void run_memory_lifetime_tco_frame_budget_test(Interp* interp, int* pass, int
     }
 }
 
+fn void run_memory_lifetime_tco_boundary_state_restore_test(Interp* interp, int* pass, int* fail) {
+    // Invariant: TCO recycle/env-copy boundary paths restore interpreter scope state.
+    {
+        main::ScopeRegion* saved_scope = interp.current_scope;
+        main::ScopeRegion* saved_releasing = interp.releasing_scope;
+
+        EvalResult r = run(
+            "(let ^rec (loop (lambda (n acc) "
+            "  (if (= n 2000) "
+            "      acc "
+            "      (loop (+ n 1) (+ acc 1))))) "
+            "  (loop 0 0))",
+            interp);
+
+        bool ok_eval = !r.error.has_error &&
+                       r.value != null &&
+                       r.value.tag == INT &&
+                       r.value.int_val == 2000;
+        bool ok_state = interp.current_scope == saved_scope &&
+                        interp.releasing_scope == saved_releasing;
+        bool ok = ok_eval && ok_state;
+
+        if (ok) {
+            emit_pass_literal("[PASS] lifetime: tco boundary state restore");
+            (*pass)++;
+        } else {
+            io::printfn("[FAIL] lifetime: tco boundary state restore (ok_eval=%s ok_state=%s scope_match=%s releasing_match=%s)",
+                ok_eval ? "yes" : "no",
+                ok_state ? "yes" : "no",
+                interp.current_scope == saved_scope ? "yes" : "no",
+                interp.releasing_scope == saved_releasing ? "yes" : "no");
+            (*fail)++;
+        }
+    }
+}
+
 fn void run_memory_lifetime_hot_budget_tests(Interp* interp, int* pass, int* fail) {
     run_memory_lifetime_jit_copy_hot_budget_test(interp, pass, fail);
     run_memory_lifetime_tco_frame_budget_test(interp, pass, fail);
+    run_memory_lifetime_tco_boundary_state_restore_test(interp, pass, fail);
 }
 
 fn void run_memory_lifetime_promotion_context_memo_test(Interp* interp, int* pass, int* fail) {
