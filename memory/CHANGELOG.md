@@ -28,7 +28,10 @@ Extended scheduler boundary-hardening coverage with a focused regression that co
 ### Validation
 - `c3c build`
 - `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
-  - `Unified: 1195 passed, 0 failed`
+  - `Unified: 1196 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `OMNI_FIBER_TEMP=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1196 passed, 0 failed`
   - `Compiler: 73 passed, 0 failed`
 - `c3c clean && c3c build --sanitize=address`
 - ASAN repeated full-run probe (`detect_leaks=1:halt_on_error=1:abort_on_error=1`, 3 runs):

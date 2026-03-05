@@ -207,7 +207,8 @@ Execution policy:
     - `tco_recycle_scope`, `tco_scope_defer_slot`, `tco_scope_defer_active`
     - `escape_env_mode`, `active_promotion_ctx`
 - Validation:
-  - normal full suite: pass (`Unified 1195/0`, `Compiler 73/0`)
+  - normal full suite: pass (`Unified 1196/0`, `Compiler 73/0`)
+  - normal full suite with `OMNI_FIBER_TEMP=1`: pass (`Unified 1196/0`, `Compiler 73/0`)
   - strict ASAN repeated full-run probe (3 runs): all pass (`Unified 1195/0`, `Compiler 73/0` each).
 
 ### Post-44 Continuation Snapshot (Sessions 45-68)
