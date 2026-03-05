@@ -526,6 +526,24 @@ Execution policy:
   - normal full suite green,
   - strict ASAN suite green.
 
+### Session 175 Follow-up (2026-03-05): Promotion-Copy Closure Split + Wrapper Regression
+
+- Decomposed `copy_closure_to_parent(...)` into explicit policy + payload helpers:
+  - `copy_parent_closure_in_releasing_scope(...)`
+  - `copy_parent_should_reuse_closure(...)`
+  - `copy_parent_clone_closure_payload(...)`
+- Added boundary regression in `tests_tests.c3`:
+  - `run_memory_lifetime_wrapper_reuse_vs_defensive_copy_test(...)`
+  - verifies:
+    - wrapper fast-reuse in target chain,
+    - defensive wrapper copy for disjoint scope values,
+    - copied-wrapper survival/refcount behavior after source scope release.
+- Scope:
+  - behavior-preserving decomposition + focused lifetime invariant lock-in.
+- Validation:
+  - normal full suite green,
+  - strict ASAN suite green.
+
 ## Global Gates (run after every commit)
 
 ```bash

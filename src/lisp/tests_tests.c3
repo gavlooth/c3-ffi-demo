@@ -3046,6 +3046,72 @@ fn void run_memory_lifetime_boundary_scope_restore_tests(Interp* interp, int* pa
     }
 }
 
+fn void run_memory_lifetime_wrapper_reuse_vs_defensive_copy_test(Interp* interp, int* pass, int* fail) {
+    // Invariant: wrapper values in target chain are reused, while disjoint wrappers are defensively copied.
+    {
+        main::ScopeRegion* saved = interp.current_scope;
+        main::ScopeRegion* target = main::scope_create(saved);
+        main::ScopeRegion* releasing = main::scope_create(saved);
+        main::ScopeRegion* foreign = main::scope_create(saved);
+        if (target == null || releasing == null || foreign == null) {
+            if (foreign != null) main::scope_release(foreign);
+            if (releasing != null) main::scope_release(releasing);
+            if (target != null) main::scope_release(target);
+            io::printn("[FAIL] lifetime: wrapper reuse vs defensive copy");
+            (*fail)++;
+            return;
+        }
+
+        interp.current_scope = target;
+        void* h_reuse = mem::malloc(8);
+        Value* reusable = make_ffi_handle_ex(interp, h_reuse, "__reuse", null, true);
+
+        interp.current_scope = foreign;
+        void* h_foreign = mem::malloc(8);
+        Value* disjoint = make_ffi_handle_ex(interp, h_foreign, "__disjoint", null, true);
+
+        interp.current_scope = target;
+        interp.releasing_scope = releasing;
+
+        Value* reused = copy_to_parent(reusable, interp);
+        Value* copied = copy_to_parent(disjoint, interp);
+
+        bool reuse_ok = reused == reusable;
+        bool copied_ok = copied != null &&
+                         copied.tag == FFI_HANDLE &&
+                         copied != disjoint &&
+                         copied.ffi_val != null &&
+                         copied.ffi_val == disjoint.ffi_val &&
+                         copied.ffi_val.refcount == 2;
+
+        main::scope_release(foreign);
+
+        bool post_ok = copied != null &&
+                       copied.tag == FFI_HANDLE &&
+                       copied.ffi_val != null &&
+                       copied.ffi_val.refcount == 1;
+
+        interp.releasing_scope = null;
+        interp.current_scope = saved;
+        main::scope_release(releasing);
+        main::scope_release(target);
+
+        bool ok = reusable != null && disjoint != null && reuse_ok && copied_ok && post_ok;
+        if (ok) {
+            emit_pass_literal("[PASS] lifetime: wrapper reuse vs defensive copy");
+            (*pass)++;
+        } else {
+            io::printfn("[FAIL] lifetime: wrapper reuse vs defensive copy (reusable=%s disjoint=%s reuse_ok=%s copied_ok=%s post_ok=%s)",
+                reusable != null ? "yes" : "no",
+                disjoint != null ? "yes" : "no",
+                reuse_ok ? "yes" : "no",
+                copied_ok ? "yes" : "no",
+                post_ok ? "yes" : "no");
+            (*fail)++;
+        }
+    }
+}
+
 fn void run_memory_lifetime_env_copy_memo_tests(Interp* interp, int* pass, int* fail) {
     // Invariant: env copy uses one boundary epoch and memoizes repeated values.
     // This keeps copy_env_to_scope churn bounded for shared captured values.
@@ -3516,6 +3582,7 @@ fn void run_memory_lifetime_regression_tests(Interp* interp, int* pass, int* fai
     run_memory_lifetime_lane_barrier_tests(interp, pass, fail);
     run_memory_lifetime_root_fallback_tests(interp, pass, fail);
     run_memory_lifetime_boundary_scope_restore_tests(interp, pass, fail);
+    run_memory_lifetime_wrapper_reuse_vs_defensive_copy_test(interp, pass, fail);
     run_memory_lifetime_env_copy_escape_mode_tests(interp, pass, fail);
     run_memory_lifetime_hot_budget_tests(interp, pass, fail);
     run_memory_lifetime_promotion_context_tests(interp, pass, fail);

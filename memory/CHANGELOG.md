@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026-03-05: Session 175 - Promotion-Copy Decomposition + Wrapper Boundary Regression
+
+### Summary
+Continued boundary hardening by splitting closure-copy policy from closure materialization in `copy_to_parent`, and added a focused regression test for wrapper reuse vs defensive copy behavior across scope boundaries.
+
+### What changed
+- `src/lisp/eval_promotion_copy.c3`
+  - Added closure decision helpers:
+    - `copy_parent_closure_in_releasing_scope(...)`
+    - `copy_parent_should_reuse_closure(...)`
+  - Added closure materialization helper:
+    - `copy_parent_clone_closure_payload(...)`
+  - Routed `copy_closure_to_parent(...)` through policy+payload helpers.
+- `src/lisp/tests_tests.c3`
+  - Added `run_memory_lifetime_wrapper_reuse_vs_defensive_copy_test(...)`.
+  - Covers:
+    - reuse path for wrappers already in target chain,
+    - defensive-copy path for disjoint wrapper values,
+    - post-release refcount/liveness behavior on copied wrapper.
+  - Wired into `run_memory_lifetime_regression_tests(...)`.
+
+### Why this matters
+- Further separates decision logic from mutation logic in a hot lifetime path.
+- Locks in an easy-to-regress ownership invariant with explicit tests.
+- Keeps progression aligned with audited boundary-hardening goals before deeper Fiber TEMP steps.
+
+### Validation
+- `c3c build`
+- `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+- `c3c clean && c3c build --sanitize=address`
+- `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+
 ## 2026-03-05: Session 174 - Env-Copy Decision/Mutation Split
 
 ### Summary

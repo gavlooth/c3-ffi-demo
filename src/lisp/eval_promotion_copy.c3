@@ -45,38 +45,46 @@ fn Value* copy_cons_to_parent(Value* v, Interp* interp) {
     return head;
 }
 
-fn Value* copy_closure_to_parent(Value* v, Interp* interp) {
-    bool closure_in_releasing_scope =
-        interp.releasing_scope != null &&
-        (v.closure_val.scope_gen == interp.releasing_scope.generation ||
-         main::scope_contains(interp.releasing_scope, (void*)v.closure_val));
-    if (!closure_in_releasing_scope && in_target_scope_chain((void*)v, interp)) {
-        return v;
-    }
+fn bool copy_parent_closure_in_releasing_scope(Value* v, Interp* interp) @inline {
+    if (interp.releasing_scope == null) return false;
+    return v.closure_val.scope_gen == interp.releasing_scope.generation ||
+        main::scope_contains(interp.releasing_scope, (void*)v.closure_val);
+}
 
-    Value* result = interp.alloc_value();
+fn bool copy_parent_should_reuse_closure(Value* v, Interp* interp) @inline {
+    if (copy_parent_closure_in_releasing_scope(v, interp)) return false;
+    return boundary_ptr_in_target_scope_chain((void*)v, interp);
+}
+
+fn void copy_parent_clone_closure_payload(Value* result, Value* src, Interp* interp) {
     result.tag = CLOSURE;
     result.closure_val = (Closure*)interp.current_scope.alloc(Closure.sizeof);
-    *result.closure_val = *v.closure_val;
+    *result.closure_val = *src.closure_val;
     result.closure_val.scope_gen = interp.current_scope.generation;
 
-    if (v.closure_val.param_count > 0) {
-        result.closure_val.params = (SymbolId*)interp.current_scope.alloc(SymbolId.sizeof * v.closure_val.param_count);
-        for (usz i = 0; i < v.closure_val.param_count; i++) {
-            result.closure_val.params[i] = v.closure_val.params[i];
+    if (src.closure_val.param_count > 0) {
+        result.closure_val.params = (SymbolId*)interp.current_scope.alloc(SymbolId.sizeof * src.closure_val.param_count);
+        for (usz i = 0; i < src.closure_val.param_count; i++) {
+            result.closure_val.params[i] = src.closure_val.params[i];
         }
     } else {
         result.closure_val.params = null;
     }
 
-    if (v.closure_val.type_sig != null) {
+    if (src.closure_val.type_sig != null) {
         result.closure_val.type_sig = (MethodSignature*)interp.current_scope.alloc(MethodSignature.sizeof);
-        *result.closure_val.type_sig = *v.closure_val.type_sig;
+        *result.closure_val.type_sig = *src.closure_val.type_sig;
     }
 
     if (result.closure_val.env_scope != null) {
         result.closure_val.env_scope.refcount++;
     }
+}
+
+fn Value* copy_closure_to_parent(Value* v, Interp* interp) {
+    if (copy_parent_should_reuse_closure(v, interp)) return v;
+    Value* result = interp.alloc_value();
+    copy_parent_clone_closure_payload(result, v, interp);
     main::scope_register_dtor(interp.current_scope, (void*)result, &scope_dtor_closure);
     return result;
 }
