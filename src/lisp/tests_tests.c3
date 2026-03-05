@@ -1718,6 +1718,41 @@ fn void scheduler_test_restore_no_async(void* saved_async) {
     g_scheduler.async_handle = saved_async;
 }
 
+fn void scheduler_test_prepare_single_fiber_no_async(void** saved_async, FiberState state) {
+    scheduler_test_prepare_no_async(saved_async);
+    g_scheduler.fiber_count = 1;
+    g_scheduler.current_fiber_id = NO_FIBER;
+    g_scheduler.fibers[0] = {};
+    g_scheduler.fibers[0].state = state;
+}
+
+fn void scheduler_test_prepare_blocked_pending_read(void** saved_async) {
+    scheduler_test_prepare_single_fiber_no_async(saved_async, FIBER_BLOCKED);
+    g_scheduler.pending_reads[0] = {};
+    g_scheduler.pending_reads[0].active = true;
+}
+
+fn void scheduler_test_prepare_blocked_pending_offload(void** saved_async) {
+    scheduler_test_prepare_single_fiber_no_async(saved_async, FIBER_BLOCKED);
+    g_scheduler.pending_offloads[0] = {};
+    g_scheduler.pending_offloads[0].active = true;
+}
+
+fn void scheduler_test_cleanup_single_fiber_no_async(void* saved_async) {
+    if (g_scheduler.pending_reads[0].buffer != null) {
+        mem::free(g_scheduler.pending_reads[0].buffer);
+    }
+    if (g_scheduler.pending_offloads[0].completion != null) {
+        scheduler_free_offload_completion(g_scheduler.pending_offloads[0].completion);
+    }
+    g_scheduler.pending_reads[0] = {};
+    g_scheduler.pending_offloads[0] = {};
+    g_scheduler.fibers[0] = {};
+    g_scheduler.fiber_count = 0;
+    scheduler_reset_wakeup_queue();
+    scheduler_test_restore_no_async(saved_async);
+}
+
 fn void run_scheduler_wakeup_smoke_test(int* pass, int* fail) {
     void* saved_async = null;
     scheduler_test_prepare_no_async(&saved_async);
@@ -1764,14 +1799,7 @@ fn void run_scheduler_wakeup_wraparound_test(int* pass, int* fail) {
 
 fn void run_scheduler_timer_wakeup_test(int* pass, int* fail) {
     void* saved_async = null;
-    scheduler_test_prepare_no_async(&saved_async);
-
-    g_scheduler.fiber_count = 1;
-    g_scheduler.current_fiber_id = NO_FIBER;
-    g_scheduler.fibers[0] = {};
-    g_scheduler.fibers[0].state = FIBER_BLOCKED;
-    g_scheduler.pending_reads[0] = {};
-    g_scheduler.pending_reads[0].active = true;
+    scheduler_test_prepare_blocked_pending_read(&saved_async);
 
     bool pushed = wakeup_enqueue(WAKEUP_TIMER_EXPIRED, 0, 0, null);
     drain_wakeups();
@@ -1781,11 +1809,7 @@ fn void run_scheduler_timer_wakeup_test(int* pass, int* fail) {
               g_scheduler.pending_reads[0].completed &&
               g_scheduler.fibers[0].state == FIBER_READY;
 
-    g_scheduler.pending_reads[0] = {};
-    g_scheduler.fibers[0] = {};
-    g_scheduler.fiber_count = 0;
-    scheduler_reset_wakeup_queue();
-    scheduler_test_restore_no_async(saved_async);
+    scheduler_test_cleanup_single_fiber_no_async(saved_async);
 
     if (ok) {
         emit_pass_literal("[PASS] timer wakeup transitions in drain");
@@ -2442,14 +2466,7 @@ fn void run_scheduler_wakeup_mixed_event_boundary_tests(Interp* interp, int* pas
 
     for (usz i = 0; i < 12; i++) {
         void* saved_async = null;
-        scheduler_test_prepare_no_async(&saved_async);
-
-        g_scheduler.fiber_count = 1;
-        g_scheduler.current_fiber_id = NO_FIBER;
-        g_scheduler.fibers[0] = {};
-        g_scheduler.fibers[0].state = FIBER_BLOCKED;
-        g_scheduler.pending_reads[0] = {};
-        g_scheduler.pending_reads[0].active = true;
+        scheduler_test_prepare_blocked_pending_read(&saved_async);
 
         bool poll_first = (i & 1) == 0;
         bool pushed_a = false;
@@ -2490,11 +2507,7 @@ fn void run_scheduler_wakeup_mixed_event_boundary_tests(Interp* interp, int* pas
             }
         }
 
-        g_scheduler.pending_reads[0] = {};
-        g_scheduler.fibers[0] = {};
-        g_scheduler.fiber_count = 0;
-        scheduler_reset_wakeup_queue();
-        scheduler_test_restore_no_async(saved_async);
+        scheduler_test_cleanup_single_fiber_no_async(saved_async);
 
         if (!ok) break;
     }
@@ -2904,11 +2917,7 @@ fn void run_scheduler_consume_pending_tcp_read_boundary_tests(Interp* interp, in
 
     for (usz i = 0; i < 16; i++) {
         void* saved_async = null;
-        scheduler_test_prepare_no_async(&saved_async);
-
-        g_scheduler.fiber_count = 1;
-        g_scheduler.current_fiber_id = NO_FIBER;
-        g_scheduler.fibers[0] = {};
+        scheduler_test_prepare_single_fiber_no_async(&saved_async, FIBER_READY);
         g_scheduler.pending_reads[0] = {};
 
         // Phase A: consume before completion should fail.
@@ -2956,14 +2965,7 @@ fn void run_scheduler_consume_pending_tcp_read_boundary_tests(Interp* interp, in
             }
         }
 
-        if (g_scheduler.pending_reads[0].buffer != null) {
-            mem::free(g_scheduler.pending_reads[0].buffer);
-        }
-        g_scheduler.pending_reads[0] = {};
-        g_scheduler.fibers[0] = {};
-        g_scheduler.fiber_count = 0;
-        scheduler_reset_wakeup_queue();
-        scheduler_test_restore_no_async(saved_async);
+        scheduler_test_cleanup_single_fiber_no_async(saved_async);
 
         if (!ok) break;
     }
@@ -3145,14 +3147,7 @@ fn void run_scheduler_wakeup_ready_barrier_boundary_tests(Interp* interp, int* p
     SchedulerBoundarySnapshot saved = scheduler_capture_runtime_boundary_snapshot(interp);
 
     void* saved_async = null;
-    scheduler_test_prepare_no_async(&saved_async);
-
-    g_scheduler.fiber_count = 1;
-    g_scheduler.current_fiber_id = NO_FIBER;
-    g_scheduler.fibers[0] = {};
-    g_scheduler.fibers[0].state = FIBER_BLOCKED;
-    g_scheduler.pending_reads[0] = {};
-    g_scheduler.pending_reads[0].active = true;
+    scheduler_test_prepare_blocked_pending_read(&saved_async);
 
     WakeupEvent ev0 = {};
     ev0.fiber_id = 0;
@@ -3191,11 +3186,7 @@ fn void run_scheduler_wakeup_ready_barrier_boundary_tests(Interp* interp, int* p
 
     bool ok = not_processed && processed_ordered && state_ok_first && state_ok_second;
 
-    g_scheduler.pending_reads[0] = {};
-    g_scheduler.fibers[0] = {};
-    g_scheduler.fiber_count = 0;
-    scheduler_reset_wakeup_queue();
-    scheduler_test_restore_no_async(saved_async);
+    scheduler_test_cleanup_single_fiber_no_async(saved_async);
 
     if (ok) {
         emit_pass_literal("[PASS] scheduler wakeup ready-barrier boundary restore");

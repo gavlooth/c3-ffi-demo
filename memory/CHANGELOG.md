@@ -1,5 +1,41 @@
 # Changelog
 
+## 2026-03-05: Session 206 - Scheduler Single-Fiber Test Setup/Cleanup Helper Roll-In
+
+### Summary
+Reduced scheduler boundary-test duplication by introducing shared single-fiber test setup/cleanup helpers and migrating high-duplication pending-read paths to them.
+
+### What changed
+- `src/lisp/tests_tests.c3`
+  - Added shared helpers:
+    - `scheduler_test_prepare_single_fiber_no_async(...)`
+    - `scheduler_test_prepare_blocked_pending_read(...)`
+    - `scheduler_test_prepare_blocked_pending_offload(...)`
+    - `scheduler_test_cleanup_single_fiber_no_async(...)`
+  - Migrated selected scheduler tests to helper usage:
+    - `run_scheduler_timer_wakeup_test(...)`
+    - `run_scheduler_wakeup_mixed_event_boundary_tests(...)`
+    - `run_scheduler_consume_pending_tcp_read_boundary_tests(...)`
+    - `run_scheduler_wakeup_ready_barrier_boundary_tests(...)`
+  - Consolidated repeated local teardown logic (pending buffer/completion cleanup, fiber reset, wakeup reset, async restore) into one shared path.
+
+### Why this matters
+- Scheduler boundary tests were accumulating repeated setup/teardown blocks with subtle variation risk.
+- Shared helpers centralize cleanup semantics and reduce maintenance surface while preserving deterministic test behavior.
+
+### Validation
+- `c3c build`
+- `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1205 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `c3c clean && c3c build --sanitize=address`
+- `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1204 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `OMNI_FIBER_TEMP=1 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1204 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+
 ## 2026-03-05: Session 205 - Complete Scheduler Snapshot Matcher Rollout
 
 ### Summary

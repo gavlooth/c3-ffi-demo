@@ -361,6 +361,21 @@ Execution policy:
   - strict ASAN full suite: pass (`Unified 1204/0`, `Compiler 73/0`)
   - strict ASAN full suite with `OMNI_FIBER_TEMP=1`: pass (`Unified 1204/0`, `Compiler 73/0`)
 
+### Session 206 Follow-up (2026-03-05): Single-Fiber Scheduler Test Helper Roll-In
+
+- Added shared scheduler test setup/teardown helpers in `src/lisp/tests_tests.c3`:
+  - `scheduler_test_prepare_single_fiber_no_async(...)`
+  - `scheduler_test_prepare_blocked_pending_read(...)`
+  - `scheduler_test_prepare_blocked_pending_offload(...)`
+  - `scheduler_test_cleanup_single_fiber_no_async(...)`
+- Migrated high-duplication pending-read-focused scheduler tests to helper usage:
+  - timer wakeup, mixed wakeup-event boundary, tcp-read consume boundary, and wakeup ready-barrier boundary tests.
+- Goal: reduce repeated setup/cleanup drift risk while preserving deterministic behavior.
+- Validation:
+  - normal full suite: pass (`Unified 1205/0`, `Compiler 73/0`)
+  - strict ASAN full suite: pass (`Unified 1204/0`, `Compiler 73/0`)
+  - strict ASAN full suite with `OMNI_FIBER_TEMP=1`: pass (`Unified 1204/0`, `Compiler 73/0`)
+
 ### Post-44 Continuation Snapshot (Sessions 45-68)
 
 - Boundary API expansion and caller migration completed across eval/jit/env/value/module paths.
