@@ -376,6 +376,16 @@ Execution policy:
   - strict ASAN full suite: pass (`Unified 1204/0`, `Compiler 73/0`)
   - strict ASAN full suite with `OMNI_FIBER_TEMP=1`: pass (`Unified 1204/0`, `Compiler 73/0`)
 
+### Session 207 Follow-up (2026-03-05): Offload Boundary Helper Migration
+
+- Continued helper roll-in across offload-focused scheduler boundary tests in `src/lisp/tests_tests.c3`:
+  - migrated duplicate-offload-ready and consume-pending-offload boundary tests to shared single-fiber setup/cleanup helpers.
+- Reduced repeated reset/cleanup code while preserving phase-level boundary assertions.
+- Validation:
+  - normal full suite: pass (`Unified 1205/0`, `Compiler 73/0`)
+  - strict ASAN full suite: pass (`Unified 1204/0`, `Compiler 73/0`)
+  - strict ASAN full suite with `OMNI_FIBER_TEMP=1`: pass (`Unified 1204/0`, `Compiler 73/0`)
+
 ### Post-44 Continuation Snapshot (Sessions 45-68)
 
 - Boundary API expansion and caller migration completed across eval/jit/env/value/module paths.

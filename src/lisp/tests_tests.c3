@@ -2602,14 +2602,7 @@ fn void run_scheduler_duplicate_offload_ready_boundary_tests(Interp* interp, int
 
     for (usz i = 0; i < 16; i++) {
         void* saved_async = null;
-        scheduler_test_prepare_no_async(&saved_async);
-
-        g_scheduler.fiber_count = 1;
-        g_scheduler.current_fiber_id = NO_FIBER;
-        g_scheduler.fibers[0] = {};
-        g_scheduler.fibers[0].state = FIBER_BLOCKED;
-        g_scheduler.pending_offloads[0] = {};
-        g_scheduler.pending_offloads[0].active = true;
+        scheduler_test_prepare_blocked_pending_offload(&saved_async);
 
         OffloadCompletion* c1 = scheduler_make_task_cancel_completion();
         OffloadCompletion* c2 = scheduler_make_task_cancel_completion();
@@ -2619,11 +2612,7 @@ fn void run_scheduler_duplicate_offload_ready_boundary_tests(Interp* interp, int
             ok = false;
             failed_step = i;
             failed_phase = "alloc";
-            g_scheduler.pending_offloads[0] = {};
-            g_scheduler.fibers[0] = {};
-            g_scheduler.fiber_count = 0;
-            scheduler_reset_wakeup_queue();
-            scheduler_test_restore_no_async(saved_async);
+            scheduler_test_cleanup_single_fiber_no_async(saved_async);
             break;
         }
 
@@ -2641,11 +2630,7 @@ fn void run_scheduler_duplicate_offload_ready_boundary_tests(Interp* interp, int
             ok = false;
             failed_step = i;
             failed_phase = "enqueue";
-            g_scheduler.pending_offloads[0] = {};
-            g_scheduler.fibers[0] = {};
-            g_scheduler.fiber_count = 0;
-            scheduler_reset_wakeup_queue();
-            scheduler_test_restore_no_async(saved_async);
+            scheduler_test_cleanup_single_fiber_no_async(saved_async);
             break;
         }
 
@@ -2699,14 +2684,7 @@ fn void run_scheduler_duplicate_offload_ready_boundary_tests(Interp* interp, int
             }
         }
 
-        if (g_scheduler.pending_offloads[0].completion != null) {
-            scheduler_free_offload_completion(g_scheduler.pending_offloads[0].completion);
-        }
-        g_scheduler.pending_offloads[0] = {};
-        g_scheduler.fibers[0] = {};
-        g_scheduler.fiber_count = 0;
-        scheduler_reset_wakeup_queue();
-        scheduler_test_restore_no_async(saved_async);
+        scheduler_test_cleanup_single_fiber_no_async(saved_async);
 
         if (!ok) break;
     }
@@ -2735,11 +2713,7 @@ fn void run_scheduler_consume_pending_offload_boundary_tests(Interp* interp, int
 
     for (usz i = 0; i < 16; i++) {
         void* saved_async = null;
-        scheduler_test_prepare_no_async(&saved_async);
-
-        g_scheduler.fiber_count = 1;
-        g_scheduler.current_fiber_id = NO_FIBER;
-        g_scheduler.fibers[0] = {};
+        scheduler_test_prepare_single_fiber_no_async(&saved_async, FIBER_READY);
         g_scheduler.pending_offloads[0] = {};
 
         // Phase A: consume before completion should fail.
@@ -2830,14 +2804,7 @@ fn void run_scheduler_consume_pending_offload_boundary_tests(Interp* interp, int
             }
         }
 
-        if (g_scheduler.pending_offloads[0].completion != null) {
-            scheduler_free_offload_completion(g_scheduler.pending_offloads[0].completion);
-        }
-        g_scheduler.pending_offloads[0] = {};
-        g_scheduler.fibers[0] = {};
-        g_scheduler.fiber_count = 0;
-        scheduler_reset_wakeup_queue();
-        scheduler_test_restore_no_async(saved_async);
+        scheduler_test_cleanup_single_fiber_no_async(saved_async);
 
         if (!ok) break;
     }

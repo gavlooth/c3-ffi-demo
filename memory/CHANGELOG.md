@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-03-05: Session 207 - Offload Boundary Tests Helper Roll-In
+
+### Summary
+Extended the single-fiber scheduler test helper migration into offload-focused boundary regressions, reducing repeated setup/teardown and cleanup boilerplate while preserving behavior.
+
+### What changed
+- `src/lisp/tests_tests.c3`
+  - Migrated helper usage in offload boundary tests:
+    - `run_scheduler_duplicate_offload_ready_boundary_tests(...)`
+    - `run_scheduler_consume_pending_offload_boundary_tests(...)`
+  - Replaced repeated manual setup/reset blocks with:
+    - `scheduler_test_prepare_blocked_pending_offload(...)` or
+    - `scheduler_test_prepare_single_fiber_no_async(...)`
+    - `scheduler_test_cleanup_single_fiber_no_async(...)`
+  - Kept completion-specific assertions and phase semantics unchanged.
+
+### Why this matters
+- Session 206 rolled helpers into pending-read-centric tests; offload tests still had duplicated teardown code.
+- This keeps cleanup semantics centralized across both read/offload scheduler boundary tests and lowers future drift risk.
+
+### Validation
+- `c3c build`
+- `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1205 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `c3c clean && c3c build --sanitize=address`
+- `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1204 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `OMNI_FIBER_TEMP=1 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1204 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+
 ## 2026-03-05: Session 206 - Scheduler Single-Fiber Test Setup/Cleanup Helper Roll-In
 
 ### Summary
