@@ -1718,6 +1718,11 @@ fn void scheduler_test_restore_no_async(void* saved_async) {
     g_scheduler.async_handle = saved_async;
 }
 
+fn void scheduler_test_cleanup_no_async(void* saved_async) {
+    scheduler_reset_wakeup_queue();
+    scheduler_test_restore_no_async(saved_async);
+}
+
 fn void scheduler_test_prepare_single_fiber_no_async(void** saved_async, FiberState state) {
     scheduler_test_prepare_no_async(saved_async);
     g_scheduler.fiber_count = 1;
@@ -1761,7 +1766,7 @@ fn void run_scheduler_wakeup_smoke_test(int* pass, int* fail) {
     drain_wakeups();
     usz head = g_scheduler.wakeup_head.load();
     usz tail = g_scheduler.wakeup_tail.load();
-    scheduler_test_restore_no_async(saved_async);
+    scheduler_test_cleanup_no_async(saved_async);
 
     if (pushed && head == tail) {
         emit_pass_literal("[PASS] wakeup ring smoke");
@@ -1785,7 +1790,7 @@ fn void run_scheduler_wakeup_wraparound_test(int* pass, int* fail) {
     drain_wakeups();
     usz head = g_scheduler.wakeup_head.load();
     usz tail = g_scheduler.wakeup_tail.load();
-    scheduler_test_restore_no_async(saved_async);
+    scheduler_test_cleanup_no_async(saved_async);
 
     if (pushed == WAKEUP_RING_SIZE && overflow_rejected && head == tail) {
         emit_pass_literal("[PASS] wakeup ring wraparound");
@@ -2435,7 +2440,7 @@ fn void run_scheduler_wakeup_wraparound_boundary_tests(Interp* interp, int* pass
         drain_wakeups();
         usz head = g_scheduler.wakeup_head.load();
         usz tail = g_scheduler.wakeup_tail.load();
-        scheduler_test_restore_no_async(saved_async);
+        scheduler_test_cleanup_no_async(saved_async);
 
         bool state_ok = scheduler_runtime_boundary_matches_snapshot(interp, &saved);
         bool ring_ok = pushed == WAKEUP_RING_SIZE && overflow_rejected && head == tail;
@@ -2543,7 +2548,7 @@ fn void run_scheduler_invalid_offload_wakeup_boundary_tests(Interp* interp, int*
             ok = false;
             failed_step = i;
             failed_phase = "alloc";
-            scheduler_test_restore_no_async(saved_async);
+            scheduler_test_cleanup_no_async(saved_async);
             break;
         }
 
@@ -2554,7 +2559,7 @@ fn void run_scheduler_invalid_offload_wakeup_boundary_tests(Interp* interp, int*
             ok = false;
             failed_step = i;
             failed_phase = "enqueue";
-            scheduler_test_restore_no_async(saved_async);
+            scheduler_test_cleanup_no_async(saved_async);
             break;
         }
 
@@ -2564,7 +2569,7 @@ fn void run_scheduler_invalid_offload_wakeup_boundary_tests(Interp* interp, int*
         bool state_ok = scheduler_runtime_boundary_matches_snapshot(interp, &saved);
 
         bool drain_ok = pushed_err && head == tail;
-        scheduler_test_restore_no_async(saved_async);
+        scheduler_test_cleanup_no_async(saved_async);
         if (!drain_ok || !state_ok) {
             ok = false;
             failed_step = i;

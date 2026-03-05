@@ -386,6 +386,18 @@ Execution policy:
   - strict ASAN full suite: pass (`Unified 1204/0`, `Compiler 73/0`)
   - strict ASAN full suite with `OMNI_FIBER_TEMP=1`: pass (`Unified 1204/0`, `Compiler 73/0`)
 
+### Session 208 Follow-up (2026-03-05): No-Async Cleanup Helper Consolidation
+
+- Added shared helper `scheduler_test_cleanup_no_async(...)` in `src/lisp/tests_tests.c3`:
+  - wakeup queue reset + async-handle restore.
+- Migrated ring/no-async scheduler tests to use shared cleanup helper:
+  - wakeup smoke, wakeup wraparound, wakeup-wraparound boundary, invalid-offload-wakeup boundary.
+- Outcome: uniform no-async teardown semantics across scheduler boundary regressions.
+- Validation:
+  - normal full suite: pass (`Unified 1205/0`, `Compiler 73/0`)
+  - strict ASAN full suite: pass (`Unified 1204/0`, `Compiler 73/0`)
+  - strict ASAN full suite with `OMNI_FIBER_TEMP=1`: pass (`Unified 1204/0`, `Compiler 73/0`)
+
 ### Post-44 Continuation Snapshot (Sessions 45-68)
 
 - Boundary API expansion and caller migration completed across eval/jit/env/value/module paths.

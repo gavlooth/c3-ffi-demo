@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026-03-05: Session 208 - No-Async Scheduler Cleanup Helper Roll-In
+
+### Summary
+Added a shared no-async scheduler test cleanup helper and rolled it into ring-focused boundary tests to centralize wakeup-queue reset + async-handle restoration.
+
+### What changed
+- `src/lisp/tests_tests.c3`
+  - Added helper:
+    - `scheduler_test_cleanup_no_async(...)`
+      - resets wakeup queue,
+      - restores saved async handle.
+  - Migrated ring/no-async test teardown callsites to this helper:
+    - `run_scheduler_wakeup_smoke_test(...)`
+    - `run_scheduler_wakeup_wraparound_test(...)`
+    - `run_scheduler_wakeup_wraparound_boundary_tests(...)`
+    - `run_scheduler_invalid_offload_wakeup_boundary_tests(...)`
+
+### Why this matters
+- The scheduler test block had repeated no-async teardown sequences with slight variation risk.
+- Centralizing no-async cleanup keeps reset semantics uniform and reduces maintenance drift across boundary regressions.
+
+### Validation
+- `c3c build`
+- `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1205 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `c3c clean && c3c build --sanitize=address`
+- `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1204 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `OMNI_FIBER_TEMP=1 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1204 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+
 ## 2026-03-05: Session 207 - Offload Boundary Tests Helper Roll-In
 
 ### Summary
