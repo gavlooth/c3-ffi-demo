@@ -82,6 +82,20 @@ Execution policy:
   - normal full suite: pass (`Unified 1188/0`, `Compiler 73/0`)
   - strict ASAN full suite: pass (`Unified 1187/0`, `Compiler 73/0`)
 
+### Session 183 Follow-up (2026-03-05): JIT TCO Runtime-State Helper Consolidation
+
+- Consolidated remaining distributed TCO call-state transitions in `src/lisp/jit_jit_eval_scopes.c3`:
+  - added `JitCallScopeState` save/restore helpers,
+  - added recycle-scope set/activate helpers,
+  - routed single/call-scope defer registration failure cleanup through `boundary_pop_child_scope(...)`.
+- Added regression `run_memory_lifetime_tco_runtime_fields_restore_test(...)` in `src/lisp/tests_tests.c3`:
+  - validates runtime-field restore on both successful and erroring TCO runs:
+    `current_scope`, `releasing_scope`, `tco_recycle_scope`,
+    `tco_scope_defer_slot`, `tco_scope_defer_active`, `escape_env_mode`.
+- Validation:
+  - normal full suite: pass (`Unified 1189/0`, `Compiler 73/0`)
+  - strict ASAN full suite: pass (`Unified 1188/0`, `Compiler 73/0`)
+
 ### Post-44 Continuation Snapshot (Sessions 45-68)
 
 - Boundary API expansion and caller migration completed across eval/jit/env/value/module paths.

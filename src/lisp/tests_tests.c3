@@ -3668,10 +3668,71 @@ fn void run_memory_lifetime_tco_boundary_state_restore_test(Interp* interp, int*
     }
 }
 
+fn void run_memory_lifetime_tco_runtime_fields_restore_test(Interp* interp, int* pass, int* fail) {
+    // Invariant: TCO paths restore recycle/defer runtime fields on both success and error.
+    {
+        main::ScopeRegion* saved_scope = interp.current_scope;
+        main::ScopeRegion* saved_releasing = interp.releasing_scope;
+        main::ScopeRegion* saved_tco_recycle = interp.tco_recycle_scope;
+        usz saved_tco_slot = interp.tco_scope_defer_slot;
+        bool saved_tco_active = interp.tco_scope_defer_active;
+        bool saved_escape = interp.escape_env_mode;
+
+        EvalResult ok_run = run(
+            "(let ^rec (loop (lambda (n acc) "
+            "  (if (= n 1024) "
+            "      acc "
+            "      (loop (+ n 1) (+ acc 1))))) "
+            "  (loop 0 0))",
+            interp);
+        bool ok_eval = !ok_run.error.has_error &&
+                       ok_run.value != null &&
+                       ok_run.value.tag == INT &&
+                       ok_run.value.int_val == 1024;
+        bool ok_state_after_ok =
+            interp.current_scope == saved_scope &&
+            interp.releasing_scope == saved_releasing &&
+            interp.tco_recycle_scope == saved_tco_recycle &&
+            interp.tco_scope_defer_slot == saved_tco_slot &&
+            interp.tco_scope_defer_active == saved_tco_active &&
+            interp.escape_env_mode == saved_escape;
+
+        EvalResult err_run = run(
+            "(let ^rec (loop (lambda (n) "
+            "  (if (= n 256) "
+            "      (car 1) "
+            "      (loop (+ n 1))))) "
+            "  (loop 0))",
+            interp);
+        bool err_eval = err_run.error.has_error;
+        bool ok_state_after_err =
+            interp.current_scope == saved_scope &&
+            interp.releasing_scope == saved_releasing &&
+            interp.tco_recycle_scope == saved_tco_recycle &&
+            interp.tco_scope_defer_slot == saved_tco_slot &&
+            interp.tco_scope_defer_active == saved_tco_active &&
+            interp.escape_env_mode == saved_escape;
+
+        bool ok = ok_eval && err_eval && ok_state_after_ok && ok_state_after_err;
+        if (ok) {
+            emit_pass_literal("[PASS] lifetime: tco runtime fields restore");
+            (*pass)++;
+        } else {
+            io::printfn("[FAIL] lifetime: tco runtime fields restore (ok_eval=%s err_eval=%s state_ok=%s state_err=%s)",
+                ok_eval ? "yes" : "no",
+                err_eval ? "yes" : "no",
+                ok_state_after_ok ? "yes" : "no",
+                ok_state_after_err ? "yes" : "no");
+            (*fail)++;
+        }
+    }
+}
+
 fn void run_memory_lifetime_hot_budget_tests(Interp* interp, int* pass, int* fail) {
     run_memory_lifetime_jit_copy_hot_budget_test(interp, pass, fail);
     run_memory_lifetime_tco_frame_budget_test(interp, pass, fail);
     run_memory_lifetime_tco_boundary_state_restore_test(interp, pass, fail);
+    run_memory_lifetime_tco_runtime_fields_restore_test(interp, pass, fail);
 }
 
 fn void run_memory_lifetime_promotion_context_memo_test(Interp* interp, int* pass, int* fail) {

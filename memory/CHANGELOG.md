@@ -1,5 +1,51 @@
 # Changelog
 
+## 2026-03-05: Session 183 - JIT TCO Call-State Helper Consolidation + Runtime-Field Regression
+
+### Summary
+Reduced remaining distributed TCO call-state mutations in JIT scope wrappers by introducing helper-level save/restore and recycle-state setters, and added regression coverage to ensure TCO runtime fields restore on both success and error.
+
+### What changed
+- `src/lisp/jit_jit_eval_scopes.c3`
+  - Added helper abstractions:
+    - `jit_set_active_recycle_scope(...)`
+    - `JitCallScopeState`
+    - `jit_save_call_scope_state(...)`
+    - `jit_restore_call_scope_state(...)`
+    - `jit_activate_call_scope_recycle(...)`
+  - Routed existing paths through helpers:
+    - `jit_prepare_tco_recycle(...)` fast/fallback scope retargeting.
+    - `jit_eval_in_call_scope(...)` TCO/defer/escape/current scope state restore.
+  - Replaced manual child-scope rollback on defer registration failure with `boundary_pop_child_scope(...)` in:
+    - `jit_eval_in_single_scope(...)`
+    - `jit_eval_in_call_scope(...)`
+  - Behavior preserved; changes are structural hardening only.
+- `src/lisp/tests_tests.c3`
+  - Added `run_memory_lifetime_tco_runtime_fields_restore_test(...)`.
+  - Verifies after both a successful and erroring TCO run:
+    - `current_scope`
+    - `releasing_scope`
+    - `tco_recycle_scope`
+    - `tco_scope_defer_slot`
+    - `tco_scope_defer_active`
+    - `escape_env_mode`
+    are restored to their pre-run values.
+  - Wired into `run_memory_lifetime_hot_budget_tests(...)`.
+
+### Why this matters
+- Continues the boundary-hardening objective: shrink ad-hoc runtime state transitions into audited helper surfaces.
+- Adds explicit regression signal for TCO runtime-field leakage, not only scope pointers.
+
+### Validation
+- `c3c build`
+- `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1189 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `c3c clean && c3c build --sanitize=address`
+- `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1188 passed, 0 failed` (JIT checks disabled under ASAN)
+  - `Compiler: 73 passed, 0 failed`
+
 ## 2026-03-05: Session 182 - run_program Boundary-State Regression Coverage
 
 ### Summary

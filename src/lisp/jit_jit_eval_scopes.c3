@@ -131,6 +131,45 @@ fn Value* jit_tco_recycle_restore_on_error(
     return raise_error(interp, msg);
 }
 
+fn void jit_set_active_recycle_scope(Interp* interp, main::ScopeRegion* scope) @inline {
+    interp.current_scope = scope;
+    interp.tco_recycle_scope = scope;
+    boundary_assert_interp_scope_chain(interp);
+}
+
+struct JitCallScopeState {
+    main::ScopeRegion* current_scope;
+    main::ScopeRegion* tco_recycle_scope;
+    usz tco_scope_defer_slot;
+    bool tco_scope_defer_active;
+    bool escape_env_mode;
+}
+
+fn JitCallScopeState jit_save_call_scope_state(Interp* interp) @inline {
+    return {
+        .current_scope = interp.current_scope,
+        .tco_recycle_scope = interp.tco_recycle_scope,
+        .tco_scope_defer_slot = interp.tco_scope_defer_slot,
+        .tco_scope_defer_active = interp.tco_scope_defer_active,
+        .escape_env_mode = interp.escape_env_mode,
+    };
+}
+
+fn void jit_restore_call_scope_state(Interp* interp, JitCallScopeState saved) @inline {
+    interp.current_scope = saved.current_scope;
+    interp.tco_recycle_scope = saved.tco_recycle_scope;
+    interp.tco_scope_defer_slot = saved.tco_scope_defer_slot;
+    interp.tco_scope_defer_active = saved.tco_scope_defer_active;
+    interp.escape_env_mode = saved.escape_env_mode;
+    boundary_assert_interp_scope_chain(interp);
+}
+
+fn void jit_activate_call_scope_recycle(Interp* interp, main::ScopeRegion* call_scope, usz defer_slot, bool defer_active) @inline {
+    interp.tco_recycle_scope = call_scope;
+    interp.tco_scope_defer_slot = defer_slot;
+    interp.tco_scope_defer_active = defer_active;
+}
+
 fn Value* jit_prepare_tco_recycle(
     Env** env_io,
     Env* saved_env,
@@ -150,9 +189,7 @@ fn Value* jit_prepare_tco_recycle(
         // Fast path: loop env graph is detached from recyclable TEMP lane.
         // Recycle TEMP lane in-place and keep env as-is.
         main::scope_reset_temp_lane(cs);
-        interp.current_scope = cs;
-        interp.tco_recycle_scope = cs;
-        boundary_assert_interp_scope_chain(interp);
+        jit_set_active_recycle_scope(interp, cs);
         return null;
     }
 
@@ -163,8 +200,8 @@ fn Value* jit_prepare_tco_recycle(
         boundary_assert_interp_scope_chain(interp);
         return raise_error(interp, "jit: failed to allocate TCO recycle scope");
     }
-    interp.current_scope = fresh;
-    interp.tco_recycle_scope = fresh;  // Update: fresh is now the recyclable scope
+    // Update: fresh is now the recyclable scope.
+    jit_set_active_recycle_scope(interp, fresh);
     if (interp.tco_scope_defer_active) {
         main::StackCtx* defer_ctx = main::g_current_stack_ctx;
         if (defer_ctx == null) {
@@ -268,8 +305,7 @@ fn Value* jit_eval_in_single_scope(Expr* body, Env* call_env, Interp* interp) {
         init_scope_guard_defer_ops(&ops);
         registered_defer = main::stack_ctx_defer(current_ctx, &ops, (void*)call_scope);
         if (!registered_defer) {
-            interp.current_scope = saved_scope;
-            main::scope_release(call_scope);
+            boundary_pop_child_scope(interp, saved_scope, call_scope);
             return raise_error(interp, "jit: failed to register call-scope cleanup");
         }
     }
@@ -298,6 +334,7 @@ fn Value* jit_eval_in_single_scope(Expr* body, Env* call_env, Interp* interp) {
 // Unified lane model: one scope per call with TEMP+ESCAPE lanes.
 fn Value* jit_eval_in_call_scope(Expr* body, Env* call_env, Interp* interp, bool enable_escape_env) {
     boundary_assert_interp_scope_chain(interp);
+    JitCallScopeState saved_state = jit_save_call_scope_state(interp);
     main::ScopeRegion* saved_scope = null;
 
     // Unified one-scope lane model: TEMP recycles, ESCAPE splices.
@@ -307,7 +344,6 @@ fn Value* jit_eval_in_call_scope(Expr* body, Env* call_env, Interp* interp, bool
     }
     boundary_assert_interp_scope_chain(interp);
 
-    bool saved_escape_env = interp.escape_env_mode;
     if (enable_escape_env) {
         interp.escape_env_mode = true;
     }
@@ -321,20 +357,14 @@ fn Value* jit_eval_in_call_scope(Expr* body, Env* call_env, Interp* interp, bool
         defer_slot = current_ctx.defer_count;
         registered_defer = main::stack_ctx_defer(current_ctx, &ops, (void*)call_scope);
         if (!registered_defer) {
-            interp.escape_env_mode = saved_escape_env;
-            interp.current_scope = saved_scope;
-            main::scope_release(call_scope);
+            boundary_pop_child_scope(interp, saved_scope, call_scope);
+            jit_restore_call_scope_state(interp, saved_state);
             return raise_error(interp, "jit: failed to register call-scope cleanup");
         }
     }
 
     // Mark call_scope as eligible for TCO recycling.
-    main::ScopeRegion* saved_recycle = interp.tco_recycle_scope;
-    usz saved_defer_slot = interp.tco_scope_defer_slot;
-    bool saved_defer_active = interp.tco_scope_defer_active;
-    interp.tco_recycle_scope = call_scope;
-    interp.tco_scope_defer_slot = defer_slot;
-    interp.tco_scope_defer_active = registered_defer;
+    jit_activate_call_scope_recycle(interp, call_scope, defer_slot, registered_defer);
 
     Value* result = jit_eval(body, call_env, interp);
 
@@ -342,11 +372,7 @@ fn Value* jit_eval_in_call_scope(Expr* body, Env* call_env, Interp* interp, bool
     main::ScopeRegion* active_scope = interp.current_scope;
 
     // Restore saved state
-    interp.tco_recycle_scope = saved_recycle;
-    interp.tco_scope_defer_slot = saved_defer_slot;
-    interp.tco_scope_defer_active = saved_defer_active;
-    interp.escape_env_mode = saved_escape_env;
-    interp.current_scope = saved_scope;
+    jit_restore_call_scope_state(interp, saved_state);
     Value* final = jit_finalize_scoped_result(
         result,
         result,
