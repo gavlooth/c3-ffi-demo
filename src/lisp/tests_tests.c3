@@ -2599,6 +2599,109 @@ fn void run_scheduler_invalid_offload_wakeup_boundary_tests(Interp* interp, int*
     }
 }
 
+fn void run_scheduler_wakeup_ready_barrier_boundary_tests(Interp* interp, int* pass, int* fail) {
+    // Invariant: drain_wakeups must stop at the first unready slot and preserve FIFO order.
+    // Also verify interpreter boundary/runtime state remains unchanged.
+    main::ScopeRegion* saved_scope = interp.current_scope;
+    main::ScopeRegion* saved_releasing = interp.releasing_scope;
+    Env* saved_jit_env = interp.jit_env;
+    Env* saved_match_env = interp.match_env;
+    Expr* saved_jit_tco_expr = interp.jit_tco_expr;
+    Env* saved_jit_tco_env = interp.jit_tco_env;
+    main::ScopeRegion* saved_tco_recycle = interp.tco_recycle_scope;
+    usz saved_tco_slot = interp.tco_scope_defer_slot;
+    bool saved_tco_active = interp.tco_scope_defer_active;
+    bool saved_escape_mode = interp.escape_env_mode;
+    PromotionContext* saved_active_ctx = interp.active_promotion_ctx;
+
+    void* saved_async = null;
+    scheduler_test_prepare_no_async(&saved_async);
+
+    g_scheduler.fiber_count = 1;
+    g_scheduler.current_fiber_id = NO_FIBER;
+    g_scheduler.fibers[0] = {};
+    g_scheduler.fibers[0].state = FIBER_BLOCKED;
+    g_scheduler.pending_reads[0] = {};
+    g_scheduler.pending_reads[0].active = true;
+
+    WakeupEvent ev0 = {};
+    ev0.fiber_id = 0;
+    ev0.type = WAKEUP_TIMER_EXPIRED;
+    ev0.status = 0;
+    WakeupEvent ev1 = {};
+    ev1.fiber_id = 0;
+    ev1.type = WAKEUP_POLL_ERROR;
+    ev1.status = -29;
+    g_scheduler.wakeup_ring[0] = ev0;
+    g_scheduler.wakeup_ring[1] = ev1;
+    g_scheduler.wakeup_ready[0].store(false);
+    g_scheduler.wakeup_ready[1].store(true);
+    g_scheduler.wakeup_tail.store(0);
+    g_scheduler.wakeup_head.store(2);
+
+    drain_wakeups();
+    usz tail_after_block = g_scheduler.wakeup_tail.load();
+    bool not_processed = !g_scheduler.pending_reads[0].completed &&
+                         !g_scheduler.pending_reads[0].timed_out &&
+                         g_scheduler.pending_reads[0].error_code == 0 &&
+                         g_scheduler.fibers[0].state == FIBER_BLOCKED &&
+                         tail_after_block == 0;
+    bool state_ok_first = scheduler_runtime_boundary_fields_match(
+        interp,
+        saved_scope,
+        saved_releasing,
+        saved_jit_env,
+        saved_match_env,
+        saved_jit_tco_expr,
+        saved_jit_tco_env,
+        saved_tco_recycle,
+        saved_tco_slot,
+        saved_tco_active,
+        saved_escape_mode,
+        saved_active_ctx
+    );
+
+    g_scheduler.wakeup_ready[0].store(true);
+    drain_wakeups();
+    usz head_after_release = g_scheduler.wakeup_head.load();
+    usz tail_after_release = g_scheduler.wakeup_tail.load();
+    bool processed_ordered = g_scheduler.pending_reads[0].completed &&
+                             g_scheduler.pending_reads[0].timed_out &&
+                             g_scheduler.pending_reads[0].error_code == 0 &&
+                             g_scheduler.fibers[0].state == FIBER_READY &&
+                             head_after_release == tail_after_release;
+    bool state_ok_second = scheduler_runtime_boundary_fields_match(
+        interp,
+        saved_scope,
+        saved_releasing,
+        saved_jit_env,
+        saved_match_env,
+        saved_jit_tco_expr,
+        saved_jit_tco_env,
+        saved_tco_recycle,
+        saved_tco_slot,
+        saved_tco_active,
+        saved_escape_mode,
+        saved_active_ctx
+    );
+
+    bool ok = not_processed && processed_ordered && state_ok_first && state_ok_second;
+
+    g_scheduler.pending_reads[0] = {};
+    g_scheduler.fibers[0] = {};
+    g_scheduler.fiber_count = 0;
+    scheduler_reset_wakeup_queue();
+    scheduler_test_restore_no_async(saved_async);
+
+    if (ok) {
+        emit_pass_literal("[PASS] scheduler wakeup ready-barrier boundary restore");
+        (*pass)++;
+    } else {
+        io::printn("[FAIL] scheduler wakeup ready-barrier boundary restore");
+        (*fail)++;
+    }
+}
+
 fn void run_scheduler_mixed_boundary_state_restore_tests(Interp* interp, int* pass, int* fail) {
     // Invariant: mixed scheduler thread/offload paths (success + expected error)
     // preserve interpreter boundary/runtime state across iterations.
@@ -2865,6 +2968,7 @@ fn void run_scheduler_tests(Interp* interp, int* pass, int* fail) {
     run_scheduler_wakeup_wraparound_boundary_tests(interp, pass, fail);
     run_scheduler_wakeup_mixed_event_boundary_tests(interp, pass, fail);
     run_scheduler_invalid_offload_wakeup_boundary_tests(interp, pass, fail);
+    run_scheduler_wakeup_ready_barrier_boundary_tests(interp, pass, fail);
     run_scheduler_mixed_boundary_state_restore_tests(interp, pass, fail);
     run_scheduler_wakeup_offload_error_boundary_tests(interp, pass, fail);
 }

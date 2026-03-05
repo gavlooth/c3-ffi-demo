@@ -1,5 +1,43 @@
 # Changelog
 
+## 2026-03-05: Session 197 - Wakeup Ready-Barrier Boundary Regression
+
+### Summary
+Added scheduler regression coverage for wakeup ready-barrier ordering, asserting `drain_wakeups()` stops at the first unready slot, preserves FIFO processing, and leaves interpreter boundary/runtime state unchanged.
+
+### What changed
+- `src/lisp/tests_tests.c3`
+  - Added:
+    - `run_scheduler_wakeup_ready_barrier_boundary_tests(...)`
+  - Test constructs a controlled queue state:
+    - `wakeup_head=2`, `wakeup_tail=0`,
+    - slot 0 event unready, slot 1 event ready.
+  - Verifies first drain:
+    - no processing occurs (`tail` stays 0, pending read remains blocked/incomplete).
+  - Marks slot 0 ready and drains again; verifies ordered processing:
+    - pending read transitions to completed/timed-out,
+    - fiber transitions `FIBER_BLOCKED -> FIBER_READY`,
+    - queue converges (`head == tail`).
+  - Asserts interpreter boundary/runtime fields are unchanged before and after both drains.
+  - Wired into `run_scheduler_tests(...)`.
+
+### Why this matters
+- Existing regressions covered wakeup ring capacity and mixed event types, but not the `wakeup_ready` ordering barrier semantics.
+- This closes an ordering safety gap that protects against out-of-order event consumption under producer/consumer interleavings.
+
+### Validation
+- `c3c build`
+- `OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1200 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `c3c clean && c3c build --sanitize=address`
+- `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1199 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+- `OMNI_FIBER_TEMP=1 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 OMNI_TEST_QUIET=1 LD_LIBRARY_PATH=/usr/local/lib ./build/main`
+  - `Unified: 1199 passed, 0 failed`
+  - `Compiler: 73 passed, 0 failed`
+
 ## 2026-03-05: Session 196 - Invalid Offload Wakeup Boundary Regression
 
 ### Summary

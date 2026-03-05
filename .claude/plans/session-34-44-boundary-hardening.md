@@ -247,6 +247,19 @@ Execution policy:
   - strict ASAN full suite: pass (`Unified 1198/0`, `Compiler 73/0`)
   - strict ASAN full suite with `OMNI_FIBER_TEMP=1`: pass (`Unified 1198/0`, `Compiler 73/0`)
 
+### Session 197 Follow-up (2026-03-05): Wakeup Ready-Barrier Ordering
+
+- Added scheduler regression `run_scheduler_wakeup_ready_barrier_boundary_tests(...)` in `src/lisp/tests_tests.c3`:
+  - constructs a queue with slot-0 unready and slot-1 ready events,
+  - verifies `drain_wakeups()` stops at the first unready slot (no out-of-order processing),
+  - then releases slot-0 readiness and verifies ordered completion semantics and queue convergence,
+  - asserts interpreter boundary/runtime fields remain unchanged across both drains.
+- Wired into `run_scheduler_tests(...)`.
+- Validation:
+  - normal full suite: pass (`Unified 1200/0`, `Compiler 73/0`)
+  - strict ASAN full suite: pass (`Unified 1199/0`, `Compiler 73/0`)
+  - strict ASAN full suite with `OMNI_FIBER_TEMP=1`: pass (`Unified 1199/0`, `Compiler 73/0`)
+
 ### Post-44 Continuation Snapshot (Sessions 45-68)
 
 - Boundary API expansion and caller migration completed across eval/jit/env/value/module paths.
